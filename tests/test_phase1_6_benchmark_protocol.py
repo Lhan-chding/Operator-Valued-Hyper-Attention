@@ -154,12 +154,13 @@ class Phase16BenchmarkProtocolArtifactTests(unittest.TestCase):
 
             report = summarize(root)
             summary = json.loads((root / "phase1_6_summary.json").read_text())
+            report_text = report.read_text()
 
         self.assertEqual(summary["diagnostic_signals"][0]["model"], "ovha_full")
         self.assertEqual(summary["diagnostic_signals"][0]["family"], "query_piecewise_composition_family")
         self.assertAlmostEqual(summary["diagnostic_signals"][0]["mean_adapter_norm"], 0.1)
-        self.assertIn("## Diagnostic Signals", report.read_text())
-        self.assertIn("spectral=0.500000", report.read_text())
+        self.assertIn("## Diagnostic Signals", report_text)
+        self.assertIn("spectral=0.500000", report_text)
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; Phase 1.6 tensor protocol tests skipped.")

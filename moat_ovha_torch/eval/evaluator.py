@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 from moat_ovha_torch.config import Phase15Config
 from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
@@ -100,17 +101,17 @@ def run_evaluation(config: Phase15Config) -> Path:
                         primitive_names = model.core.primitive_names
                     if primitive_names:
                         diagnostics.append(
-                            {
-                                "split": split,
-                                "family": hidden.family,
-                                "model": model_name,
-                                "model_name": model_name,
-                                "seed": config.seed,
-                                "eval_seed": eval_seed,
-                                "checkpoint_loaded": checkpoint_loaded,
-                                "checkpoint_path": str(ckpt) if checkpoint_loaded else None,
-                                "primitive_load": primitive_load(output.primitive_weights, primitive_names),
-                            }
+                            _diagnostic_row(
+                                split=split,
+                                family=hidden.family,
+                                model_name=model_name,
+                                seed=config.seed,
+                                eval_seed=eval_seed,
+                                checkpoint_loaded=checkpoint_loaded,
+                                checkpoint_path=str(ckpt) if checkpoint_loaded else None,
+                                output=output,
+                                primitive_names=primitive_names,
+                            )
                         )
                         model_diagnostics.append(diagnostics[-1])
         per_model_rows[model_name] = model_rows
@@ -125,3 +126,40 @@ def run_evaluation(config: Phase15Config) -> Path:
     metrics_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
     legacy_diagnostics_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in diagnostics))
     return metrics_path
+
+
+def _diagnostic_row(
+    *,
+    split: str,
+    family: str,
+    model_name: str,
+    seed: int,
+    eval_seed: int,
+    checkpoint_loaded: bool,
+    checkpoint_path: str | None,
+    output: Any,
+    primitive_names: tuple[str, ...],
+) -> dict[str, object]:
+    return {
+        "split": split,
+        "family": family,
+        "model": model_name,
+        "model_name": model_name,
+        "seed": seed,
+        "eval_seed": eval_seed,
+        "checkpoint_loaded": checkpoint_loaded,
+        "checkpoint_path": checkpoint_path,
+        "primitive_load": primitive_load(output.primitive_weights, primitive_names),
+        "primitive_entropy": _to_float(output.diagnostics["primitive_entropy"]),
+        "memory_norm": _to_float(output.diagnostics["memory_norms"]),
+        "adapter_norms": {
+            name: _to_float(value)
+            for name, value in output.diagnostics.get("adapter_norms", {}).items()
+        },
+    }
+
+
+def _to_float(value: Any) -> float:
+    if hasattr(value, "detach"):
+        value = value.detach().cpu()
+    return round(float(value), 6)

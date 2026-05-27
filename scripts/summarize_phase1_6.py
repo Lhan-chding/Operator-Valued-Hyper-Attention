@@ -29,11 +29,17 @@ def summarize(root: Path) -> Path:
     if not train_paths:
         train_paths = sorted(root.glob("*/train_metrics/*/*.jsonl"))
     train_rows = _read_jsonl_paths(train_paths)
+    diagnostic_paths = sorted((root / "diagnostics").glob("*/*.jsonl"))
+    if not diagnostic_paths:
+        diagnostic_paths = sorted(root.glob("*/diagnostics/*/*.jsonl"))
+    diagnostic_rows = _read_jsonl_paths(diagnostic_paths)
+    if not diagnostic_rows and (root / "diagnostics.jsonl").exists():
+        diagnostic_rows = _read_jsonl_paths([root / "diagnostics.jsonl"])
     env_path = root / "environment.json"
     if not env_path.exists():
         env_path = next(iter(sorted(root.glob("*/environment.json"))), env_path)
     env = _read_json(env_path, default={})
-    summary = _build_summary(eval_rows, train_rows)
+    summary = _build_summary(eval_rows, train_rows, diagnostic_rows)
 
     report_path = root / "phase1_6_report.md"
     lines = [
@@ -77,6 +83,25 @@ def summarize(root: Path) -> Path:
             )
     else:
         lines.append("| not_available |  |  |  |  |  |  | no controlled stress metrics found |")
+
+    lines.extend(
+        [
+            "",
+            "## Diagnostic Signals",
+            "",
+            "| model | family | entropy | memory_norm | adapter_norm | primitive_load |",
+            "|---|---|---:|---:|---:|---|",
+        ]
+    )
+    if summary["diagnostic_signals"]:
+        for row in summary["diagnostic_signals"]:
+            lines.append(
+                f"| {row['model']} | {row['family']} | {_fmt(row.get('mean_primitive_entropy'))} | "
+                f"{_fmt(row.get('mean_memory_norm'))} | {_fmt(row.get('mean_adapter_norm'))} | "
+                f"{_fmt_mapping(row.get('primitive_load'))} |"
+            )
+    else:
+        lines.append("| not_available | not_available |  |  |  | no diagnostics rows found |")
 
     lines.extend(
         [
@@ -129,7 +154,11 @@ def summarize(root: Path) -> Path:
     return report_path
 
 
-def _build_summary(eval_rows: list[dict[str, Any]], train_rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_summary(
+    eval_rows: list[dict[str, Any]],
+    train_rows: list[dict[str, Any]],
+    diagnostic_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     final_train = {}
     for row in train_rows:
         final_train[(row.get("model"), row.get("seed"))] = row
@@ -225,6 +254,7 @@ def _build_summary(eval_rows: list[dict[str, Any]], train_rows: list[dict[str, A
         "controlled_stress": stress_rows,
         "public_benchmark": public_rows,
         "oracle_untrained": oracle_untrained,
+        "diagnostic_signals": _diagnostic_signals(diagnostic_rows or []),
         "aggregate": _aggregate(eval_rows),
         "go_no_go": go,
     }
@@ -292,6 +322,49 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _diagnostic_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped = defaultdict(list)
+    for row in rows:
+        model = row.get("model_name", row.get("model"))
+        family = row.get("family")
+        if model and family:
+            grouped[(model, family)].append(row)
+
+    signals = []
+    for (model, family), items in sorted(grouped.items()):
+        adapter_means = []
+        for row in items:
+            adapter_norms = row.get("adapter_norms") or {}
+            if adapter_norms:
+                adapter_means.append(mean(float(value) for value in adapter_norms.values()))
+        signals.append(
+            {
+                "model": model,
+                "family": family,
+                "mean_primitive_entropy": _mean_field(items, "primitive_entropy"),
+                "mean_memory_norm": _mean_field(items, "memory_norm"),
+                "mean_adapter_norm": mean(adapter_means) if adapter_means else None,
+                "adapter_norms": _mean_mapping(items, "adapter_norms"),
+                "primitive_load": _mean_mapping(items, "primitive_load"),
+            }
+        )
+    return signals
+
+
+def _mean_field(rows: list[dict[str, Any]], field: str) -> float | None:
+    values = [float(row[field]) for row in rows if row.get(field) is not None]
+    return mean(values) if values else None
+
+
+def _mean_mapping(rows: list[dict[str, Any]], field: str) -> dict[str, float]:
+    values_by_key = defaultdict(list)
+    for row in rows:
+        mapping = row.get(field) or {}
+        for key, value in mapping.items():
+            values_by_key[key].append(float(value))
+    return {key: mean(values) for key, values in sorted(values_by_key.items())}
+
+
 def _read_jsonl_paths(paths: list[Path]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in paths:
@@ -312,6 +385,12 @@ def _fmt(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.6f}"
     return str(value)
+
+
+def _fmt_mapping(value: Any) -> str:
+    if not value:
+        return ""
+    return ", ".join(f"{key}={_fmt(item)}" for key, item in value.items())
 
 
 def main() -> None:
