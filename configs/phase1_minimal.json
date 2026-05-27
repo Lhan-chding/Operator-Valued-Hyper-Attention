@@ -1,0 +1,22 @@
+{
+  "seed": 13,
+  "output_dir": "outputs/phase1",
+  "families": ["fourier", "green", "separable", "mixed"],
+  "context_sizes": [2, 4, 8],
+  "resolution": 16,
+  "baselines": [
+    "transformer_only",
+    "perceiver_io_style",
+    "icon_style",
+    "deeponet",
+    "fno",
+    "simple_stack"
+  ],
+  "ablations": [
+    "vector_value",
+    "no_hyper_adapter",
+    "no_memory",
+    "mlp_expert",
+    "random_router"
+  ]
+}
