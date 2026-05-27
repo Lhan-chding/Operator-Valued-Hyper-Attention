@@ -70,7 +70,7 @@ class OVHAPredictor:
         self.use_memory = use_memory
         self.layer = OVHALayer(
             primitives=(
-                FourierPrimitive(modes=(1, 2, 3)),
+                FourierPrimitive(modes=(1,)),
                 SeparablePrimitive(rank=3),
                 LocalKernelPrimitive(bandwidth=0.25),
             ),
@@ -156,5 +156,9 @@ def _empty_memory() -> MemoryState:
             "spectral_hint": 0.0,
             "separable_hint": 0.0,
             "local_hint": 0.0,
+            "frequency": 1.0,
+            "decay": 2.0,
+            "rank_weight": 0.8,
+            "operator_gain": 1.0,
         },
     )

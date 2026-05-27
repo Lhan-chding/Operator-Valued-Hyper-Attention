@@ -28,9 +28,15 @@ class OperatorPrimitive:
         return [self.apply(samples, queries) for samples in batch_samples]
 
     def context_condition(self, adapter: dict[str, float]) -> "OperatorPrimitive":
-        scale = getattr(self, "scale", 1.0) * adapter.get("scale", 1.0)
-        bias = getattr(self, "bias", 0.0) + adapter.get("bias", 0.0)
-        return replace(self, scale=scale, bias=bias)
+        updates: dict[str, float] = {}
+        if hasattr(self, "scale"):
+            updates["scale"] = getattr(self, "scale", 1.0) * adapter.get("scale", 1.0)
+        if hasattr(self, "bias"):
+            updates["bias"] = getattr(self, "bias", 0.0) + adapter.get("bias", 0.0)
+        for key, value in adapter.items():
+            if key not in {"scale", "bias"} and hasattr(self, key):
+                updates[key] = value
+        return replace(self, **updates)
 
     def regularization(self) -> float:
         return abs(float(getattr(self, "scale", 1.0)) - 1.0) + abs(float(getattr(self, "bias", 0.0)))

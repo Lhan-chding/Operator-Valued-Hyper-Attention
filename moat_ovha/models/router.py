@@ -42,6 +42,14 @@ def _score(name: str, query: float, memory: MemoryState, randomize: bool) -> flo
     if randomize:
         return math.sin(97.0 * query + len(name))
     summary = memory.summary
+    hints = {
+        "fourier": float(summary.get("spectral_hint", 0.0)),
+        "separable": float(summary.get("separable_hint", 0.0)),
+        "local_kernel": float(summary.get("local_hint", 0.0)),
+    }
+    hint_total = math.fsum(hints.values())
+    if hint_total > 0.0 and name in hints:
+        return math.log(max(hints[name] / hint_total, 1e-6))
     if name == "fourier":
         return 1.4 * float(summary.get("spectral_hint", 0.0)) + 0.15 * math.cos(2.0 * math.pi * query)
     if name == "separable":

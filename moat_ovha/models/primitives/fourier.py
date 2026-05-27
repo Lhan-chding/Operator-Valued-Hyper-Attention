@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Optional, Sequence
 
 from moat_ovha.models.primitives.base import OperatorPrimitive, Sample
 
@@ -14,6 +14,7 @@ class FourierPrimitive(OperatorPrimitive):
     modes: tuple[int, ...] = (1, 2, 3)
     scale: float = 1.0
     bias: float = 0.0
+    frequency: Optional[float] = None
 
     @property
     def name(self) -> str:
@@ -26,9 +27,10 @@ class FourierPrimitive(OperatorPrimitive):
         norm = 1.0 / len(samples)
         coefficients: list[tuple[int, float, float]] = []
         for mode in self.modes:
-            cos_coeff = sum(sample.value * math.cos(2.0 * math.pi * mode * sample.point) for sample in samples)
-            sin_coeff = sum(sample.value * math.sin(2.0 * math.pi * mode * sample.point) for sample in samples)
-            coefficients.append((mode, cos_coeff * norm, sin_coeff * norm))
+            effective_mode = mode * self.frequency if self.frequency is not None else float(mode)
+            cos_coeff = sum(sample.value * math.cos(2.0 * math.pi * effective_mode * sample.point) for sample in samples)
+            sin_coeff = sum(sample.value * math.sin(2.0 * math.pi * effective_mode * sample.point) for sample in samples)
+            coefficients.append((effective_mode, cos_coeff * norm, sin_coeff * norm))
 
         values: list[float] = []
         for query in queries:

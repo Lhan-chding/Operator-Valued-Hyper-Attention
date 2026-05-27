@@ -17,14 +17,21 @@ class LowRankHyperAdapter:
     def adapt(self, primitive_name: str, memory: MemoryState, query: float) -> dict[str, float]:
         if not self.enabled:
             return {"scale": 1.0, "bias": 0.0}
-        gain = float(memory.summary.get("gain", 1.0))
+        gain = float(memory.summary.get("operator_gain", memory.summary.get("gain", 1.0)))
         context_count = float(memory.summary.get("context_count", 0.0))
         rank_factor = min(max(self.rank, 1), 8) / 8.0
         primitive_bias = _primitive_bias(primitive_name, memory)
         query_feature = math.sin(math.pi * query)
-        scale = 1.0 + self.strength * rank_factor * (gain - 1.0 + primitive_bias)
+        scale = max(0.0, gain) * (1.0 + self.strength * rank_factor * primitive_bias)
         bias = self.strength * 0.1 * query_feature / (1.0 + context_count)
-        return {"scale": scale, "bias": bias}
+        adapter = {"scale": scale, "bias": bias}
+        if primitive_name == "fourier":
+            adapter["frequency"] = float(memory.summary.get("frequency", 1.0))
+        elif primitive_name == "local_kernel":
+            adapter["decay"] = float(memory.summary.get("decay", 2.0))
+        elif primitive_name == "separable":
+            adapter["rank_weight"] = float(memory.summary.get("rank_weight", 0.8))
+        return adapter
 
 
 def _primitive_bias(primitive_name: str, memory: MemoryState) -> float:

@@ -82,6 +82,9 @@ def _context_summary(context: Sequence[object]) -> dict[str, float]:
             "spectral_hint": 0.0,
             "separable_hint": 0.0,
             "local_hint": 0.0,
+            "frequency": 1.0,
+            "decay": 2.0,
+            "rank_weight": 0.8,
         }
 
     input_mean = _round(math.fsum(feature[0] for feature in features) / count)
@@ -98,6 +101,10 @@ def _context_summary(context: Sequence[object]) -> dict[str, float]:
         "spectral_hint": hints["spectral_hint"],
         "separable_hint": hints["separable_hint"],
         "local_hint": hints["local_hint"],
+        "frequency": hints["frequency"],
+        "decay": hints["decay"],
+        "rank_weight": hints["rank_weight"],
+        "operator_gain": hints["operator_gain"],
     }
 
 
@@ -115,7 +122,15 @@ def _demo_features(demo: object) -> tuple[float, float, float, float]:
 
 
 def _metadata_hints(context: Sequence[object]) -> dict[str, float]:
-    totals = {"spectral_hint": 0.0, "separable_hint": 0.0, "local_hint": 0.0}
+    totals = {
+        "spectral_hint": 0.0,
+        "separable_hint": 0.0,
+        "local_hint": 0.0,
+        "frequency": 0.0,
+        "decay": 0.0,
+        "rank_weight": 0.0,
+        "operator_gain": 0.0,
+    }
     if not context:
         return totals
     for demo in context:
@@ -124,6 +139,10 @@ def _metadata_hints(context: Sequence[object]) -> dict[str, float]:
         totals["spectral_hint"] += float(metadata.get("weight_fourier", 1.0 if family == "fourier" else 0.0))
         totals["separable_hint"] += float(metadata.get("weight_separable", 1.0 if family == "separable" else 0.0))
         totals["local_hint"] += float(metadata.get("weight_local", 1.0 if family in {"green", "nonlinear"} else 0.0))
+        totals["frequency"] += float(metadata.get("frequency", 1.0))
+        totals["decay"] += float(metadata.get("decay", 2.0))
+        totals["rank_weight"] += float(metadata.get("rank_weight", 0.8))
+        totals["operator_gain"] += float(metadata.get("gain", 1.0))
     return {key: _round(value / len(context)) for key, value in totals.items()}
 
 

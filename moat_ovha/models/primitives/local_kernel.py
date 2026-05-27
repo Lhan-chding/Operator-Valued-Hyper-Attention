@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Optional, Sequence
 
 from moat_ovha.models.primitives.base import OperatorPrimitive, Sample
 
@@ -14,6 +14,7 @@ class LocalKernelPrimitive(OperatorPrimitive):
     bandwidth: float = 0.25
     scale: float = 1.0
     bias: float = 0.0
+    decay: Optional[float] = None
 
     @property
     def name(self) -> str:
@@ -31,7 +32,10 @@ class LocalKernelPrimitive(OperatorPrimitive):
             weight_total = 0.0
             for sample in samples:
                 distance = query - sample.point
-                weight = math.exp(-(distance * distance) / (2.0 * self.bandwidth * self.bandwidth))
+                if self.decay is None:
+                    weight = math.exp(-(distance * distance) / (2.0 * self.bandwidth * self.bandwidth))
+                else:
+                    weight = math.exp(-self.decay * abs(distance))
                 weighted_sum += weight * sample.value
                 weight_total += weight
             local_value = weighted_sum / weight_total if weight_total else 0.0
