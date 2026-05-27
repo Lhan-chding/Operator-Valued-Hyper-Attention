@@ -10,6 +10,8 @@ The implementation is intentionally zero-dependency so it can run in a fresh Pyt
 - `moat_ovha/baselines/` provides Transformer-only, Perceiver IO-style, ICON-style, DeepONet-only, FNO-only, simple-stack, and ablation predictors.
 - `tests/` contains the Phase-1 contract tests.
 - `scripts/` runs and summarizes the deterministic Phase-1 sweep.
+- `docs/project_direction.md` is the persistent project-level handoff file for future windows.
+- `docs/phases/phase_1.md` is the stable Phase-1 stage summary.
 
 ## Run
 
@@ -23,7 +25,12 @@ Outputs are written to `outputs/phase1/`:
 - `train_metrics.jsonl`
 - `eval_metrics.jsonl`
 - `phase1_report.md`
+- `phase1_gpt_pro_summary.md`
 
 ## Phase-1 Scope
 
 The prototype is a minimal executable scaffold, not a large neural training stack. Once torch/numpy are available, the same interfaces can be upgraded to learned training loops without changing the Phase-1 acceptance surface.
+
+## Continuity Docs
+
+Future work should update `docs/project_direction.md` and the relevant `docs/phases/phase_N.md` file at the end of every phase or major decision point.
