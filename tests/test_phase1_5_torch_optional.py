@@ -35,6 +35,32 @@ class Phase15TorchOptionalTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
         self.assertEqual(hidden.family, "compositional_mixed_family")
 
+    def test_episode_generator_cuda_sampling_when_available(self):
+        import torch
+
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA is not available on this host.")
+
+        from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
+
+        zoo = MetadataFreeOperatorZoo(seed=11)
+        batch, hidden = zoo.sample_batch(
+            batch_size=2,
+            num_demos=2,
+            context_points=4,
+            support_points=16,
+            query_points=8,
+            family="spectral_family",
+            split="iid",
+            mode="operator_transfer",
+            device="cuda",
+        )
+
+        self.assertEqual(batch.context_q.device.type, "cuda")
+        self.assertEqual(batch.context_u.device.type, "cuda")
+        self.assertEqual(batch.target_y.device.type, "cuda")
+        self.assertEqual(hidden.family, "spectral_family")
+
 
 if __name__ == "__main__":
     unittest.main()

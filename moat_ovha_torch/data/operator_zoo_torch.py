@@ -41,7 +41,7 @@ class MetadataFreeOperatorZoo:
         if mode not in {"same_function_field", "operator_transfer"}:
             raise ValueError(f"unknown mode: {mode}")
 
-        generator = torch.Generator(device="cpu")
+        generator = torch.Generator(device=_generator_device(device))
         generator.manual_seed(_stable_seed(self.seed, family, split, mode, batch_size, support_points, query_points))
         support_points = support_points * max(1, resolution_multiplier)
         support_grid = torch.linspace(0.0, 1.0, support_points, device=device).view(1, support_points, 1)
@@ -92,6 +92,13 @@ def _sample_context_q(torch: Any, batch_size: int, num_demos: int, context_point
         base = torch.linspace(0.0, 1.0, context_points, device=device)
     jitter = 0.01 * torch.randn(batch_size, num_demos, context_points, 1, generator=generator, device=device)
     return (base.view(1, 1, context_points, 1) + jitter).clamp(0.0, 1.0)
+
+
+def _generator_device(device: str) -> str:
+    device_text = str(device)
+    if device_text.startswith("cuda"):
+        return device_text
+    return "cpu"
 
 
 def _sample_functions(torch: Any, batch_size: int, count: int, support_grid: Any, generator: Any, device: str):

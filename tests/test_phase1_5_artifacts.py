@@ -70,6 +70,20 @@ class Phase15ArtifactTests(unittest.TestCase):
             else:
                 self.assertTrue((output_dir / "train_metrics.jsonl").exists())
 
+    def test_summarizer_distinguishes_missing_metrics_from_missing_torch(self):
+        from scripts.summarize_phase1_5 import summarize
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "phase1_5_incomplete"
+            output_dir.mkdir()
+            (output_dir / "environment.json").write_text(json.dumps({"torch_available": True, "device": "cuda"}))
+
+            report_path = summarize(output_dir)
+            report = report_path.read_text()
+
+            self.assertIn("Evaluation metrics were not found", report)
+            self.assertNotIn("Torch is not installed", report)
+
 
 if __name__ == "__main__":
     unittest.main()

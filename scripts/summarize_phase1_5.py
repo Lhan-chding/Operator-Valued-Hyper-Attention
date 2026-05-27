@@ -16,21 +16,20 @@ def summarize(output_dir: Path) -> Path:
     env = json.loads(env_path.read_text()) if env_path.exists() else {"torch_available": False}
     lines = ["# Phase 1.5 Report", "", "## Environment", "", f"- torch_available: {env.get('torch_available')}", f"- device: {env.get('device')}"]
 
-    if not env.get("torch_available") or not metrics_path.exists():
+    if not env.get("torch_available"):
+        lines.extend(["", "## Status", "", "Torch is not installed; torch implementation tests skipped."])
+        report_path.write_text("\n".join(lines) + "\n")
+        print(report_path)
+        return report_path
+
+    if not metrics_path.exists():
         lines.extend(
             [
                 "",
                 "## Status",
                 "",
-                "Torch is not installed; torch implementation tests skipped.",
-                "",
-                "Large run is not executed on Mac Air. Please git pull on Ubuntu/A800 host and run:",
-                "",
-                "```bash",
-                "bash scripts/run_phase1_5_gpu_small.sh",
-                "bash scripts/run_phase1_5_gpu_main.sh",
-                "python3 scripts/summarize_phase1_5.py outputs/phase1_5_gpu_main",
-                "```",
+                f"Evaluation metrics were not found at `{metrics_path.name}`.",
+                "The run is incomplete; inspect the preceding training/evaluation traceback before using this report.",
             ]
         )
         report_path.write_text("\n".join(lines) + "\n")
