@@ -11,6 +11,21 @@ Phase 1.6 fixes the learned-evaluation integrity gap before any Phase 2 claim:
 
 Phase 2 is blocked until Phase 1.6 passes the Go criteria below.
 
+## Direction Guardrail
+
+Phase 1.6 is not redefining OVHA as a PDE/FNO/DeepONet project. PDEBench, FNO classic and Mechanical MNIST are used because they are credible early evidence surfaces for operator learning, not because the method is limited to those domains.
+
+The long-term target remains:
+
+```text
+Operator-Valued Attention
++ Hyper-Operator Transformer
++ Operator Memory Transformer
+= context-conditioned composition of multiple operators across domains/modalities
+```
+
+This makes the work a candidate multi-domain / multimodal meta-operator framework: different modalities become different input objects, query spaces and output spaces under the same episode protocol. Phase 1.6 only verifies training integrity and mechanism stress before expensive A800 runs; it does not claim that multimodal capability is already proven.
+
 ## Scope
 
 Included:
@@ -60,6 +75,8 @@ Every eval row must include `checkpoint_loaded`, `checkpoint_path`, `checkpoint_
 | L3 | material/mechanics benchmark | Mechanical MNIST-like fields | cross-material evidence |
 | L4 | large-scale | high-res PDE/irregular geometry | later main/appendix |
 | L5 | cross-modal dense-query | image/trajectory query | later Phase 2/3 extension |
+
+Benchmark names are evidence labels, not method boundaries. A later image-to-field or trajectory-query benchmark should reuse the same context/query/operator interface rather than becoming a separate CV or robotics demo track.
 
 ## Required Model Groups
 

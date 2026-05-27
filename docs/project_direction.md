@@ -2,18 +2,33 @@
 
 ## 一句话目标
 
-构建 Operator-Valued Hyper-Attention（OVHA）：把 attention 的 value 从有限维向量扩展为可作用在函数、场或轨迹上的 operator primitive，并用 context-conditioned memory / hyper-adapter / router 支撑一个统一的 meta-operator learning 框架。
+构建 Operator-Valued Hyper-Attention（OVHA）：把 attention 的 value 从有限维向量扩展为可作用在函数、场、图像密集查询、轨迹或其他结构化对象上的 operator primitive，并用 context-conditioned memory / hyper-adapter / router 支撑一个统一的 multi-domain / multimodal meta-operator learning 框架。
+
+重要方向约束：DeepONet、FNO、PDEBench、Mechanical MNIST、CV、物理场、trajectory 等都只是验证场景、比较对象或应用样例，不是 OVHA 的定义边界。项目长期目标是一个从 context 中识别并组合多个算子的 operator-valued meta-transformer，而不是一个 PDE-only neural operator。
 
 ## 主线判断
 
-C 是理论核心，不是普通模块：
+C 是理论核心，不是普通模块。长期路线应理解为：
 
 - C = Operator-Valued Attention：把 attention 的 value 域升级为 operator-valued primitive。
-- A = Operator Memory：从 context demonstrations 中形成 task-specific operator state。
-- B = Hyper-Operator Adapter：由 memory/query 调制 primitive 的低秩参数、kernel 参数或 basis 系数。
+- A = Operator Memory Transformer：从 context demonstrations 中形成 task-specific operator state / memory，用来识别当前任务对应的 operator 组合。
+- B = Hyper-Operator Transformer / Hyper-Operator Adapter：由 memory/query 生成、调制或组合 primitive 的低秩参数、kernel 参数、basis 系数或更一般的 operator-valued value。
 - D = Operator-Primitive Router / MoE：用于规模化和稀疏 primitive 选择，不作为核心创新表述。
 
-当前路线不应先做 VCM、CV demo 或具身 demo。Phase 1 的核心任务是先把数学对象、特例归约、最小原型和 ablation 证据立住。
+当前路线不应被某个 demo 牵引成 PDE-only、CV-only 或 robotics-only。Phase 1/1.6 的核心任务是先把数学对象、特例归约、最小原型、checkpoint-loaded training/evaluation 和 ablation 证据立住；后续多模态扩展应作为统一 episode/query/operator 接口下的自然扩展，而不是另起一个 unrelated demo。
+
+## 多模态理解
+
+这里的“多模态”不是简单把 image/text/audio token 拼接进一个 transformer，而是把不同模态或领域统一成：
+
+```text
+context demonstrations D = {(input object u_i, query q_i, output y_i)}
+target input u*
+target query q*
+predict y*(q*)
+```
+
+在这个视角下，PDE field、material response、image-to-field dense query、trajectory-query、sequence-to-field 都是同一个 meta-operator interface 的不同实例。OVHA 的核心问题是：模型能否从 context 中形成 operator memory，并通过 operator-valued attention / hyper-operator transformer 组合多个 primitive 来回答 target query。
 
 ## 文档约定
 
@@ -49,6 +64,7 @@ C 是理论核心，不是普通模块：
 - Phase 1.6 checkpoint-loaded training/evaluation surface：`moat_ovha_torch/train/checkpoints.py`、`moat_ovha_torch/train/train_many.py`、`moat_ovha_torch/eval/evaluator.py`。
 - Phase 1.6 benchmark protocol surface：`moat_ovha_torch/data/component_stress_zoo.py`、`moat_ovha_torch/data/benchmark_registry.py`、`moat_ovha_torch/data/public_benchmarks/`、`moat_ovha_torch/data/field_episode_adapter.py`。
 - Phase 1.6 CPU integrity smoke 输出：`outputs/phase1_6/`。
+- 项目记忆与方向纠偏：`docs/project_memory.md`。
 
 ## 最新验证结论
 
@@ -79,18 +95,19 @@ Phase 1.5 provisional pipeline result: 在 A800 seeds 31/32/33/34 上，metadata
 1. 默认评估加载 trained checkpoint；缺 checkpoint 且 `require_checkpoint=true` 时 fail。
 2. 所有主榜/ablation 模型按同预算训练并记录参数量、train metrics、eval metrics、diagnostics。
 3. controlled analytical synthetic 只用于机制识别，不作为最终证据。
-4. PDEBench/FNO/Mechanical MNIST loader 与 dataset card protocol 为外部有效性实验铺路。
+4. PDEBench/FNO/Mechanical MNIST loader 与 dataset card protocol 为外部有效性实验铺路；这些 benchmark 不限定长期目标，只是第一批可审稿、可比较的 evidence surface。
 5. Phase 2 只能在 Phase 1.6 A800/public pilot 通过后开始。
 
 ## 给新窗口的读取顺序
 
 1. `docs/project_direction.md`
-2. `docs/phases/phase_1.md`
-3. `docs/phases/phase_1_5.md`
-4. `docs/phases/phase_1_6.md`
-5. `docs/benchmark_protocol.md`
-6. `theory_notes/ovha_math.md`
-7. `theory_notes/ovha_context_identifiability.md`
-8. `outputs/phase1/phase1_gpt_pro_summary.md`
-9. `outputs/a800_phase1_5/phase1_5_a800_multiseed_summary.md`
-10. `README.md`
+2. `docs/project_memory.md`
+3. `docs/phases/phase_1.md`
+4. `docs/phases/phase_1_5.md`
+5. `docs/phases/phase_1_6.md`
+6. `docs/benchmark_protocol.md`
+7. `theory_notes/ovha_math.md`
+8. `theory_notes/ovha_context_identifiability.md`
+9. `outputs/phase1/phase1_gpt_pro_summary.md`
+10. `outputs/a800_phase1_5/phase1_5_a800_multiseed_summary.md`
+11. `README.md`
