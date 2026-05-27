@@ -83,6 +83,11 @@ class Phase15Config:
             values["device"] = device
         return Phase15Config.from_mapping(values)
 
+    def with_seed(self, seed: int) -> "Phase15Config":
+        values = asdict(self)
+        values["seed"] = seed
+        return Phase15Config.from_mapping(values)
+
     def to_jsonable(self) -> dict[str, Any]:
         values = asdict(self)
         values["output_dir"] = str(self.output_dir)

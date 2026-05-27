@@ -5,6 +5,7 @@ import random
 from typing import Any, Optional
 
 from moat_ovha_torch.data.episodes import EpisodeHiddenInfo, MetaOperatorBatch
+from moat_ovha_torch.data.component_stress_zoo import CONTROLLED_STRESS_FAMILIES, sample_component_stress_batch
 from moat_ovha_torch.runtime import require_torch
 
 
@@ -17,7 +18,7 @@ class MetadataFreeOperatorZoo:
         "separable_lowrank_family",
         "nonlinear_family",
         "compositional_mixed_family",
-    )
+    ) + CONTROLLED_STRESS_FAMILIES
 
     def __init__(self, seed: int = 0):
         self.seed = seed
@@ -36,6 +37,20 @@ class MetadataFreeOperatorZoo:
         resolution_multiplier: int = 1,
     ) -> tuple[MetaOperatorBatch, EpisodeHiddenInfo]:
         torch = require_torch()
+        if family in CONTROLLED_STRESS_FAMILIES:
+            return sample_component_stress_batch(
+                seed=self.seed,
+                batch_size=batch_size,
+                num_demos=num_demos,
+                context_points=context_points,
+                support_points=support_points,
+                query_points=query_points,
+                family=family,
+                split=split,
+                mode=mode,
+                device=device,
+                resolution_multiplier=resolution_multiplier,
+            )
         if family not in self.families:
             raise ValueError(f"unknown family: {family}")
         if mode not in {"same_function_field", "operator_transfer"}:

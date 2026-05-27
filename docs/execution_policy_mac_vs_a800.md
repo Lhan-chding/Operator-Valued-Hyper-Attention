@@ -9,6 +9,7 @@ python3 -m unittest discover -s tests
 python3 train_torch_meta_operator.py --config configs/phase1_5_cpu_smoke.json --device cpu
 python3 eval_torch_meta_operator.py --config configs/phase1_5_cpu_smoke.json --device cpu
 python3 scripts/summarize_phase1_5.py outputs/phase1_5_cpu_smoke
+PYTHON=.venv/bin/python bash scripts/run_phase1_6_cpu_integrity_smoke.sh
 ```
 
 CPU smoke constraints:
@@ -40,6 +41,18 @@ python3 scripts/summarize_phase1_5.py outputs/phase1_5_gpu_main
 
 The GPU scripts are intentionally not run on Mac Air.
 
+Phase 1.6 A800 handoff:
+
+```bash
+git pull
+bash scripts/run_phase1_6_gpu_integrity_short.sh
+bash scripts/run_phase1_6_gpu_component_main.sh
+bash scripts/run_phase1_6_gpu_public_pilot.sh
+python scripts/summarize_phase1_6.py --root outputs/phase1_6
+```
+
+Do not run Phase 1.6 GPU scripts on Mac Air. They are configured for long multi-model or public benchmark workloads.
+
 ## Reporting Rule
 
 Reports must state:
@@ -48,3 +61,5 @@ Reports must state:
 - whether CPU smoke actually ran
 - whether GPU scripts were only prepared
 - device, seed, config hash, parameter count, training steps and wall time
+- whether every eval row is checkpoint-loaded
+- whether results are CPU smoke, controlled stress, public benchmark, oracle diagnostic or untrained diagnostic

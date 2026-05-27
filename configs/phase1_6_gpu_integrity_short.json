@@ -1,0 +1,39 @@
+{
+  "seed": 41,
+  "seeds": [41, 42],
+  "output_dir": "outputs/phase1_6/gpu_integrity_short",
+  "device": "cuda",
+  "steps": 2000,
+  "batch_size": 64,
+  "support_points": 128,
+  "query_points": 128,
+  "num_demos": 8,
+  "context_points": 64,
+  "d_model": 128,
+  "memory_tokens": 6,
+  "lr": 0.001,
+  "mode": "operator_transfer",
+  "train_split": "iid",
+  "eval_splits": ["iid", "parameter_holdout", "resolution_transfer", "confusable_context"],
+  "families": [
+    "query_piecewise_composition_family",
+    "context_identifiable_mixture_family",
+    "anti_single_primitive_family",
+    "confounded_family_pair"
+  ],
+  "train_models": [
+    "ovha_full",
+    "transformer_only",
+    "ovha_vector_value_big",
+    "simple_stack",
+    "local_only",
+    "separable_only",
+    "spectral_only",
+    "ovha_no_memory",
+    "ovha_no_hyper_adapter",
+    "ovha_no_query_router"
+  ],
+  "eval_models": "same_as_train_models",
+  "require_checkpoint": true,
+  "allow_metadata_inputs": false
+}

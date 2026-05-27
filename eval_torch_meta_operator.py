@@ -25,7 +25,11 @@ def main() -> None:
 
     from moat_ovha_torch.eval.evaluator import run_evaluation
 
-    print(run_evaluation(config))
+    results = {}
+    for seed in config.seed_sequence():
+        seed_config = config.with_seed(seed)
+        results[seed] = str(run_evaluation(seed_config))
+    print(results)
 
 
 if __name__ == "__main__":

@@ -23,9 +23,9 @@ def main() -> None:
         print(write_torch_skip_report(config.output_dir, "train_torch_meta_operator.py"))
         return
 
-    from moat_ovha_torch.train.trainer import run_training
+    from moat_ovha_torch.train.train_many import run_training_for_config_seeds
 
-    print(run_training(config))
+    print(run_training_for_config_seeds(config))
 
 
 if __name__ == "__main__":

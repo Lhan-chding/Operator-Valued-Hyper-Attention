@@ -1,0 +1,49 @@
+{
+  "aggregate": {
+    "count": 8,
+    "mean_relative_l2": 1.2530491948127747,
+    "median_relative_l2": 1.142296552658081,
+    "p90_relative_l2": 1.5980539321899414,
+    "std_relative_l2": 0.35471988325661113
+  },
+  "checkpoint_integrity": [
+    {
+      "checkpoint_loaded": true,
+      "eval_relL2": 1.123621016740799,
+      "final_train_relL2": 0.8955570459365845,
+      "model": "ovha_full",
+      "seed": 41,
+      "train_steps": 20
+    },
+    {
+      "checkpoint_loaded": true,
+      "eval_relL2": 1.3824773728847504,
+      "final_train_relL2": 1.0270013809204102,
+      "model": "transformer_only",
+      "seed": 41,
+      "train_steps": 20
+    }
+  ],
+  "controlled_stress": [
+    {
+      "best_single": null,
+      "conclusion": "no claim; needs A800 multi-seed evidence",
+      "family": "query_piecewise_composition_family",
+      "no_adapter": null,
+      "no_memory": null,
+      "no_router": null,
+      "ovha_full": 1.123621016740799,
+      "vector_big": null
+    }
+  ],
+  "go_no_go": "Protocol Go for A800 execution: checkpoint-loaded CPU/integrity path is wired; Phase 2 scientific Go still requires GPU/public benchmark evidence.",
+  "oracle_untrained": [
+    {
+      "checkpoint_loaded_rows": 0,
+      "model": "none",
+      "note": "all eval rows were checkpoint-loaded main/ablation rows",
+      "rows": 0
+    }
+  ],
+  "public_benchmark": []
+}

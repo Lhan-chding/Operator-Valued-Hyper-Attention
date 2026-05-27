@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+from collections import defaultdict
+from pathlib import Path
+from statistics import mean, median, stdev
+from typing import Any
+
+
+CONTROLLED_STRESS_FAMILIES = {
+    "query_piecewise_composition_family",
+    "context_identifiable_mixture_family",
+    "anti_single_primitive_family",
+    "confounded_family_pair",
+}
+
+
+def summarize(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    eval_paths = sorted((root / "eval_metrics").glob("*/*.jsonl"))
+    if not eval_paths:
+        eval_paths = sorted(root.glob("*/eval_metrics/*/*.jsonl"))
+    eval_rows = _read_jsonl_paths(eval_paths)
+    if not eval_rows and (root / "eval_metrics.jsonl").exists():
+        eval_rows = _read_jsonl_paths([root / "eval_metrics.jsonl"])
+    train_paths = sorted((root / "train_metrics").glob("*/*.jsonl"))
+    if not train_paths:
+        train_paths = sorted(root.glob("*/train_metrics/*/*.jsonl"))
+    train_rows = _read_jsonl_paths(train_paths)
+    env_path = root / "environment.json"
+    if not env_path.exists():
+        env_path = next(iter(sorted(root.glob("*/environment.json"))), env_path)
+    env = _read_json(env_path, default={})
+    summary = _build_summary(eval_rows, train_rows)
+
+    report_path = root / "phase1_6_report.md"
+    lines = [
+        "# Phase 1.6 Report",
+        "",
+        "## Environment",
+        "",
+        f"- torch_available: {env.get('torch_available')}",
+        f"- device: {env.get('device')}",
+        f"- config_hash: {env.get('config_hash')}",
+        "",
+        "## Checkpoint Integrity",
+        "",
+        "| model | seed | checkpoint_loaded | train_steps | final_train_relL2 | eval_relL2 |",
+        "|---|---:|---|---:|---:|---:|",
+    ]
+    if summary["checkpoint_integrity"]:
+        for row in summary["checkpoint_integrity"]:
+            lines.append(
+                f"| {row['model']} | {row['seed']} | {row['checkpoint_loaded']} | "
+                f"{row['train_steps']} | {_fmt(row['final_train_relL2'])} | {_fmt(row['eval_relL2'])} |"
+            )
+    else:
+        lines.append("| not_available |  |  |  |  |  |")
+
+    lines.extend(
+        [
+            "",
+            "## Controlled Stress Tasks",
+            "",
+            "| family | ovha_full | best_single | vector_big | no_memory | no_router | no_adapter | conclusion |",
+            "|---|---:|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    if summary["controlled_stress"]:
+        for row in summary["controlled_stress"]:
+            lines.append(
+                f"| {row['family']} | {_fmt(row.get('ovha_full'))} | {_fmt(row.get('best_single'))} | "
+                f"{_fmt(row.get('vector_big'))} | {_fmt(row.get('no_memory'))} | {_fmt(row.get('no_router'))} | "
+                f"{_fmt(row.get('no_adapter'))} | {row['conclusion']} |"
+            )
+    else:
+        lines.append("| not_available |  |  |  |  |  |  | no controlled stress metrics found |")
+
+    lines.extend(
+        [
+            "",
+            "## Public Benchmark Pilot",
+            "",
+            "| dataset | split | ovha_full | best_baseline | delta | win? |",
+            "|---|---|---:|---:|---:|---|",
+        ]
+    )
+    if summary["public_benchmark"]:
+        for row in summary["public_benchmark"]:
+            lines.append(
+                f"| {row['dataset']} | {row['split']} | {_fmt(row.get('ovha_full'))} | "
+                f"{_fmt(row.get('best_baseline'))} | {_fmt(row.get('delta'))} | {row.get('win')} |"
+            )
+    else:
+        lines.append("| not_available | not_available |  |  |  | public benchmark loaders prepared; full data run pending |")
+
+    lines.extend(
+        [
+            "",
+            "## Oracle / Untrained Diagnostics",
+            "",
+            "| model | rows | checkpoint_loaded_rows | note |",
+            "|---|---:|---:|---|",
+        ]
+    )
+    for row in summary["oracle_untrained"]:
+        lines.append(f"| {row['model']} | {row['rows']} | {row['checkpoint_loaded_rows']} | {row['note']} |")
+
+    lines.extend(
+        [
+            "",
+            "## Dataset Card Appendix",
+            "",
+            "- PDEBench subset: requires external download/cache; planned splits are iid, parameter_holdout, resolution_transfer, context sweeps, noisy/confusable context where supported.",
+            "- FNO classic subset: requires external canonical Burgers/Darcy/Navier-Stokes cache; aligned to neural-operator baselines.",
+            "- Mechanical MNIST small: requires external mechanics/material cache; used for parameter/material holdout evidence.",
+            "",
+            "## Go / No-Go",
+            "",
+            summary["go_no_go"],
+        ]
+    )
+    report_path.write_text("\n".join(lines) + "\n")
+    summary_path = root / "phase1_6_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    print(report_path)
+    return report_path
+
+
+def _build_summary(eval_rows: list[dict[str, Any]], train_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    final_train = {}
+    for row in train_rows:
+        final_train[(row.get("model"), row.get("seed"))] = row
+
+    grouped_eval = defaultdict(list)
+    for row in eval_rows:
+        grouped_eval[(row.get("model_name", row.get("model")), row.get("seed"))].append(row)
+
+    checkpoint_rows = []
+    for (model, seed), rows in sorted(grouped_eval.items()):
+        rel = [float(row["relative_l2"]) for row in rows if "relative_l2" in row]
+        train = final_train.get((model, seed), {})
+        checkpoint_rows.append(
+            {
+                "model": model,
+                "seed": seed,
+                "checkpoint_loaded": all(bool(row.get("checkpoint_loaded")) for row in rows),
+                "train_steps": rows[0].get("checkpoint_train_steps"),
+                "final_train_relL2": train.get("relative_l2"),
+                "eval_relL2": mean(rel) if rel else None,
+            }
+        )
+
+    stress_rows = []
+    by_family_model = defaultdict(list)
+    for row in eval_rows:
+        family = row.get("family")
+        if family in CONTROLLED_STRESS_FAMILIES:
+            by_family_model[(family, row.get("model_name", row.get("model")))].append(float(row["relative_l2"]))
+    for family in sorted({key[0] for key in by_family_model}):
+        values = {model: mean(items) for (fam, model), items in by_family_model.items() if fam == family}
+        singles = [values[name] for name in ("local_only", "separable_only", "spectral_only") if name in values]
+        best_single = min(singles) if singles else None
+        full = values.get("ovha_full")
+        if full is not None and best_single is not None and full < best_single:
+            conclusion = "provisional component signal"
+        else:
+            conclusion = "no claim; needs A800 multi-seed evidence"
+        stress_rows.append(
+            {
+                "family": family,
+                "ovha_full": full,
+                "best_single": best_single,
+                "vector_big": values.get("ovha_vector_value_big"),
+                "no_memory": values.get("ovha_no_memory"),
+                "no_router": values.get("ovha_no_query_router"),
+                "no_adapter": values.get("ovha_no_hyper_adapter"),
+                "conclusion": conclusion,
+            }
+        )
+
+    public_rows = []
+    by_dataset = defaultdict(list)
+    for row in eval_rows:
+        if row.get("dataset"):
+            by_dataset[(row["dataset"], row.get("split"), row.get("model_name", row.get("model")))].append(float(row["relative_l2"]))
+    for dataset, split in sorted({(key[0], key[1]) for key in by_dataset}):
+        values = {model: mean(items) for (ds, sp, model), items in by_dataset.items() if ds == dataset and sp == split}
+        full = values.get("ovha_full")
+        baselines = [value for model, value in values.items() if model != "ovha_full"]
+        best_baseline = min(baselines) if baselines else None
+        delta = None if full is None or best_baseline is None else best_baseline - full
+        public_rows.append(
+            {
+                "dataset": dataset,
+                "split": split,
+                "ovha_full": full,
+                "best_baseline": best_baseline,
+                "delta": delta,
+                "win": delta is not None and delta > 0,
+            }
+        )
+
+    model_rows = defaultdict(list)
+    for row in eval_rows:
+        model_rows[row.get("model_name", row.get("model"))].append(row)
+    oracle_untrained = []
+    for model, rows in sorted(model_rows.items()):
+        checkpoint_loaded_rows = sum(1 for row in rows if row.get("checkpoint_loaded"))
+        if model and ("oracle" in model or checkpoint_loaded_rows < len(rows)):
+            note = "oracle diagnostic" if "oracle" in model else "untrained diagnostic"
+            oracle_untrained.append({"model": model, "rows": len(rows), "checkpoint_loaded_rows": checkpoint_loaded_rows, "note": note})
+    if not oracle_untrained:
+        oracle_untrained.append({"model": "none", "rows": 0, "checkpoint_loaded_rows": 0, "note": "all eval rows were checkpoint-loaded main/ablation rows"})
+
+    go = "No-Go: Phase 2 remains blocked until A800 multi-model, multi-seed checkpoint-loaded results and public benchmark pilot metrics are available."
+    if checkpoint_rows and all(row["checkpoint_loaded"] for row in checkpoint_rows):
+        go = "Protocol Go for A800 execution: checkpoint-loaded CPU/integrity path is wired; Phase 2 scientific Go still requires GPU/public benchmark evidence."
+    return {
+        "checkpoint_integrity": checkpoint_rows,
+        "controlled_stress": stress_rows,
+        "public_benchmark": public_rows,
+        "oracle_untrained": oracle_untrained,
+        "aggregate": _aggregate(eval_rows),
+        "go_no_go": go,
+    }
+
+
+def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    rel = [float(row["relative_l2"]) for row in rows if "relative_l2" in row]
+    if not rel:
+        return {"count": 0}
+    return {
+        "count": len(rel),
+        "mean_relative_l2": mean(rel),
+        "median_relative_l2": median(rel),
+        "std_relative_l2": stdev(rel) if len(rel) > 1 else 0.0,
+        "p90_relative_l2": sorted(rel)[min(len(rel) - 1, int(0.9 * (len(rel) - 1)))],
+    }
+
+
+def _read_jsonl_paths(paths: list[Path]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path in paths:
+        if path.exists():
+            rows.extend(json.loads(line) for line in path.read_text().splitlines() if line.strip())
+    return rows
+
+
+def _read_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:
+    if not path.exists():
+        return default
+    return json.loads(path.read_text())
+
+
+def _fmt(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.6f}"
+    return str(value)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Summarize Phase 1.6 checkpoint-loaded benchmark outputs.")
+    parser.add_argument("--root", default="outputs/phase1_6")
+    args = parser.parse_args()
+    summarize(Path(args.root))
+
+
+if __name__ == "__main__":
+    main()

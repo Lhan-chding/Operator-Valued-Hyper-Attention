@@ -1,0 +1,60 @@
+{
+  "seed": 71,
+  "seeds": [71, 72, 73, 74, 75],
+  "output_dir": "outputs/phase1_6/gpu_public_full_optional",
+  "device": "cuda",
+  "steps": 50000,
+  "batch_size": 32,
+  "support_points": 256,
+  "query_points": 256,
+  "num_demos": 16,
+  "context_points": 128,
+  "d_model": 256,
+  "memory_tokens": 12,
+  "lr": 0.0005,
+  "mode": "operator_transfer",
+  "train_split": "iid",
+  "eval_splits": [
+    "iid",
+    "parameter_holdout",
+    "resolution_transfer",
+    "context_size_sweep",
+    "num_demos_sweep",
+    "noisy_context",
+    "confusable_context",
+    "sparse_context"
+  ],
+  "datasets": [
+    "pdebench_burgers_1d",
+    "pdebench_darcy_2d",
+    "pdebench_shallow_water_2d",
+    "fno_burgers",
+    "fno_darcy",
+    "fno_navier_stokes",
+    "mechanical_mnist_small"
+  ],
+  "families": [
+    "query_piecewise_composition_family",
+    "context_identifiable_mixture_family",
+    "anti_single_primitive_family",
+    "confounded_family_pair"
+  ],
+  "train_models": [
+    "ovha_full",
+    "transformer_only",
+    "ovha_vector_value_big",
+    "simple_stack",
+    "mlp_expert_moe",
+    "local_only",
+    "separable_only",
+    "spectral_only",
+    "ovha_no_memory",
+    "ovha_no_hyper_adapter",
+    "ovha_no_query_router",
+    "ovha_no_query_adapter",
+    "ovha_random_router"
+  ],
+  "eval_models": "same_as_train_models",
+  "require_checkpoint": true,
+  "allow_metadata_inputs": false
+}

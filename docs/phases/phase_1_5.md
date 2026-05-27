@@ -128,8 +128,14 @@ Ubuntu/A800 主配置已完成 seeds 31/32/33/34。结果已归档到 `outputs/a
 - hard families 上优势最明显：`separable_lowrank_family` 与 `spectral_family`。
 - `local_only`、`separable_only` 与部分 no-query/no-memory ablation 在 aggregate 上接近或略优于 `ovha_full`，因此当前结果支持 metadata-free operator-valued attention 相对 vector baseline 的比较，但还不能强声称每个 OVHA 组件都已被 ablation 证明必要。
 
-## 下一步
+## Phase 1.6 修正
 
-1. 进入 Phase 2 真实 PDE/material/dense-query benchmark 设计。
-2. 增加更强的 component-necessity ablation，让 memory/router/hyper-adapter 的贡献更清晰。
-3. 若继续 synthetic validation，运行更大 A800 配置并加入更难的 local/nonlinear variants。
+Phase 1.5 现在只视为 provisional pipeline result，不视为最终 learned benchmark evidence。原因：
+
+1. 历史 `run_training()` 只训练 `ovha_full`。
+2. 历史 `run_evaluation()` 对每个 model 重新 `build_model(...)`，没有强制加载 trained checkpoint。
+3. A800 handoff artifact 没有完整包含各 baseline checkpoint 和 train metrics。
+4. `local_only`、`separable_only` 与若干 no-query/no-memory ablation 接近或略优于 `ovha_full`，不能强声称所有组件必要。
+5. synthetic operator zoo 只能作为 pipeline/mechanism stress，不能作为公开 benchmark 证据。
+
+下一阶段必须先完成 Phase 1.6：checkpoint-loaded evaluation、公平训练所有主榜/ablation 模型、controlled analytical stress、public benchmark loader/protocol，以及 A800 多 seed handoff。Phase 2 在 Phase 1.6 通过前保持 blocked。
