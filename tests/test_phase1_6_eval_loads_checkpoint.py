@@ -94,8 +94,10 @@ class Phase16CheckpointEvaluationTests(unittest.TestCase):
                 original = model(batch).y_hat.detach().clone()
 
             payload = torch.load(checkpoint, map_location="cpu")
-            first_key = next(iter(payload["model_state_dict"]))
-            payload["model_state_dict"][first_key] = payload["model_state_dict"][first_key] + 0.5
+            payload["model_state_dict"] = {
+                key: value + 0.5 if torch.is_floating_point(value) else value
+                for key, value in payload["model_state_dict"].items()
+            }
             altered_checkpoint = checkpoint.parent / "model_altered.pt"
             torch.save(payload, altered_checkpoint)
 

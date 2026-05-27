@@ -11,6 +11,8 @@ from moat_ovha_torch.models.router import primitive_entropy
 def build_model(name: str, d_model: int = 64, memory_tokens: int = 4, top_k: int | None = None) -> nn.Module:
     if name == "ovha_full":
         return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, top_k=top_k)
+    if name == "ovha_vector_value_big":
+        return OVHAMetaOperator(d_model=max(d_model + d_model // 2, d_model + 1), memory_tokens=memory_tokens, primitive_names=("vector_value",))
     if name == "transformer_only" or name == "ovha_vector_value_only":
         return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, primitive_names=("vector_value",))
     if name == "perceiver_io_style":
@@ -27,6 +29,12 @@ def build_model(name: str, d_model: int = 64, memory_tokens: int = 4, top_k: int
         return SimpleStackModel(d_model=d_model, memory_tokens=memory_tokens)
     if name == "mlp_expert_moe":
         return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, primitive_names=("mlp_expert", "mlp_expert"))
+    if name == "mlp_expert_moe_big_optional":
+        return OVHAMetaOperator(
+            d_model=max(d_model + d_model // 2, d_model + 1),
+            memory_tokens=memory_tokens,
+            primitive_names=("mlp_expert", "mlp_expert"),
+        )
     if name == "ovha_no_memory":
         return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, use_memory=False)
     if name == "ovha_no_hyper_adapter":

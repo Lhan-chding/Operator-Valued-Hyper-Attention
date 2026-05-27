@@ -8,24 +8,38 @@ from moat_ovha_torch.config import Phase15Config
 from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
 from moat_ovha_torch.models.baselines import build_model
 from moat_ovha_torch.runtime import require_torch, write_environment
-from moat_ovha_torch.train.checkpoints import checkpoint_path
+from moat_ovha_torch.train.checkpoints import parameter_count, save_training_checkpoint, train_metrics_path
 from moat_ovha_torch.train.losses import prediction_loss
 from moat_ovha_torch.train.metrics import relative_l2, summarize_relative_l2
 
 
 def run_training(config: Phase15Config) -> Path:
+    run_training_many(config, list(config.training_model_names()))
+    return _write_legacy_train_metrics(config.output_dir, config.training_model_names(), config.seed)
+
+
+def run_training_many(config: Phase15Config, model_names: list[str]) -> dict[str, Path]:
+    checkpoints: dict[str, Path] = {}
+    for model_name in model_names:
+        checkpoints[model_name] = run_training_for_model(config, model_name)
+    _write_legacy_train_metrics(config.output_dir, tuple(model_names), config.seed)
+    return checkpoints
+
+
+def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
     torch = require_torch()
     torch.manual_seed(config.seed)
     output_dir = config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     write_environment(output_dir, config.device, config.config_hash())
     zoo = MetadataFreeOperatorZoo(seed=config.seed)
-    model_name = "ovha_full"
     model = build_model(model_name, d_model=config.d_model, memory_tokens=config.memory_tokens, top_k=config.top_k).to(config.device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
-    metrics_path = output_dir / "train_metrics.jsonl"
+    metrics_path = train_metrics_path(output_dir, model_name, config.seed)
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
     rows = []
     start = time.time()
+    params = parameter_count(model)
 
     for step in range(1, config.steps + 1):
         family = config.families[(step - 1) % len(config.families)]
@@ -57,17 +71,27 @@ def run_training(config: Phase15Config) -> Path:
             "device": config.device,
             "seed": config.seed,
             "config_hash": config.config_hash(),
-            "parameter_count": sum(param.numel() for param in model.parameters()),
+            "parameter_count": params,
+            "train_steps": config.steps,
         }
         row.update(summarize_relative_l2(rel))
         rows.append(row)
 
     metrics_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
-    ckpt = checkpoint_path(output_dir, model_name)
-    ckpt.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"model": model.state_dict(), "config": config.to_jsonable()}, ckpt)
+    ckpt = save_training_checkpoint(model, config, model_name)
     _write_training_report(output_dir, metrics_path, rows)
-    return metrics_path
+    return ckpt
+
+
+def _write_legacy_train_metrics(output_dir: Path, model_names: tuple[str, ...], seed: int) -> Path:
+    legacy_path = output_dir / "train_metrics.jsonl"
+    lines: list[str] = []
+    for model_name in model_names:
+        path = train_metrics_path(output_dir, model_name, seed)
+        if path.exists():
+            lines.extend(path.read_text().splitlines())
+    legacy_path.write_text("\n".join(line for line in lines if line) + ("\n" if lines else ""))
+    return legacy_path
 
 
 def _write_training_report(output_dir: Path, metrics_path: Path, rows: list[dict[str, object]]) -> None:
