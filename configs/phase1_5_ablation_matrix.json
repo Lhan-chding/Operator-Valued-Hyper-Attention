@@ -1,0 +1,31 @@
+{
+  "seed": 37,
+  "output_dir": "outputs/phase1_5_ablation_matrix",
+  "device": "cuda",
+  "steps": 3000,
+  "batch_size": 32,
+  "support_points": 64,
+  "query_points": 64,
+  "num_demos": 4,
+  "context_points": 32,
+  "d_model": 128,
+  "memory_tokens": 6,
+  "lr": 0.0005,
+  "mode": "operator_transfer",
+  "train_split": "iid",
+  "eval_splits": ["iid", "parameter_holdout", "resolution_transfer", "confusable_context"],
+  "models": [
+    "ovha_full",
+    "transformer_only",
+    "simple_stack",
+    "mlp_expert_moe",
+    "ovha_no_memory",
+    "ovha_no_hyper_adapter",
+    "ovha_vector_value_only",
+    "ovha_random_router",
+    "ovha_no_query_router",
+    "ovha_no_query_adapter",
+    "oracle_metadata_upper_bound"
+  ],
+  "allow_metadata_inputs": false
+}

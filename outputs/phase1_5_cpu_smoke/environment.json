@@ -1,0 +1,12 @@
+{
+  "config_hash": "fc962bbd2ad7654b",
+  "cuda_available": false,
+  "device": "cpu",
+  "machine": "arm64",
+  "mps_available": false,
+  "numpy_available": true,
+  "platform": "macOS-26.4-arm64-arm-64bit",
+  "python": "3.9.6",
+  "torch_available": true,
+  "torch_version": "2.8.0"
+}

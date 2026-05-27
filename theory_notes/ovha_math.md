@@ -104,3 +104,19 @@ OVHA 将 attention value 从 vector-valued object 扩展为 operator primitive�
 - `moat_ovha.baselines`: Transformer-only、Perceiver IO-style、ICON-style、DeepONet-only、FNO-only、simple stack 与 ablations。
 
 Phase 1 的目标是建立“定义清楚 + 特例归约 + 最小实验不可替代性”的闭环，而不是追求大 benchmark。
+
+## 10. Phase-1.5 Metadata-Free Extension
+
+Phase 1.5 将 `{#eq:meta-objective}` 从 metadata-conditioned scaffold 推进到 metadata-free episodic learning。模型输入只能包含 context observations、target input、query coordinates、support grid 与 masks。`operator_family`、`gain`、latent parameters、mixture weights、oracle hints 不能进入 `F_theta`。
+
+对应 episode 形式为：
+
+`D_n = {(u_m, q_mj, y_mj): y_mj = [G_tau(u_m)](q_mj)}`.
+
+目标仍是：
+
+`F_theta(D_n, u*, q) ≈ [G_tau(u*)](q)`.
+
+Phase 1.5 的主设定是 `operator_transfer`：context 中有多个 input-output demonstrations，target 使用新的 `u*`。`same_function_field` 只作为弱调试设定。
+
+新增理论边界见 `theory_notes/ovha_context_identifiability.md` 与 `theory_notes/ovha_phase1_5_boundaries.md`。核心约束是：metadata-free 成功必须依赖 context identifiability；如果两个 latent operators 在 context observations 上不可区分，却在 target query 上不同，则任何方法都不应被要求成功。

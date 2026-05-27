@@ -1,0 +1,320 @@
+{"family": "spectral_family", "model": "ovha_full", "primitive_load": {"local": 0.37354034185409546, "separable": 0.267452597618103, "spectral": 0.3590070903301239}, "split": "iid"}
+{"family": "spectral_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "iid"}
+{"family": "spectral_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.48160311579704285, "vector_value": 0.5183968544006348}, "split": "iid"}
+{"family": "spectral_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "iid"}
+{"family": "spectral_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "iid"}
+{"family": "spectral_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "iid"}
+{"family": "spectral_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "iid"}
+{"family": "spectral_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "iid"}
+{"family": "spectral_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.4861393868923187}, "split": "iid"}
+{"family": "spectral_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.31478795409202576, "separable": 0.37279894948005676, "spectral": 0.3124130964279175}, "split": "iid"}
+{"family": "spectral_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.2992209792137146, "separable": 0.32047611474990845, "spectral": 0.38030293583869934}, "split": "iid"}
+{"family": "spectral_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "iid"}
+{"family": "spectral_family", "model": "ovha_random_router", "primitive_load": {"local": 0.29026269912719727, "separable": 0.36690741777420044, "spectral": 0.3428298830986023}, "split": "iid"}
+{"family": "spectral_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.31675344705581665, "separable": 0.31192055344581604, "spectral": 0.3713259994983673}, "split": "iid"}
+{"family": "spectral_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.3534812331199646, "separable": 0.3260871171951294, "spectral": 0.320431649684906}, "split": "iid"}
+{"family": "spectral_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 1.0, "separable": 0.0, "spectral": 0.0}, "split": "iid"}
+{"family": "local_green_family", "model": "ovha_full", "primitive_load": {"local": 0.3391735851764679, "separable": 0.3367072343826294, "spectral": 0.3241191506385803}, "split": "iid"}
+{"family": "local_green_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "iid"}
+{"family": "local_green_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.5010473728179932, "vector_value": 0.49895262718200684}, "split": "iid"}
+{"family": "local_green_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "iid"}
+{"family": "local_green_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "iid"}
+{"family": "local_green_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "iid"}
+{"family": "local_green_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "iid"}
+{"family": "local_green_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "iid"}
+{"family": "local_green_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.536123514175415}, "split": "iid"}
+{"family": "local_green_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.3736790120601654, "separable": 0.3089890480041504, "spectral": 0.3173319399356842}, "split": "iid"}
+{"family": "local_green_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.286761999130249, "separable": 0.36832255125045776, "spectral": 0.34491539001464844}, "split": "iid"}
+{"family": "local_green_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "iid"}
+{"family": "local_green_family", "model": "ovha_random_router", "primitive_load": {"local": 0.3416098952293396, "separable": 0.29450318217277527, "spectral": 0.36388692259788513}, "split": "iid"}
+{"family": "local_green_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.37124449014663696, "separable": 0.2538420259952545, "spectral": 0.37491363286972046}, "split": "iid"}
+{"family": "local_green_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.31990182399749756, "separable": 0.3818477392196655, "spectral": 0.2982504069805145}, "split": "iid"}
+{"family": "local_green_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 0.0, "separable": 0.296875, "spectral": 0.703125}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "ovha_full", "primitive_load": {"local": 0.3852175772190094, "separable": 0.3323778808116913, "spectral": 0.28240451216697693}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.49064087867736816, "vector_value": 0.5093591213226318}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.542109489440918}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.34068289399147034, "separable": 0.3380894660949707, "spectral": 0.32122766971588135}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.2973240315914154, "separable": 0.32702434062957764, "spectral": 0.37565165758132935}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "ovha_random_router", "primitive_load": {"local": 0.36074501276016235, "separable": 0.2753913402557373, "spectral": 0.36386364698410034}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.3151955008506775, "separable": 0.33578845858573914, "spectral": 0.3490160405635834}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.3335137367248535, "separable": 0.323619544506073, "spectral": 0.3428667485713959}, "split": "iid"}
+{"family": "separable_lowrank_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 1.0, "separable": 0.0, "spectral": 0.0}, "split": "iid"}
+{"family": "nonlinear_family", "model": "ovha_full", "primitive_load": {"local": 0.3438323140144348, "separable": 0.3545697033405304, "spectral": 0.3015980124473572}, "split": "iid"}
+{"family": "nonlinear_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "iid"}
+{"family": "nonlinear_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.5328285694122314, "vector_value": 0.46717140078544617}, "split": "iid"}
+{"family": "nonlinear_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "iid"}
+{"family": "nonlinear_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "iid"}
+{"family": "nonlinear_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "iid"}
+{"family": "nonlinear_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "iid"}
+{"family": "nonlinear_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "iid"}
+{"family": "nonlinear_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.4963557720184326}, "split": "iid"}
+{"family": "nonlinear_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.3405664563179016, "separable": 0.36932218074798584, "spectral": 0.29011133313179016}, "split": "iid"}
+{"family": "nonlinear_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.32561367750167847, "separable": 0.3916451632976532, "spectral": 0.28274115920066833}, "split": "iid"}
+{"family": "nonlinear_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "iid"}
+{"family": "nonlinear_family", "model": "ovha_random_router", "primitive_load": {"local": 0.35776054859161377, "separable": 0.34421616792678833, "spectral": 0.2980233132839203}, "split": "iid"}
+{"family": "nonlinear_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.3473656177520752, "separable": 0.36597880721092224, "spectral": 0.2866555452346802}, "split": "iid"}
+{"family": "nonlinear_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.30929839611053467, "separable": 0.355826735496521, "spectral": 0.33487483859062195}, "split": "iid"}
+{"family": "nonlinear_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 0.0, "separable": 0.0, "spectral": 1.0}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "ovha_full", "primitive_load": {"local": 0.2969321012496948, "separable": 0.3546983599662781, "spectral": 0.3483695685863495}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.5403544902801514, "vector_value": 0.45964550971984863}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.5045337677001953}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.3113311529159546, "separable": 0.3537251055240631, "spectral": 0.3349437415599823}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.3140982985496521, "separable": 0.3555315136909485, "spectral": 0.3303701877593994}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "ovha_random_router", "primitive_load": {"local": 0.3342829942703247, "separable": 0.37303870916366577, "spectral": 0.29267823696136475}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.345012366771698, "separable": 0.33415549993515015, "spectral": 0.32083213329315186}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.3553234040737152, "separable": 0.3004036843776703, "spectral": 0.3442729115486145}, "split": "iid"}
+{"family": "compositional_mixed_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 0.0, "separable": 1.0, "spectral": 0.0}, "split": "iid"}
+{"family": "spectral_family", "model": "ovha_full", "primitive_load": {"local": 0.3344743549823761, "separable": 0.30007195472717285, "spectral": 0.36545366048812866}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.5019965171813965, "vector_value": 0.4980035424232483}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.4800876975059509}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.3512822091579437, "separable": 0.33206847310066223, "spectral": 0.31664931774139404}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.34223294258117676, "separable": 0.3025449514389038, "spectral": 0.3552221357822418}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "ovha_random_router", "primitive_load": {"local": 0.35118550062179565, "separable": 0.351144939661026, "spectral": 0.29766950011253357}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.3312408924102783, "separable": 0.3424134850502014, "spectral": 0.32634562253952026}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.3359491229057312, "separable": 0.34591370820999146, "spectral": 0.31813716888427734}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 1.0, "separable": 0.0, "spectral": 0.0}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "ovha_full", "primitive_load": {"local": 0.333265483379364, "separable": 0.32986581325531006, "spectral": 0.3368687033653259}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.4985969662666321, "vector_value": 0.5014030337333679}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.45208150148391724}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.3327932059764862, "separable": 0.31602442264556885, "spectral": 0.35118234157562256}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.3735828697681427, "separable": 0.30703192949295044, "spectral": 0.31938523054122925}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "ovha_random_router", "primitive_load": {"local": 0.32866978645324707, "separable": 0.32947438955307007, "spectral": 0.34185582399368286}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.3169372081756592, "separable": 0.33021700382232666, "spectral": 0.35284578800201416}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.34065479040145874, "separable": 0.33428019285202026, "spectral": 0.32506507635116577}, "split": "parameter_holdout"}
+{"family": "local_green_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 1.0, "separable": 0.0, "spectral": 0.0}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "ovha_full", "primitive_load": {"local": 0.3713042438030243, "separable": 0.2709004878997803, "spectral": 0.3577953279018402}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.5077183842658997, "vector_value": 0.49228155612945557}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.5066535472869873}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.3145056366920471, "separable": 0.3035442531108856, "spectral": 0.38195016980171204}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.3788483440876007, "separable": 0.3068081736564636, "spectral": 0.3143434524536133}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "ovha_random_router", "primitive_load": {"local": 0.40101557970046997, "separable": 0.29680314660072327, "spectral": 0.30218133330345154}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.2845042943954468, "separable": 0.32901257276535034, "spectral": 0.38648316264152527}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.31034988164901733, "separable": 0.3787694275379181, "spectral": 0.3108806610107422}, "split": "parameter_holdout"}
+{"family": "separable_lowrank_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 0.0, "separable": 1.0, "spectral": 0.0}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "ovha_full", "primitive_load": {"local": 0.32542741298675537, "separable": 0.3705996870994568, "spectral": 0.30397289991378784}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.5517669916152954, "vector_value": 0.448233038187027}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.5293216705322266}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.3147742450237274, "separable": 0.33077844977378845, "spectral": 0.35444727540016174}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.35119152069091797, "separable": 0.340920627117157, "spectral": 0.30788785219192505}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "ovha_random_router", "primitive_load": {"local": 0.31744423508644104, "separable": 0.3231198787689209, "spectral": 0.35943588614463806}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.37618377804756165, "separable": 0.33564460277557373, "spectral": 0.2881716787815094}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.3390907645225525, "separable": 0.333557665348053, "spectral": 0.32735157012939453}, "split": "parameter_holdout"}
+{"family": "nonlinear_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 0.796875, "separable": 0.203125, "spectral": 0.0}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "ovha_full", "primitive_load": {"local": 0.3282296657562256, "separable": 0.3083997070789337, "spectral": 0.3633706569671631}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.4655058979988098, "vector_value": 0.5344941020011902}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.5237826704978943}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.3429100215435028, "separable": 0.31280025839805603, "spectral": 0.34428972005844116}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.31093695759773254, "separable": 0.3752645254135132, "spectral": 0.31379854679107666}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "ovha_random_router", "primitive_load": {"local": 0.3182761073112488, "separable": 0.3470640480518341, "spectral": 0.3346598446369171}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.3358931839466095, "separable": 0.36345937848091125, "spectral": 0.30064743757247925}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.3028365969657898, "separable": 0.31486156582832336, "spectral": 0.38230183720588684}, "split": "parameter_holdout"}
+{"family": "compositional_mixed_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 1.0, "separable": 0.0, "spectral": 0.0}, "split": "parameter_holdout"}
+{"family": "spectral_family", "model": "ovha_full", "primitive_load": {"local": 0.33481481671333313, "separable": 0.36338022351264954, "spectral": 0.30180495977401733}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.5276803374290466, "vector_value": 0.47231966257095337}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.5711076259613037}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.3200318217277527, "separable": 0.3178277611732483, "spectral": 0.362140417098999}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.35228151082992554, "separable": 0.28532975912094116, "spectral": 0.3623887002468109}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "ovha_random_router", "primitive_load": {"local": 0.34524303674697876, "separable": 0.3012034296989441, "spectral": 0.35355353355407715}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.3555200695991516, "separable": 0.3447319567203522, "spectral": 0.2997480630874634}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.2989366352558136, "separable": 0.3667914569377899, "spectral": 0.3342719078063965}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 1.0, "separable": 0.0, "spectral": 0.0}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "ovha_full", "primitive_load": {"local": 0.29159384965896606, "separable": 0.3653647303581238, "spectral": 0.34304144978523254}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.48870423436164856, "vector_value": 0.5112957954406738}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.5319235324859619}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.3060869574546814, "separable": 0.37545591592788696, "spectral": 0.31845712661743164}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.33501899242401123, "separable": 0.32177695631980896, "spectral": 0.3432040810585022}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "ovha_random_router", "primitive_load": {"local": 0.32291191816329956, "separable": 0.3310719132423401, "spectral": 0.34601619839668274}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.3564940392971039, "separable": 0.28915518522262573, "spectral": 0.3543508052825928}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.33982551097869873, "separable": 0.35339826345443726, "spectral": 0.30677616596221924}, "split": "resolution_transfer"}
+{"family": "local_green_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 0.0, "separable": 0.0, "spectral": 1.0}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "ovha_full", "primitive_load": {"local": 0.34180641174316406, "separable": 0.34226423501968384, "spectral": 0.3159293532371521}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.5016541481018066, "vector_value": 0.49834585189819336}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.5516341328620911}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.34563541412353516, "separable": 0.3255528509616852, "spectral": 0.3288117051124573}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.35298725962638855, "separable": 0.3158514201641083, "spectral": 0.33116135001182556}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "ovha_random_router", "primitive_load": {"local": 0.3229129910469055, "separable": 0.33651772141456604, "spectral": 0.34056928753852844}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.31036895513534546, "separable": 0.3277707099914551, "spectral": 0.36186033487319946}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.3287495970726013, "separable": 0.3180243968963623, "spectral": 0.35322603583335876}, "split": "resolution_transfer"}
+{"family": "separable_lowrank_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 1.0, "separable": 0.0, "spectral": 0.0}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "ovha_full", "primitive_load": {"local": 0.3615413308143616, "separable": 0.3276100158691406, "spectral": 0.3108486533164978}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.4913788437843323, "vector_value": 0.5086211562156677}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.5145872831344604}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.33104491233825684, "separable": 0.3381953537464142, "spectral": 0.33075976371765137}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.3663617968559265, "separable": 0.3416251540184021, "spectral": 0.2920130491256714}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "ovha_random_router", "primitive_load": {"local": 0.3216523230075836, "separable": 0.36674174666404724, "spectral": 0.31160590052604675}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.31726714968681335, "separable": 0.3765069246292114, "spectral": 0.30622589588165283}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.3207758069038391, "separable": 0.3912245035171509, "spectral": 0.2879997193813324}, "split": "resolution_transfer"}
+{"family": "nonlinear_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 1.0, "separable": 0.0, "spectral": 0.0}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "ovha_full", "primitive_load": {"local": 0.34491539001464844, "separable": 0.34386420249938965, "spectral": 0.31122034788131714}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.526525616645813, "vector_value": 0.47347432374954224}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.5333825945854187}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.31617796421051025, "separable": 0.29896363615989685, "spectral": 0.3848584294319153}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.3241245150566101, "separable": 0.3396129608154297, "spectral": 0.3362625241279602}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "ovha_random_router", "primitive_load": {"local": 0.3604170083999634, "separable": 0.3081422448158264, "spectral": 0.3314407765865326}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.3040347695350647, "separable": 0.3638553023338318, "spectral": 0.3321099281311035}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.3665541410446167, "separable": 0.3307042717933655, "spectral": 0.3027415871620178}, "split": "resolution_transfer"}
+{"family": "compositional_mixed_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 0.0, "separable": 1.0, "spectral": 0.0}, "split": "resolution_transfer"}
+{"family": "spectral_family", "model": "ovha_full", "primitive_load": {"local": 0.3465729355812073, "separable": 0.3570047616958618, "spectral": 0.2964222729206085}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.4745076894760132, "vector_value": 0.5254923105239868}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.49564412236213684}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.34356987476348877, "separable": 0.3405824601650238, "spectral": 0.3158476948738098}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.35108327865600586, "separable": 0.32742831110954285, "spectral": 0.3214884102344513}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "ovha_random_router", "primitive_load": {"local": 0.3604811429977417, "separable": 0.32646694779396057, "spectral": 0.3130519986152649}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.3318069577217102, "separable": 0.29359760880470276, "spectral": 0.3745955228805542}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.3622061312198639, "separable": 0.32112544775009155, "spectral": 0.31666842103004456}, "split": "confusable_context"}
+{"family": "spectral_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 0.0, "separable": 0.0, "spectral": 1.0}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "ovha_full", "primitive_load": {"local": 0.26476573944091797, "separable": 0.37094905972480774, "spectral": 0.3642851710319519}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.4939054846763611, "vector_value": 0.5060944557189941}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.48079487681388855}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.37267088890075684, "separable": 0.31074339151382446, "spectral": 0.3165856897830963}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.28500300645828247, "separable": 0.3260340094566345, "spectral": 0.388962984085083}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "ovha_random_router", "primitive_load": {"local": 0.33544039726257324, "separable": 0.3328399062156677, "spectral": 0.3317197263240814}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.3271693289279938, "separable": 0.3448825478553772, "spectral": 0.32794809341430664}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.32116711139678955, "separable": 0.3703678846359253, "spectral": 0.30846500396728516}, "split": "confusable_context"}
+{"family": "local_green_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 0.0, "separable": 1.0, "spectral": 0.0}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "ovha_full", "primitive_load": {"local": 0.3301407992839813, "separable": 0.33712098002433777, "spectral": 0.3327382802963257}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.4781956374645233, "vector_value": 0.5218043923377991}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.43872660398483276}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.37433096766471863, "separable": 0.32342398166656494, "spectral": 0.3022451102733612}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.3275577127933502, "separable": 0.3453347086906433, "spectral": 0.32710763812065125}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "ovha_random_router", "primitive_load": {"local": 0.27233901619911194, "separable": 0.33769479393959045, "spectral": 0.3899662494659424}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.36017706990242004, "separable": 0.29179590940475464, "spectral": 0.3480270206928253}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.33517366647720337, "separable": 0.36739420890808105, "spectral": 0.2974320650100708}, "split": "confusable_context"}
+{"family": "separable_lowrank_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 0.0, "separable": 1.0, "spectral": 0.0}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "ovha_full", "primitive_load": {"local": 0.3501426577568054, "separable": 0.3248399794101715, "spectral": 0.32501736283302307}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.48195913434028625, "vector_value": 0.5180408954620361}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.5346856117248535}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.308379590511322, "separable": 0.3892535865306854, "spectral": 0.30236679315567017}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.33991169929504395, "separable": 0.3122401833534241, "spectral": 0.3478480875492096}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "ovha_random_router", "primitive_load": {"local": 0.3256717026233673, "separable": 0.3061594069004059, "spectral": 0.3681688904762268}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.3636397421360016, "separable": 0.2967362701892853, "spectral": 0.33962392807006836}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.3358762264251709, "separable": 0.3442744016647339, "spectral": 0.3198493719100952}, "split": "confusable_context"}
+{"family": "nonlinear_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 1.0, "separable": 0.0, "spectral": 0.0}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "ovha_full", "primitive_load": {"local": 0.30858492851257324, "separable": 0.3505350649356842, "spectral": 0.34087997674942017}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "transformer_only", "primitive_load": {"vector_value": 1.0}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "perceiver_io_style", "primitive_load": {"mlp_expert": 0.5552669763565063, "vector_value": 0.44473305344581604}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "icon_style", "primitive_load": {"mlp_expert": 1.0}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "spectral_only", "primitive_load": {"spectral": 1.0}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "separable_only", "primitive_load": {"separable": 1.0}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "local_only", "primitive_load": {"local": 1.0}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "simple_stack", "primitive_load": {"local": 0.3333333432674408, "separable": 0.3333333432674408, "spectral": 0.3333333432674408}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "mlp_expert_moe", "primitive_load": {"mlp_expert": 0.48998960852622986}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "ovha_no_memory", "primitive_load": {"local": 0.3002747893333435, "separable": 0.3392704427242279, "spectral": 0.360454797744751}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "ovha_no_hyper_adapter", "primitive_load": {"local": 0.3334161937236786, "separable": 0.28602296113967896, "spectral": 0.38056087493896484}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "ovha_vector_value_only", "primitive_load": {"vector_value": 1.0}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "ovha_random_router", "primitive_load": {"local": 0.3513827919960022, "separable": 0.3418442904949188, "spectral": 0.306772917509079}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "ovha_no_query_router", "primitive_load": {"local": 0.31503647565841675, "separable": 0.3447950780391693, "spectral": 0.3401685059070587}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "ovha_no_query_adapter", "primitive_load": {"local": 0.37140756845474243, "separable": 0.32783862948417664, "spectral": 0.3007538318634033}, "split": "confusable_context"}
+{"family": "compositional_mixed_family", "model": "oracle_metadata_upper_bound", "primitive_load": {"local": 0.0, "separable": 0.0, "spectral": 1.0}, "split": "confusable_context"}

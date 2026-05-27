@@ -1,6 +1,8 @@
 .DS_Store
 __pycache__/
 *.py[cod]
+.venv/
+outputs/**/checkpoints/
 
 # Local source document supplied for this run; canonical copy remains in Downloads.
 ovha_phase1_theory_and_codex_plan_cn_v1.docx

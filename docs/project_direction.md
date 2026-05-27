@@ -29,7 +29,8 @@ C 是理论核心，不是普通模块：
 | Phase | 状态 | 阶段文件 | 结论 |
 |---|---|---|---|
 | Phase 1 | Completed | `docs/phases/phase_1.md` | Go: deterministic toy sweep 支持 OVHA-full 优于配置内 baselines/ablations。 |
-| Phase 2 | Not started | 待创建 | 建议进入 PyTorch 可学习版本、metadata-free context inference 和更强 OOD/holdout。 |
+| Phase 1.5 | Local complete | `docs/phases/phase_1_5.md` | Metadata-free PyTorch OVHA 已实现；Mac CPU smoke provisional Go；GPU/A800 scripts 已准备。 |
+| Phase 2 | Not started | 待创建 | 真实 PDE/material/dense-query benchmark，取决于 Phase 1.5 Go/No-Go。 |
 
 ## 当前仓库状态
 
@@ -41,6 +42,8 @@ C 是理论核心，不是普通模块：
 - Phase 1 baseline / ablation：`moat_ovha/baselines/`。
 - Phase 1 自动化：`train_meta_operator.py`、`eval_meta_operator.py`、`scripts/run_phase1_sweep.sh`、`scripts/summarize_phase1.py`。
 - Phase 1 输出：`outputs/phase1/`。
+- Phase 1.5 PyTorch surface：`moat_ovha_torch/`。
+- Phase 1.5 CPU smoke 输出：`outputs/phase1_5_cpu_smoke/`。
 
 ## 最新验证结论
 
@@ -64,19 +67,20 @@ Go: 在 deterministic toy sweep 中，OVHA-full 对所有配置的非 OVHA basel
 
 这个结论只证明 Phase 1 scaffold 闭环有效，不等于论文级 benchmark。它支持“C 不是装饰项”的最小证据，但下一阶段必须降低 metadata 依赖，并接入可学习训练循环。
 
-## Phase 2 优先级
+## Phase 1.5 优先级
 
-1. PyTorch 化当前接口，保持 `memory -> router/hyper_adapter -> primitives -> OVHALayer` 的结构不变。
-2. 去掉或扰动 context metadata hints，验证 memory 是否能从 demonstrations 本身识别 operator family / parameters。
-3. 加入真实训练循环与 learned router/hyper-adapter，而不是 deterministic oracle-style 调制。
-4. 扩展 resolution transfer、parameter holdout、operator-family holdout。
-5. 选择一个更接近论文场景的任务族：PDE operator learning、材料响应或 dense-query field prediction。
-6. 把 proof sketch 升级为可发表 method section 的严谨版本，明确 compactness、context identifiability、continuity 与 primitive closure 条件。
+1. 在 Ubuntu/A800 上运行 `scripts/run_phase1_5_gpu_small.sh`。
+2. 若 GPU small 稳定，再运行 `scripts/run_phase1_5_gpu_main.sh`。
+3. 对比 `ovha_full`、`simple_stack`、`transformer_only`、`no_memory`、`no_hyper_adapter`、`vector_value_only`。
+4. 检查 context scaling、resolution transfer、confusable context 和 oracle upper-bound gap。
+5. 用 GPU 结果决定是否进入 Phase 2 真实 benchmark。
 
 ## 给新窗口的读取顺序
 
 1. `docs/project_direction.md`
 2. `docs/phases/phase_1.md`
-3. `theory_notes/ovha_math.md`
-4. `outputs/phase1/phase1_gpt_pro_summary.md`
-5. `README.md`
+3. `docs/phases/phase_1_5.md`
+4. `theory_notes/ovha_math.md`
+5. `theory_notes/ovha_context_identifiability.md`
+6. `outputs/phase1/phase1_gpt_pro_summary.md`
+7. `README.md`

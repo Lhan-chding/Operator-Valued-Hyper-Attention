@@ -12,6 +12,7 @@ The implementation is intentionally zero-dependency so it can run in a fresh Pyt
 - `scripts/` runs and summarizes the deterministic Phase-1 sweep.
 - `docs/project_direction.md` is the persistent project-level handoff file for future windows.
 - `docs/phases/phase_1.md` is the stable Phase-1 stage summary.
+- `docs/phases/phase_1_5.md` is the Phase-1.5 metadata-free PyTorch plan and status file.
 
 ## Run
 
@@ -34,3 +35,7 @@ The prototype is a minimal executable scaffold, not a large neural training stac
 ## Continuity Docs
 
 Future work should update `docs/project_direction.md` and the relevant `docs/phases/phase_N.md` file at the end of every phase or major decision point.
+
+## Phase 1.5
+
+Phase 1.5 adds `moat_ovha_torch/`, a metadata-free PyTorch implementation surface. Torch is optional for repository import: if it is not installed, torch-specific tests skip and the CPU smoke scripts write a clear skip report.

@@ -1,0 +1,43 @@
+{
+  "seed": 23,
+  "output_dir": "outputs/phase1_5_cpu_smoke",
+  "device": "cpu",
+  "steps": 20,
+  "batch_size": 2,
+  "support_points": 32,
+  "query_points": 32,
+  "num_demos": 2,
+  "context_points": 16,
+  "d_model": 48,
+  "memory_tokens": 3,
+  "lr": 0.001,
+  "mode": "operator_transfer",
+  "train_split": "iid",
+  "eval_splits": ["iid", "parameter_holdout", "resolution_transfer", "confusable_context"],
+  "families": [
+    "spectral_family",
+    "local_green_family",
+    "separable_lowrank_family",
+    "nonlinear_family",
+    "compositional_mixed_family"
+  ],
+  "models": [
+    "ovha_full",
+    "transformer_only",
+    "perceiver_io_style",
+    "icon_style",
+    "spectral_only",
+    "separable_only",
+    "local_only",
+    "simple_stack",
+    "mlp_expert_moe",
+    "ovha_no_memory",
+    "ovha_no_hyper_adapter",
+    "ovha_vector_value_only",
+    "ovha_random_router",
+    "ovha_no_query_router",
+    "ovha_no_query_adapter",
+    "oracle_metadata_upper_bound"
+  ],
+  "allow_metadata_inputs": false
+}
