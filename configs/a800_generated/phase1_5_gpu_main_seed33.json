@@ -1,0 +1,34 @@
+{
+  "seed": 33,
+  "output_dir": "outputs/phase1_5_gpu_main_seed33",
+  "device": "cuda",
+  "steps": 10000,
+  "batch_size": 64,
+  "support_points": 128,
+  "query_points": 128,
+  "num_demos": 8,
+  "context_points": 64,
+  "d_model": 192,
+  "memory_tokens": 8,
+  "lr": 0.0003,
+  "mode": "operator_transfer",
+  "train_split": "iid",
+  "eval_splits": [
+    "iid",
+    "parameter_holdout",
+    "family_holdout",
+    "context_size_sweep",
+    "num_demos_sweep",
+    "resolution_transfer",
+    "noisy_context",
+    "confusable_context"
+  ],
+  "families": [
+    "spectral_family",
+    "local_green_family",
+    "separable_lowrank_family",
+    "nonlinear_family",
+    "compositional_mixed_family"
+  ],
+  "allow_metadata_inputs": false
+}

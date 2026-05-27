@@ -29,8 +29,8 @@ C 是理论核心，不是普通模块：
 | Phase | 状态 | 阶段文件 | 结论 |
 |---|---|---|---|
 | Phase 1 | Completed | `docs/phases/phase_1.md` | Go: deterministic toy sweep 支持 OVHA-full 优于配置内 baselines/ablations。 |
-| Phase 1.5 | Local complete | `docs/phases/phase_1_5.md` | Metadata-free PyTorch OVHA 已实现；Mac CPU smoke provisional Go；GPU/A800 scripts 已准备。 |
-| Phase 2 | Not started | 待创建 | 真实 PDE/material/dense-query benchmark，取决于 Phase 1.5 Go/No-Go。 |
+| Phase 1.5 | GPU provisional complete | `docs/phases/phase_1_5.md` | A800 seeds 31/32/33/34 均完成；OVHA-full 多 seed 优于 transformer/vector/simple-stack baselines。 |
+| Phase 2 | Not started | 待创建 | 真实 PDE/material/dense-query benchmark；同时补强 component-necessity ablation。 |
 
 ## 当前仓库状态
 
@@ -44,10 +44,11 @@ C 是理论核心，不是普通模块：
 - Phase 1 输出：`outputs/phase1/`。
 - Phase 1.5 PyTorch surface：`moat_ovha_torch/`。
 - Phase 1.5 CPU smoke 输出：`outputs/phase1_5_cpu_smoke/`。
+- Phase 1.5 A800 多 seed 输出：`outputs/a800_phase1_5/`。
 
 ## 最新验证结论
 
-最近一次验证命令：
+最近一次本机 Phase 1 验证命令：
 
 ```bash
 python3 -m unittest discover -s tests
@@ -63,17 +64,19 @@ sh scripts/run_phase1_sweep.sh configs/phase1_minimal.json
 
 ## 当前 Go / No-Go
 
-Go: 在 deterministic toy sweep 中，OVHA-full 对所有配置的非 OVHA baseline 与 ablation，在每个 operator family 上均胜出。
+Phase 1 Go: 在 deterministic toy sweep 中，OVHA-full 对所有配置的非 OVHA baseline 与 ablation，在每个 operator family 上均胜出。
 
-这个结论只证明 Phase 1 scaffold 闭环有效，不等于论文级 benchmark。它支持“C 不是装饰项”的最小证据，但下一阶段必须降低 metadata 依赖，并接入可学习训练循环。
+Phase 1.5 provisional Go: 在 A800 seeds 31/32/33/34 上，metadata-free `ovha_full` 均优于 `transformer_only`、`ovha_vector_value_only` 和 `simple_stack`。四 seed aggregate mean relL2 分别为 `ovha_full=1.324814`、`transformer_only=2.379144`、`ovha_vector_value_only=2.382044`、`simple_stack=2.480682`。
 
-## Phase 1.5 优先级
+限制：`local_only`、`separable_only` 与若干 no-query/no-memory ablation 在 aggregate 上接近或略优于 `ovha_full`，所以当前结果支持 operator-valued attention 相对 vector baseline 的 metadata-free 比较，但还不构成每个组件必要性的强证明。
 
-1. 在 Ubuntu/A800 上运行 `scripts/run_phase1_5_gpu_small.sh`。
-2. 若 GPU small 稳定，再运行 `scripts/run_phase1_5_gpu_main.sh`。
-3. 对比 `ovha_full`、`simple_stack`、`transformer_only`、`no_memory`、`no_hyper_adapter`、`vector_value_only`。
+## Phase 2 优先级
+
+1. 创建 `docs/phases/phase_2.md`，定义真实 PDE/material/dense-query benchmark。
+2. 保留 metadata-free 边界：模型输入仍只允许 context/target/support/masks。
+3. 设计更强 component-necessity ablation，明确 memory/router/hyper-adapter 的贡献。
 4. 检查 context scaling、resolution transfer、confusable context 和 oracle upper-bound gap。
-5. 用 GPU 结果决定是否进入 Phase 2 真实 benchmark。
+5. 如需继续 synthetic validation，加入更重 A800 配置和更难 local/nonlinear families。
 
 ## 给新窗口的读取顺序
 
@@ -83,4 +86,5 @@ Go: 在 deterministic toy sweep 中，OVHA-full 对所有配置的非 OVHA basel
 4. `theory_notes/ovha_math.md`
 5. `theory_notes/ovha_context_identifiability.md`
 6. `outputs/phase1/phase1_gpt_pro_summary.md`
-7. `README.md`
+7. `outputs/a800_phase1_5/phase1_5_a800_multiseed_summary.md`
+8. `README.md`

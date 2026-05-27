@@ -332,7 +332,7 @@
 
 ## Go / No-Go
 
-Provisional Go for local smoke: OVHA-full beats simple_stack and vector attention in this run.
+Provisional Go: OVHA-full beats simple_stack and vector attention in this run.
 
 ## Metadata-Free Checklist
 

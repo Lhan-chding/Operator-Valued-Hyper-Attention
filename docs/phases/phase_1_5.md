@@ -25,7 +25,6 @@
 
 - 在 Mac Air 上跑大 sweep
 - PDE/CV/robotics benchmark
-- A800 实际训练
 - full hypernetwork 生成全部权重
 - SSM/Mamba、SE(3)、复杂 mesh primitive
 
@@ -103,12 +102,34 @@ PYTHON=.venv/bin/python bash scripts/run_phase1_5_cpu_smoke.sh
 
 注意：CPU smoke 只验证 pipeline 和最小训练可运行性，不替代 GPU small/main benchmark。
 
+## A800 多 Seed 结果
+
+Ubuntu/A800 主配置已完成 seeds 31/32/33/34。结果已归档到 `outputs/a800_phase1_5/`，汇总见 `outputs/a800_phase1_5/phase1_5_a800_multiseed_summary.md`。
+
+完整性：
+
+- 每个 seed 有 10,000 条 `train_metrics.jsonl`。
+- 每个 seed 有 640 条 `eval_metrics.jsonl`。
+- 每个 seed 有 640 条 `diagnostics.jsonl`。
+- 环境为 Python 3.10.12、torch 2.4.1+cu118、CUDA device。
+
+四 seed aggregate mean relative L2：
+
+| model | mean relL2 |
+|---|---:|
+| ovha_full | 1.324814 |
+| transformer_only | 2.379144 |
+| ovha_vector_value_only | 2.382044 |
+| simple_stack | 2.480682 |
+
+结论：
+
+- `ovha_full` 在四个 seed 中均优于 `transformer_only`、`ovha_vector_value_only` 和 `simple_stack`。
+- hard families 上优势最明显：`separable_lowrank_family` 与 `spectral_family`。
+- `local_only`、`separable_only` 与部分 no-query/no-memory ablation 在 aggregate 上接近或略优于 `ovha_full`，因此当前结果支持 metadata-free operator-valued attention 相对 vector baseline 的比较，但还不能强声称每个 OVHA 组件都已被 ablation 证明必要。
+
 ## 下一步
 
-用户可在 Ubuntu/A800 上运行：
-
-```bash
-bash scripts/run_phase1_5_gpu_small.sh
-bash scripts/run_phase1_5_gpu_main.sh
-python3 scripts/summarize_phase1_5.py outputs/phase1_5_gpu_main
-```
+1. 进入 Phase 2 真实 PDE/material/dense-query benchmark 设计。
+2. 增加更强的 component-necessity ablation，让 memory/router/hyper-adapter 的贡献更清晰。
+3. 若继续 synthetic validation，运行更大 A800 配置并加入更难的 local/nonlinear variants。

@@ -54,9 +54,9 @@ def summarize(output_dir: Path) -> Path:
     vector = mean(by_model.get("transformer_only", [float("inf")]))
     lines.extend(["", "## Go / No-Go", ""])
     if ovha < simple and ovha < vector:
-        lines.append("Provisional Go for local smoke: OVHA-full beats simple_stack and vector attention in this run.")
+        lines.append("Provisional Go: OVHA-full beats simple_stack and vector attention in this run.")
     else:
-        lines.append("No-Go for local smoke: OVHA-full did not beat required comparators in this run.")
+        lines.append("No-Go: OVHA-full did not beat required comparators in this run.")
     lines.extend(
         [
             "",

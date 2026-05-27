@@ -1,0 +1,12 @@
+{
+  "config_hash": "98b283655c22de7d",
+  "cuda_available": true,
+  "device": "cuda",
+  "machine": "x86_64",
+  "mps_available": false,
+  "numpy_available": true,
+  "platform": "Linux-5.15.0-105-generic-x86_64-with-glibc2.35",
+  "python": "3.10.12",
+  "torch_available": true,
+  "torch_version": "2.4.1+cu118"
+}
