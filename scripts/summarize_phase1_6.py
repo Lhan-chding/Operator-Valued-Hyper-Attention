@@ -164,10 +164,14 @@ def _build_summary(eval_rows: list[dict[str, Any]], train_rows: list[dict[str, A
         singles = [values[name] for name in ("local_only", "separable_only", "spectral_only") if name in values]
         best_single = min(singles) if singles else None
         full = values.get("ovha_full")
-        if full is not None and best_single is not None and full < best_single:
-            conclusion = "provisional component signal"
-        else:
-            conclusion = "no claim; needs A800 multi-seed evidence"
+        conclusion = _controlled_stress_conclusion(
+            full=full,
+            best_single=best_single,
+            vector_big=values.get("ovha_vector_value_big"),
+            no_memory=values.get("ovha_no_memory"),
+            no_router=values.get("ovha_no_query_router"),
+            no_adapter=values.get("ovha_no_hyper_adapter"),
+        )
         stress_rows.append(
             {
                 "family": family,
@@ -215,9 +219,7 @@ def _build_summary(eval_rows: list[dict[str, Any]], train_rows: list[dict[str, A
     if not oracle_untrained:
         oracle_untrained.append({"model": "none", "rows": 0, "checkpoint_loaded_rows": 0, "note": "all eval rows were checkpoint-loaded main/ablation rows"})
 
-    go = "No-Go: Phase 2 remains blocked until A800 multi-model, multi-seed checkpoint-loaded results and public benchmark pilot metrics are available."
-    if checkpoint_rows and all(row["checkpoint_loaded"] for row in checkpoint_rows):
-        go = "Protocol Go for A800 execution: checkpoint-loaded CPU/integrity path is wired; Phase 2 scientific Go still requires GPU/public benchmark evidence."
+    go = _go_no_go(checkpoint_rows, stress_rows)
     return {
         "checkpoint_integrity": checkpoint_rows,
         "controlled_stress": stress_rows,
@@ -226,6 +228,55 @@ def _build_summary(eval_rows: list[dict[str, Any]], train_rows: list[dict[str, A
         "aggregate": _aggregate(eval_rows),
         "go_no_go": go,
     }
+
+
+def _controlled_stress_conclusion(
+    *,
+    full: float | None,
+    best_single: float | None,
+    vector_big: float | None,
+    no_memory: float | None,
+    no_router: float | None,
+    no_adapter: float | None,
+) -> str:
+    if full is None:
+        return "incomplete; ovha_full missing"
+    baseline_values = [value for value in (best_single, vector_big) if value is not None]
+    if not baseline_values:
+        return "incomplete; baseline missing"
+    if full >= min(baseline_values):
+        return "negative component signal"
+    ablation_values = [value for value in (no_memory, no_router, no_adapter) if value is not None]
+    if any(value <= full for value in ablation_values):
+        return "mixed; ablation signal missing"
+    return "provisional component signal"
+
+
+def _go_no_go(checkpoint_rows: list[dict[str, Any]], stress_rows: list[dict[str, Any]]) -> str:
+    checkpoint_ok = bool(checkpoint_rows) and all(row["checkpoint_loaded"] for row in checkpoint_rows)
+    if not checkpoint_ok:
+        return "No-Go: checkpoint-loaded evaluation is incomplete; fix protocol integrity before interpreting Phase 1.6 results."
+
+    conclusions = [row["conclusion"] for row in stress_rows]
+    if any(conclusion == "negative component signal" for conclusion in conclusions):
+        return (
+            "Scientific No-Go: checkpoint path is wired, but OVHA-full does not beat controlled-stress "
+            "baselines/ablations; diagnose model/config before running the larger main experiment."
+        )
+    if conclusions and all(conclusion == "provisional component signal" for conclusion in conclusions):
+        return (
+            "Protocol Go with provisional controlled-stress signal: checkpoint path is wired; "
+            "public benchmark evidence is still required before Phase 2 scientific Go."
+        )
+    if conclusions:
+        return (
+            "Protocol Go only: checkpoint path is wired, but controlled-stress evidence is incomplete "
+            "or mixed; diagnose before treating this as a scientific win."
+        )
+    return (
+        "Protocol Go only: checkpoint path is wired; controlled-stress and public benchmark evidence "
+        "are still required before Phase 2 scientific Go."
+    )
 
 
 def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:

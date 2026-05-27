@@ -82,6 +82,45 @@ class Phase16BenchmarkProtocolArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "PDEBench subset not found"):
                 loader.load_split("train")
 
+    def test_phase16_summary_separates_checkpoint_integrity_from_scientific_go(self):
+        from scripts.summarize_phase1_6 import _build_summary
+
+        eval_rows = [
+            {
+                "family": "query_piecewise_composition_family",
+                "model_name": model,
+                "seed": 41,
+                "relative_l2": relative_l2,
+                "checkpoint_loaded": True,
+                "checkpoint_train_steps": 2000,
+            }
+            for model, relative_l2 in (
+                ("ovha_full", 1.35),
+                ("local_only", 1.19),
+                ("separable_only", 1.30),
+                ("spectral_only", 1.55),
+                ("ovha_vector_value_big", 1.21),
+                ("ovha_no_memory", 0.98),
+                ("ovha_no_query_router", 1.33),
+                ("ovha_no_hyper_adapter", 1.03),
+            )
+        ]
+        train_rows = [
+            {
+                "model": row["model_name"],
+                "seed": row["seed"],
+                "relative_l2": 0.75,
+            }
+            for row in eval_rows
+        ]
+
+        summary = _build_summary(eval_rows, train_rows)
+
+        self.assertTrue(all(row["checkpoint_loaded"] for row in summary["checkpoint_integrity"]))
+        self.assertEqual(summary["controlled_stress"][0]["conclusion"], "negative component signal")
+        self.assertIn("Scientific No-Go", summary["go_no_go"])
+        self.assertIn("checkpoint path is wired", summary["go_no_go"])
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; Phase 1.6 tensor protocol tests skipped.")
 class Phase16BenchmarkProtocolTorchTests(unittest.TestCase):
