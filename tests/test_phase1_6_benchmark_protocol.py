@@ -19,11 +19,13 @@ class Phase16BenchmarkProtocolArtifactTests(unittest.TestCase):
             ROOT / "docs" / "execution_policy_mac_vs_a800.md",
             ROOT / "configs" / "phase1_6_cpu_integrity_smoke.json",
             ROOT / "configs" / "phase1_6_gpu_integrity_short.json",
+            ROOT / "configs" / "phase1_6_gpu_diagnostic_short.json",
             ROOT / "configs" / "phase1_6_gpu_component_main.json",
             ROOT / "configs" / "phase1_6_gpu_public_pilot.json",
             ROOT / "configs" / "phase1_6_gpu_public_full_optional.json",
             ROOT / "scripts" / "run_phase1_6_cpu_integrity_smoke.sh",
             ROOT / "scripts" / "run_phase1_6_gpu_integrity_short.sh",
+            ROOT / "scripts" / "run_phase1_6_gpu_diagnostic_short.sh",
             ROOT / "scripts" / "run_phase1_6_gpu_component_main.sh",
             ROOT / "scripts" / "run_phase1_6_gpu_public_pilot.sh",
             ROOT / "scripts" / "summarize_phase1_6.py",
@@ -48,6 +50,7 @@ class Phase16BenchmarkProtocolArtifactTests(unittest.TestCase):
     def test_phase16_gpu_scripts_default_to_gpu_three(self):
         for script in (
             ROOT / "scripts" / "run_phase1_6_gpu_integrity_short.sh",
+            ROOT / "scripts" / "run_phase1_6_gpu_diagnostic_short.sh",
             ROOT / "scripts" / "run_phase1_6_gpu_component_main.sh",
             ROOT / "scripts" / "run_phase1_6_gpu_public_pilot.sh",
         ):
@@ -121,6 +124,43 @@ class Phase16BenchmarkProtocolArtifactTests(unittest.TestCase):
         self.assertIn("Scientific No-Go", summary["go_no_go"])
         self.assertIn("checkpoint path is wired", summary["go_no_go"])
 
+    def test_phase16_summary_includes_diagnostic_signals_from_jsonl(self):
+        from scripts.summarize_phase1_6 import summarize
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "environment.json").write_text(json.dumps({"torch_available": True, "device": "cuda", "config_hash": "abc"}))
+            eval_row = {
+                "family": "query_piecewise_composition_family",
+                "model_name": "ovha_full",
+                "seed": 41,
+                "relative_l2": 1.0,
+                "checkpoint_loaded": True,
+                "checkpoint_train_steps": 2000,
+            }
+            train_row = {"model": "ovha_full", "seed": 41, "relative_l2": 0.8}
+            diagnostic_row = {
+                "family": "query_piecewise_composition_family",
+                "model_name": "ovha_full",
+                "seed": 41,
+                "primitive_entropy": 1.0,
+                "memory_norm": 2.0,
+                "adapter_norms": {"spectral": 0.1, "separable": 0.2, "local": 0.0},
+                "primitive_load": {"spectral": 0.5, "separable": 0.3, "local": 0.2},
+            }
+            (root / "eval_metrics.jsonl").write_text(json.dumps(eval_row) + "\n")
+            (root / "train_metrics.jsonl").write_text(json.dumps(train_row) + "\n")
+            (root / "diagnostics.jsonl").write_text(json.dumps(diagnostic_row) + "\n")
+
+            report = summarize(root)
+            summary = json.loads((root / "phase1_6_summary.json").read_text())
+
+        self.assertEqual(summary["diagnostic_signals"][0]["model"], "ovha_full")
+        self.assertEqual(summary["diagnostic_signals"][0]["family"], "query_piecewise_composition_family")
+        self.assertAlmostEqual(summary["diagnostic_signals"][0]["mean_adapter_norm"], 0.1)
+        self.assertIn("## Diagnostic Signals", report.read_text())
+        self.assertIn("spectral=0.500000", report.read_text())
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; Phase 1.6 tensor protocol tests skipped.")
 class Phase16BenchmarkProtocolTorchTests(unittest.TestCase):
@@ -180,6 +220,38 @@ class Phase16BenchmarkProtocolTorchTests(unittest.TestCase):
         self.assertTrue(torch.equal(first.target_q, second.target_q))
         self.assertEqual(tuple(first.context_q.shape), (2, 1, 4, 1))
         self.assertEqual(tuple(first.target_q.shape), (2, 5, 1))
+
+    def test_evaluator_diagnostic_row_exposes_router_memory_and_adapter_signals(self):
+        import types
+        import torch
+
+        from moat_ovha_torch.eval.evaluator import _diagnostic_row
+
+        output = types.SimpleNamespace(
+            primitive_weights=torch.tensor([[[0.7, 0.3], [0.5, 0.5]]]),
+            diagnostics={
+                "primitive_entropy": torch.tensor(0.61),
+                "memory_norms": torch.tensor(2.5),
+                "adapter_norms": {"spectral": torch.tensor(1.2), "separable": torch.tensor(0.3)},
+            },
+        )
+
+        row = _diagnostic_row(
+            split="iid",
+            family="query_piecewise_composition_family",
+            model_name="ovha_full",
+            seed=41,
+            eval_seed=1041,
+            checkpoint_loaded=True,
+            checkpoint_path="checkpoint.pt",
+            output=output,
+            primitive_names=("spectral", "separable"),
+        )
+
+        self.assertAlmostEqual(row["primitive_load"]["spectral"], 0.6)
+        self.assertAlmostEqual(row["primitive_entropy"], 0.61, places=6)
+        self.assertAlmostEqual(row["memory_norm"], 2.5)
+        self.assertEqual(row["adapter_norms"], {"spectral": 1.2, "separable": 0.3})
 
 
 if __name__ == "__main__":
