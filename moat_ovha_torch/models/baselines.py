@@ -66,7 +66,7 @@ class SimpleStackModel(nn.Module):
     def forward(self, batch: MetaOperatorBatch) -> OVHAOutput:
         output = self.core(batch)
         weights = torch.full_like(output.primitive_weights, 1.0 / output.primitive_weights.shape[-1])
-        y_hat = (weights.unsqueeze(-1) * output.diagnostics["per_primitive_outputs"]).sum(dim=-2)
+        y_hat = (weights.unsqueeze(-1) * output.diagnostics["per_primitive_outputs_train"]).sum(dim=-2)
         diagnostics = dict(output.diagnostics)
         diagnostics["primitive_entropy"] = primitive_entropy(weights)
         return OVHAOutput(y_hat=y_hat, primitive_weights=weights, diagnostics=diagnostics)

@@ -71,5 +71,6 @@ class OVHAMetaOperator(nn.Module):
             "adapter_norms": adapter_norms,
             "memory_norms": memory.norm(dim=-1).mean(),
             "per_primitive_outputs": stacked.detach(),
+            "per_primitive_outputs_train": stacked,
         }
         return OVHAOutput(y_hat=y_hat, primitive_weights=weights, diagnostics=diagnostics)

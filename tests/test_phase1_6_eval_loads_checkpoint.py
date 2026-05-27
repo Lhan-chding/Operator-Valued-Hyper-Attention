@@ -126,6 +126,34 @@ class Phase16CheckpointEvaluationTests(unittest.TestCase):
             self.assertEqual(rows[0]["seed"], config.seed)
             self.assertEqual(rows[0]["eval_seed"], config.seed + 1000)
 
+    def test_simple_stack_loss_keeps_gradient_path(self):
+        import torch
+
+        from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
+        from moat_ovha_torch.models.baselines import build_model
+        from moat_ovha_torch.train.losses import prediction_loss
+
+        zoo = MetadataFreeOperatorZoo(seed=13)
+        batch, _ = zoo.sample_batch(
+            batch_size=1,
+            num_demos=1,
+            context_points=4,
+            support_points=8,
+            query_points=6,
+            family="query_piecewise_composition_family",
+            split="iid",
+            mode="operator_transfer",
+            device="cpu",
+        )
+        model = build_model("simple_stack", d_model=16, memory_tokens=2)
+
+        output = model(batch)
+        loss = prediction_loss(output.y_hat, batch.target_y)
+
+        self.assertTrue(loss.requires_grad)
+        loss.backward()
+        self.assertTrue(any(param.grad is not None for param in model.parameters() if param.requires_grad))
+
 
 if __name__ == "__main__":
     unittest.main()

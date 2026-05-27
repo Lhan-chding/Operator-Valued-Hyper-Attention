@@ -45,6 +45,15 @@ class Phase16BenchmarkProtocolArtifactTests(unittest.TestCase):
         self.assertEqual(config.evaluation_model_names(), ("ovha_full", "transformer_only"))
         self.assertTrue(config.require_checkpoint)
 
+    def test_phase16_gpu_scripts_default_to_gpu_three(self):
+        for script in (
+            ROOT / "scripts" / "run_phase1_6_gpu_integrity_short.sh",
+            ROOT / "scripts" / "run_phase1_6_gpu_component_main.sh",
+            ROOT / "scripts" / "run_phase1_6_gpu_public_pilot.sh",
+        ):
+            with self.subTest(script=script):
+                self.assertIn('CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-3}"', script.read_text())
+
     def test_benchmark_registry_contains_required_cards(self):
         from moat_ovha_torch.data.benchmark_registry import get_default_benchmark_registry
 

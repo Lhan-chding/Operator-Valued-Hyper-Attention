@@ -45,13 +45,14 @@ Phase 1.6 A800 handoff:
 
 ```bash
 git pull
+export CUDA_VISIBLE_DEVICES=3
 bash scripts/run_phase1_6_gpu_integrity_short.sh
 bash scripts/run_phase1_6_gpu_component_main.sh
 bash scripts/run_phase1_6_gpu_public_pilot.sh
 python scripts/summarize_phase1_6.py --root outputs/phase1_6
 ```
 
-Do not run Phase 1.6 GPU scripts on Mac Air. They are configured for long multi-model or public benchmark workloads.
+Do not run Phase 1.6 GPU scripts on Mac Air. They are configured for long multi-model or public benchmark workloads. The Phase 1.6 GPU scripts default to physical GPU 3 if `CUDA_VISIBLE_DEVICES` is unset, and respect an explicit `CUDA_VISIBLE_DEVICES` value if the host allocation changes.
 
 ## Reporting Rule
 
