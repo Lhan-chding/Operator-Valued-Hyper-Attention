@@ -47,6 +47,9 @@ class Phase17ProtocolContractTests(unittest.TestCase):
         self.assertEqual(sanity.steps, 5000)
         self.assertGreaterEqual(sanity.eval_episode_count, 128)
         self.assertGreaterEqual(main.eval_episode_count, 512)
+        self.assertIn("ovha_vector_value_big", sanity.training_model_names())
+        for family in ("single_primitive_spectral", "single_primitive_local", "single_primitive_separable"):
+            self.assertIn(family, sanity.families)
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; Phase 1.7 tensor protocol tests skipped.")
@@ -110,6 +113,38 @@ class Phase17ControlledV2ProtocolTests(unittest.TestCase):
         self.assertTrue(torch.allclose(weights.sum(dim=-1), torch.ones(2, 9), atol=1e-5))
         reconstructed = (weights.unsqueeze(-1) * outputs).sum(dim=-2)
         self.assertTrue(torch.allclose(reconstructed, batch.target_y, atol=1e-5))
+
+    def test_single_primitive_families_are_not_mixed(self):
+        import torch
+
+        from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
+
+        expected = {
+            "single_primitive_spectral": torch.tensor([1.0, 0.0, 0.0]),
+            "single_primitive_local": torch.tensor([0.0, 1.0, 0.0]),
+            "single_primitive_separable": torch.tensor([0.0, 0.0, 1.0]),
+        }
+        zoo = MetadataFreeOperatorZoo(seed=12)
+        for family, expected_weight in expected.items():
+            with self.subTest(family=family):
+                batch, hidden = zoo.sample_batch(
+                    batch_size=3,
+                    num_demos=1,
+                    context_points=4,
+                    support_points=8,
+                    query_points=5,
+                    family=family,
+                    split="iid",
+                    mode="operator_transfer",
+                    device="cpu",
+                    episode_id=4,
+                )
+                weights = hidden.oracle_hints["true_component_weight_by_q"]
+                expected_tensor = expected_weight.view(1, 1, 3).expand_as(weights)
+                self.assertTrue(torch.equal(weights, expected_tensor))
+                outputs = hidden.oracle_hints["true_primitive_outputs_by_q"]
+                reconstructed = (weights.unsqueeze(-1) * outputs).sum(dim=-2)
+                self.assertTrue(torch.allclose(reconstructed, batch.target_y, atol=1e-5))
 
     def test_training_rows_record_episode_and_batch_hashes(self):
         from moat_ovha_torch.train.trainer import run_training_for_model

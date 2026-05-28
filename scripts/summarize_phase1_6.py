@@ -11,6 +11,9 @@ from typing import Any
 
 CONTROLLED_STRESS_FAMILIES = {
     "single_primitive_representable",
+    "single_primitive_spectral",
+    "single_primitive_local",
+    "single_primitive_separable",
     "query_piecewise_router",
     "context_identifiable_mixture",
     "hyper_parameter_family",

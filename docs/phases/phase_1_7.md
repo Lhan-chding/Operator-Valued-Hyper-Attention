@@ -18,6 +18,9 @@ Phase 1.7 follows the GPT Pro next-step report and blocks public benchmark work 
 
 ```text
 single_primitive_representable
+single_primitive_spectral
+single_primitive_local
+single_primitive_separable
 query_piecewise_router
 context_identifiable_mixture
 hyper_parameter_family

@@ -10,6 +10,9 @@ from moat_ovha_torch.runtime import require_torch
 PRIMITIVE_ORDER = ("spectral", "local", "separable")
 CONTROLLED_V2_FAMILIES = (
     "single_primitive_representable",
+    "single_primitive_spectral",
+    "single_primitive_local",
+    "single_primitive_separable",
     "query_piecewise_router",
     "context_identifiable_mixture",
     "hyper_parameter_family",
@@ -157,8 +160,9 @@ def _primitive_outputs(torch: Any, u: Any, support_grid: Any, query: Any, params
 
 
 def _family_weights(torch: Any, family: str, query: Any, params: dict[str, Any]):
-    if family == "single_primitive_representable":
-        weights = torch.nn.functional.one_hot(params["primitive_index"], num_classes=3).float()
+    if family.startswith("single_primitive"):
+        primitive_index = _single_primitive_index(torch, family, params)
+        weights = torch.nn.functional.one_hot(primitive_index, num_classes=3).float()
         return weights.view(weights.shape[0], 1, 1, 3).expand(query.shape[0], query.shape[1], query.shape[2], 3)
     if family == "query_piecewise_router":
         return _query_piecewise_weights(torch, query)
@@ -179,6 +183,16 @@ def _family_weights(torch: Any, family: str, query: Any, params: dict[str, Any])
         weights = (base + contrast).clamp_min(1e-4)
         return weights / weights.sum(dim=-1, keepdim=True)
     raise ValueError(f"unknown controlled v2 family: {family}")
+
+
+def _single_primitive_index(torch: Any, family: str, params: dict[str, Any]):
+    if family == "single_primitive_spectral":
+        return torch.zeros_like(params["primitive_index"])
+    if family == "single_primitive_local":
+        return torch.ones_like(params["primitive_index"])
+    if family == "single_primitive_separable":
+        return torch.full_like(params["primitive_index"], 2)
+    return params["primitive_index"]
 
 
 def _query_piecewise_weights(torch: Any, query: Any):

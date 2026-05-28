@@ -16,12 +16,15 @@
   "train_split": "iid",
   "eval_splits": ["iid", "parameter_holdout", "resolution_transfer", "confusable_context", "sparse_context"],
   "families": [
-    "single_primitive_representable",
+    "single_primitive_spectral",
+    "single_primitive_local",
+    "single_primitive_separable",
     "query_piecewise_router",
     "context_identifiable_mixture"
   ],
   "train_models": [
     "ovha_full",
+    "ovha_vector_value_big",
     "simple_stack",
     "spectral_only",
     "local_only",
