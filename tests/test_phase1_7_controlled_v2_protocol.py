@@ -25,6 +25,29 @@ class Phase17ProtocolContractTests(unittest.TestCase):
         self.assertIn("episode_id", inspect.signature(MetadataFreeOperatorZoo.sample_batch).parameters)
         self.assertIn("episode_id", inspect.signature(FieldToEpisodeAdapter.sample_episode).parameters)
 
+    def test_controlled_v2_dataset_and_phase17_configs_exist(self):
+        root = Path(__file__).resolve().parents[1]
+        expected = [
+            root / "data" / "ovha_controlled_v2" / "train_episode_ids.json",
+            root / "data" / "ovha_controlled_v2" / "val_episode_ids.json",
+            root / "data" / "ovha_controlled_v2" / "test_episode_ids.json",
+            root / "data" / "ovha_controlled_v2" / "data_card.yaml",
+            root / "data" / "ovha_controlled_v2" / "generator_config.json",
+            root / "configs" / "phase1_7_controlled_v2_sanity.json",
+            root / "configs" / "phase1_7_controlled_v2_main.json",
+            root / "scripts" / "run_phase1_7_controlled_v2_sanity.sh",
+            root / "docs" / "phases" / "phase_1_7.md",
+        ]
+        for path in expected:
+            with self.subTest(path=path):
+                self.assertTrue(path.exists(), path)
+
+        sanity = Phase15Config.from_file(root / "configs" / "phase1_7_controlled_v2_sanity.json")
+        main = Phase15Config.from_file(root / "configs" / "phase1_7_controlled_v2_main.json")
+        self.assertEqual(sanity.steps, 5000)
+        self.assertGreaterEqual(sanity.eval_episode_count, 128)
+        self.assertGreaterEqual(main.eval_episode_count, 512)
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; Phase 1.7 tensor protocol tests skipped.")
 class Phase17ControlledV2ProtocolTests(unittest.TestCase):

@@ -71,9 +71,12 @@ OVHA-specific diagnostics:
 - primitive entropy
 - effective number of primitives
 - router weight std over query and batch
-- router true argmax accuracy/correlation for controlled stress only
-- context swap sensitivity
+- router true weight MAE/KL/CE for controlled stress only
+- oracle-router and oracle-adapter upper-bound relative L2 for controlled stress only
+- context/memory swap sensitivity
 - memory and adapter norms
+
+Every controlled eval row must include deterministic `episode_id`, `batch_hash`, `context_hash` and `target_hash` so train/eval repetition and leakage bugs are auditable.
 
 ## Reporting Boundary
 

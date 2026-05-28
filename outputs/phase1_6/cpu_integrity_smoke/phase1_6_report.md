@@ -4,20 +4,27 @@
 
 - torch_available: True
 - device: cpu
-- config_hash: 29610294f65a3314
+- config_hash: 9f0a69dfeb8a323f
 
 ## Checkpoint Integrity
 
 | model | seed | checkpoint_loaded | train_steps | final_train_relL2 | eval_relL2 |
 |---|---:|---|---:|---:|---:|
-| ovha_full | 41 | True | 20 | 0.895557 | 1.123621 |
-| transformer_only | 41 | True | 20 | 1.027001 | 1.382477 |
+| ovha_full | 41 | True | 20 | 1.242307 | 1.006336 |
+| transformer_only | 41 | True | 20 | 1.473022 | 1.118481 |
 
 ## Controlled Stress Tasks
 
 | family | ovha_full | best_single | vector_big | no_memory | no_router | no_adapter | conclusion |
 |---|---:|---:|---:|---:|---:|---:|---|
-| query_piecewise_composition_family | 1.123621 |  |  |  |  |  | no claim; needs A800 multi-seed evidence |
+| query_piecewise_composition_family | 1.006336 |  |  |  |  |  | incomplete; baseline missing |
+
+## Diagnostic Signals
+
+| model | family | entropy | memory_norm | adapter_norm | primitive_load |
+|---|---|---:|---:|---:|---|
+| ovha_full | query_piecewise_composition_family | 1.096400 | 2.109006 | 12.637806 | local=0.341890, separable=0.354851, spectral=0.303258 |
+| transformer_only | query_piecewise_composition_family | 0.000000 | 2.631976 | 11.915462 | vector_value=1.000000 |
 
 ## Public Benchmark Pilot
 
@@ -39,4 +46,4 @@
 
 ## Go / No-Go
 
-Protocol Go for A800 execution: checkpoint-loaded CPU/integrity path is wired; Phase 2 scientific Go still requires GPU/public benchmark evidence.
+Protocol Go only: checkpoint path is wired, but controlled-stress evidence is incomplete or mixed; diagnose before treating this as a scientific win.

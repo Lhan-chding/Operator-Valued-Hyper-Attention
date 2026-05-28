@@ -1,24 +1,24 @@
 {
   "aggregate": {
     "count": 8,
-    "mean_relative_l2": 1.2530491948127747,
-    "median_relative_l2": 1.142296552658081,
-    "p90_relative_l2": 1.5980539321899414,
-    "std_relative_l2": 0.35471988325661113
+    "mean_relative_l2": 1.0624084025621414,
+    "median_relative_l2": 1.0346502661705017,
+    "p90_relative_l2": 1.291589617729187,
+    "std_relative_l2": 0.19821565902735458
   },
   "checkpoint_integrity": [
     {
       "checkpoint_loaded": true,
-      "eval_relL2": 1.123621016740799,
-      "final_train_relL2": 0.8955570459365845,
+      "eval_relL2": 1.0063361376523972,
+      "final_train_relL2": 1.2423069477081299,
       "model": "ovha_full",
       "seed": 41,
       "train_steps": 20
     },
     {
       "checkpoint_loaded": true,
-      "eval_relL2": 1.3824773728847504,
-      "final_train_relL2": 1.0270013809204102,
+      "eval_relL2": 1.1184806674718857,
+      "final_train_relL2": 1.4730221033096313,
       "model": "transformer_only",
       "seed": 41,
       "train_steps": 20
@@ -27,16 +27,48 @@
   "controlled_stress": [
     {
       "best_single": null,
-      "conclusion": "no claim; needs A800 multi-seed evidence",
+      "conclusion": "incomplete; baseline missing",
       "family": "query_piecewise_composition_family",
       "no_adapter": null,
       "no_memory": null,
       "no_router": null,
-      "ovha_full": 1.123621016740799,
+      "ovha_full": 1.0063361376523972,
       "vector_big": null
     }
   ],
-  "go_no_go": "Protocol Go for A800 execution: checkpoint-loaded CPU/integrity path is wired; Phase 2 scientific Go still requires GPU/public benchmark evidence.",
+  "diagnostic_signals": [
+    {
+      "adapter_norms": {
+        "local": 12.51874725,
+        "separable": 12.64333375,
+        "spectral": 12.7513385
+      },
+      "family": "query_piecewise_composition_family",
+      "mean_adapter_norm": 12.6378065,
+      "mean_memory_norm": 2.10900625,
+      "mean_primitive_entropy": 1.09640025,
+      "model": "ovha_full",
+      "primitive_load": {
+        "local": 0.3418903797864914,
+        "separable": 0.35485125333070755,
+        "spectral": 0.30325835943222046
+      }
+    },
+    {
+      "adapter_norms": {
+        "vector_value": 11.91546175
+      },
+      "family": "query_piecewise_composition_family",
+      "mean_adapter_norm": 11.91546175,
+      "mean_memory_norm": 2.63197575,
+      "mean_primitive_entropy": 0.0,
+      "model": "transformer_only",
+      "primitive_load": {
+        "vector_value": 1.0
+      }
+    }
+  ],
+  "go_no_go": "Protocol Go only: checkpoint path is wired, but controlled-stress evidence is incomplete or mixed; diagnose before treating this as a scientific win.",
   "oracle_untrained": [
     {
       "checkpoint_loaded_rows": 0,

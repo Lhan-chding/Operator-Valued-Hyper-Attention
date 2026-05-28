@@ -1,0 +1,7 @@
+{
+  "name": "ovha_controlled_v2_test",
+  "start": 2000000,
+  "stop_exclusive": 2005000,
+  "count": 5000,
+  "description": "Deterministic test episode ids. Expand as range(start, stop_exclusive)."
+}

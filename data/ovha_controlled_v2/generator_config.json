@@ -1,0 +1,35 @@
+{
+  "name": "OVHA-Controlled-v2",
+  "version": "v2",
+  "default_variant": "model_aligned",
+  "primitive_order": ["spectral", "local", "separable"],
+  "episode_id_ranges": {
+    "train": [0, 50000],
+    "val": [1000000, 1002000],
+    "test": [2000000, 2005000]
+  },
+  "families": [
+    "single_primitive_representable",
+    "query_piecewise_router",
+    "context_identifiable_mixture",
+    "hyper_parameter_family",
+    "same_target_counterfactual",
+    "modality_reliability_conflict",
+    "history_session_preference"
+  ],
+  "hidden_diagnostics": [
+    "true_primitive_outputs_by_q",
+    "true_component_weight_by_q",
+    "true_operator_params",
+    "modality_reliability",
+    "history_session_preference",
+    "batch_hash",
+    "context_hash",
+    "target_hash"
+  ],
+  "leakage_controls": {
+    "metadata_hidden_only": true,
+    "paired_eval_episode_ids": true,
+    "no_family_labels_in_model_input": true
+  }
+}

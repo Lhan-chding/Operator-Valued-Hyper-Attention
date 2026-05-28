@@ -1,0 +1,7 @@
+{
+  "name": "ovha_controlled_v2_val",
+  "start": 1000000,
+  "stop_exclusive": 1002000,
+  "count": 2000,
+  "description": "Deterministic validation episode ids. Expand as range(start, stop_exclusive)."
+}

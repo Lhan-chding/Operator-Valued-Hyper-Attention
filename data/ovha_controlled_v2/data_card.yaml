@@ -1,0 +1,39 @@
+name: OVHA-Controlled-v2
+version: v2
+source: synthetic
+role: controlled
+purpose: mechanism diagnosis for OVHA memory, router, hyper-adapter and primitive alignment
+arrays:
+  input_field: "[batch, support_points, C_u]"
+  output_field: "[batch, query_points, C_y]"
+  coordinates: "[points, D_q]"
+  operator_group_id: hidden_only
+hidden:
+  operator_family: true
+  operator_params: true
+  true_component_weight_by_q: true
+  true_primitive_outputs_by_q: true
+  modality_reliability: true
+splits:
+  iid: supported
+  parameter_holdout: supported
+  family_holdout: planned_for_public_converter
+  resolution_transfer: supported
+  sparse_context: supported
+  noisy_context: supported
+  confusable_context: supported
+  history_holdout: represented_by_history_session_preference
+normalization:
+  synthetic_fields: generated_in_normalized_coordinate_domain
+leakage_controls:
+  metadata_hidden_only: true
+  paired_eval_episode_ids: true
+  no_family_labels_in_model_input: true
+families:
+  - single_primitive_representable
+  - query_piecewise_router
+  - context_identifiable_mixture
+  - hyper_parameter_family
+  - same_target_counterfactual
+  - modality_reliability_conflict
+  - history_session_preference

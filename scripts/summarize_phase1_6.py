@@ -10,11 +10,25 @@ from typing import Any
 
 
 CONTROLLED_STRESS_FAMILIES = {
+    "single_primitive_representable",
+    "query_piecewise_router",
+    "context_identifiable_mixture",
+    "hyper_parameter_family",
+    "same_target_counterfactual",
+    "modality_reliability_conflict",
+    "history_session_preference",
     "query_piecewise_composition_family",
     "context_identifiable_mixture_family",
     "anti_single_primitive_family",
     "confounded_family_pair",
 }
+MEMORY_ABLATION_MODELS = (
+    "ovha_zero_memory",
+    "ovha_learned_global_memory",
+    "ovha_no_memory",
+    "target_only",
+    "ovha_shuffled_context_memory",
+)
 
 
 def summarize(root: Path) -> Path:
@@ -197,7 +211,7 @@ def _build_summary(
             full=full,
             best_single=best_single,
             vector_big=values.get("ovha_vector_value_big"),
-            no_memory=values.get("ovha_no_memory"),
+            no_memory=_best_available(values, MEMORY_ABLATION_MODELS),
             no_router=values.get("ovha_no_query_router"),
             no_adapter=values.get("ovha_no_hyper_adapter"),
         )
@@ -207,7 +221,7 @@ def _build_summary(
                 "ovha_full": full,
                 "best_single": best_single,
                 "vector_big": values.get("ovha_vector_value_big"),
-                "no_memory": values.get("ovha_no_memory"),
+                "no_memory": _best_available(values, MEMORY_ABLATION_MODELS),
                 "no_router": values.get("ovha_no_query_router"),
                 "no_adapter": values.get("ovha_no_hyper_adapter"),
                 "conclusion": conclusion,
@@ -280,6 +294,11 @@ def _controlled_stress_conclusion(
     if any(value <= full for value in ablation_values):
         return "mixed; ablation signal missing"
     return "provisional component signal"
+
+
+def _best_available(values: dict[str, float], names: tuple[str, ...]) -> float | None:
+    candidates = [values[name] for name in names if name in values]
+    return min(candidates) if candidates else None
 
 
 def _go_no_go(checkpoint_rows: list[dict[str, Any]], stress_rows: list[dict[str, Any]]) -> str:

@@ -1,0 +1,7 @@
+{
+  "name": "ovha_controlled_v2_train",
+  "start": 0,
+  "stop_exclusive": 50000,
+  "count": 50000,
+  "description": "Deterministic train episode ids. Expand as range(start, stop_exclusive)."
+}
