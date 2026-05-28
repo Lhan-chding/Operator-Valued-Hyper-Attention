@@ -172,6 +172,42 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
                 self.assertIn(key, losses)
                 self.assertTrue(torch.isfinite(losses[key]))
 
+    def test_controlled_v2_aux_losses_mask_inactive_single_primitive_terms(self):
+        import torch
+
+        from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
+        from moat_ovha_torch.models.ovha import OVHAMetaOperator
+        from moat_ovha_torch.train.controlled_aux_losses import controlled_v2_adapter_losses
+
+        zoo = MetadataFreeOperatorZoo(seed=654)
+        batch, hidden = zoo.sample_batch(
+            batch_size=2,
+            num_demos=1,
+            context_points=4,
+            support_points=12,
+            query_points=5,
+            family="single_primitive_spectral",
+            split="iid",
+            mode="operator_transfer",
+            device="cpu",
+            episode_id=21,
+        )
+        true_weights = hidden.oracle_hints["true_component_weight_by_q"]
+        model = OVHAMetaOperator(d_model=16, memory_tokens=2)
+        output = model(batch, route_override=true_weights, active_primitive_mask=true_weights > 0.5)
+
+        losses = controlled_v2_adapter_losses(output, hidden, model.primitive_names, batch)
+
+        learned = output.diagnostics["per_primitive_outputs_train"]
+        true_outputs = hidden.oracle_hints["true_primitive_outputs_by_q"].to(learned.device)
+        expected_spectral_only = _relative_mse(learned[..., 0, :], true_outputs[..., 0, :])
+
+        self.assertTrue(torch.allclose(losses["separable_rank_kl"], torch.zeros_like(losses["separable_rank_kl"])))
+        self.assertTrue(
+            torch.allclose(losses["local_lengthscale_log_huber"], torch.zeros_like(losses["local_lengthscale_log_huber"]))
+        )
+        self.assertTrue(torch.allclose(losses["primitive_output_loss"], expected_spectral_only, atol=1e-6))
+
     def test_mlp_expert_moe_builds_two_distinct_experts(self):
         from moat_ovha_torch.models.baselines import build_model
 
@@ -247,3 +283,9 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _relative_mse(prediction, target):
+    numerator = (prediction - target).square().mean()
+    denominator = target.square().mean().clamp_min(1e-8)
+    return numerator / denominator
