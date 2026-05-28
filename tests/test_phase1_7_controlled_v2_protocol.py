@@ -146,6 +146,69 @@ class Phase17ControlledV2ProtocolTests(unittest.TestCase):
                 reconstructed = (weights.unsqueeze(-1) * outputs).sum(dim=-2)
                 self.assertTrue(torch.allclose(reconstructed, batch.target_y, atol=1e-5))
 
+    def test_model_aligned_primitives_reproduce_generator_with_true_params(self):
+        from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
+        from moat_ovha_torch.eval.oracle_metrics import model_primitive_outputs_from_true_params
+        from moat_ovha_torch.train.metrics import relative_l2
+
+        zoo = MetadataFreeOperatorZoo(seed=34)
+        for family in (
+            "single_primitive_spectral",
+            "single_primitive_local",
+            "single_primitive_separable",
+            "query_piecewise_router",
+            "context_identifiable_mixture",
+        ):
+            with self.subTest(family=family):
+                batch, hidden = zoo.sample_batch(
+                    batch_size=3,
+                    num_demos=2,
+                    context_points=5,
+                    support_points=24,
+                    query_points=11,
+                    family=family,
+                    split="iid",
+                    mode="operator_transfer",
+                    device="cpu",
+                    episode_id=19,
+                    controlled_generator_variant="model_aligned",
+                )
+
+                model_outputs = model_primitive_outputs_from_true_params(
+                    batch,
+                    hidden,
+                    ("spectral", "local", "separable"),
+                )
+                self.assertIsNotNone(model_outputs)
+                weights = hidden.oracle_hints["true_component_weight_by_q"]
+                reconstructed = (weights.unsqueeze(-1) * model_outputs).sum(dim=-2)
+                self.assertLess(float(relative_l2(reconstructed, batch.target_y).max()), 1e-5)
+
+    def test_model_aligned_iid_params_stay_inside_sanity_adapter_domain(self):
+        from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
+
+        zoo = MetadataFreeOperatorZoo(seed=35)
+        batch, hidden = zoo.sample_batch(
+            batch_size=16,
+            num_demos=1,
+            context_points=4,
+            support_points=16,
+            query_points=6,
+            family="context_identifiable_mixture",
+            split="iid",
+            mode="operator_transfer",
+            device="cpu",
+            episode_id=23,
+            controlled_generator_variant="model_aligned",
+        )
+        self.assertEqual(tuple(batch.target_y.shape), (16, 6, 1))
+        params = hidden.oracle_hints["true_operator_tensors"]
+
+        self.assertGreaterEqual(float(params["gain"].min()), 0.9)
+        self.assertLessEqual(float(params["gain"].max()), 1.1)
+        self.assertGreaterEqual(float(params["lengthscale"].min()), 0.08)
+        self.assertLessEqual(float(params["lengthscale"].max()), 0.20)
+
     def test_hyper_adapter_starts_from_identity_primitive_defaults(self):
         import torch
 
