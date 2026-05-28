@@ -55,6 +55,9 @@ def controlled_oracle_metrics(
     oracle_router_adapter_rel = float(relative_l2(oracle_router_adapter_y, target_y).mean().detach().cpu())
     model_true_param_rel = None
     model_router_true_param_rel = None
+    primitive_gap_metrics: dict[str, float | None] = {
+        f"learned_primitive_true_param_gap_{name}": None for name in ("spectral", "local", "separable")
+    }
     if batch is not None:
         model_true_outputs = model_primitive_outputs_from_true_params(batch, hidden, primitive_names)
         if isinstance(model_true_outputs, torch.Tensor) and model_true_outputs.shape == true_outputs.shape:
@@ -63,6 +66,13 @@ def controlled_oracle_metrics(
             model_true_param_rel = float(relative_l2(model_true_param_y, target_y).mean().detach().cpu())
             model_router_true_param_y = (predicted_weights.unsqueeze(-1) * model_true_outputs).sum(dim=-2)
             model_router_true_param_rel = float(relative_l2(model_router_true_param_y, target_y).mean().detach().cpu())
+            learned_outputs = output.diagnostics.get("per_primitive_outputs")
+            if isinstance(learned_outputs, torch.Tensor) and learned_outputs.shape == model_true_outputs.shape:
+                for index, name in enumerate(primitive_names):
+                    primitive_gap_metrics[f"learned_primitive_true_param_gap_{name}"] = float(
+                        relative_l2(learned_outputs[..., index, :], model_true_outputs[..., index, :]).mean().detach().cpu()
+                    )
+    adapter_metrics = adapter_param_metrics(output, hidden, primitive_names, batch)
     return {
         "router_true_weight_mae": float(router_mae.detach().cpu()),
         "router_true_weight_kl": float(router_kl.detach().cpu()),
@@ -72,6 +82,11 @@ def controlled_oracle_metrics(
         "oracle_router_adapter_upper_bound_relative_l2": oracle_router_adapter_rel,
         "model_primitive_true_param_relative_l2": model_true_param_rel,
         "model_router_true_param_relative_l2": model_router_true_param_rel,
+        "true_router_learned_adapter_relative_l2": oracle_router_rel,
+        "learned_router_true_adapter_relative_l2": model_router_true_param_rel,
+        "true_router_true_adapter_relative_l2": model_true_param_rel,
+        **primitive_gap_metrics,
+        **adapter_metrics,
     }
 
 
@@ -85,7 +100,69 @@ def _empty_metrics() -> dict[str, None]:
         "oracle_router_adapter_upper_bound_relative_l2": None,
         "model_primitive_true_param_relative_l2": None,
         "model_router_true_param_relative_l2": None,
+        "true_router_learned_adapter_relative_l2": None,
+        "learned_router_true_adapter_relative_l2": None,
+        "true_router_true_adapter_relative_l2": None,
+        "learned_primitive_true_param_gap_spectral": None,
+        "learned_primitive_true_param_gap_local": None,
+        "learned_primitive_true_param_gap_separable": None,
+        "adapter_spectral_mode_true_kl": None,
+        "adapter_separable_rank_true_kl": None,
+        "adapter_local_lengthscale_log_mae": None,
     }
+
+
+def adapter_param_metrics(
+    output: OVHAOutput,
+    hidden: EpisodeHiddenInfo,
+    primitive_names: tuple[str, ...],
+    batch: MetaOperatorBatch | None,
+) -> dict[str, float | None]:
+    if batch is None or output.adapter_params is None:
+        return {
+            "adapter_spectral_mode_true_kl": None,
+            "adapter_separable_rank_true_kl": None,
+            "adapter_local_lengthscale_log_mae": None,
+        }
+    hints = hidden.oracle_hints or {}
+    tensors = hints.get("true_operator_tensors") or {}
+    metrics: dict[str, float | None] = {
+        "adapter_spectral_mode_true_kl": None,
+        "adapter_separable_rank_true_kl": None,
+        "adapter_local_lengthscale_log_mae": None,
+    }
+    spectral = output.adapter_params.get("spectral")
+    if spectral is not None and spectral.spectral_mode_logits is not None and "spectral_mode_logits" in tensors:
+        metrics["adapter_spectral_mode_true_kl"] = float(
+            _distribution_kl(
+                spectral.spectral_mode_logits,
+                _expand_vector(tensors["spectral_mode_logits"], batch.target_q),
+            )
+            .detach()
+            .cpu()
+        )
+    separable = output.adapter_params.get("separable")
+    if separable is not None and separable.separable_rank_logits is not None and "separable_rank_logits" in tensors:
+        metrics["adapter_separable_rank_true_kl"] = float(
+            _distribution_kl(
+                separable.separable_rank_logits,
+                _expand_vector(tensors["separable_rank_logits"], batch.target_q),
+            )
+            .detach()
+            .cpu()
+        )
+    local = output.adapter_params.get("local")
+    if local is not None and local.local_lengthscale is not None and "lengthscale" in tensors:
+        pred_lengthscale = torch.nn.functional.softplus(local.local_lengthscale) + 1e-3
+        true_lengthscale = _expand_scalar(tensors["lengthscale"], batch.target_q).clamp_min(1e-6)
+        metrics["adapter_local_lengthscale_log_mae"] = float((pred_lengthscale.log() - true_lengthscale.log()).abs().mean().detach().cpu())
+    return metrics
+
+
+def _distribution_kl(pred_logits: torch.Tensor, true_logits: torch.Tensor) -> torch.Tensor:
+    true_probs = torch.softmax(true_logits, dim=-1)
+    pred_log_probs = torch.log_softmax(pred_logits, dim=-1)
+    return (true_probs * (true_probs.clamp_min(1e-12).log() - pred_log_probs)).sum(dim=-1).mean()
 
 
 def model_primitive_outputs_from_true_params(

@@ -11,6 +11,7 @@ from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
 from moat_ovha_torch.models.baselines import build_model
 from moat_ovha_torch.runtime import require_torch, write_environment
 from moat_ovha_torch.train.checkpoints import parameter_count, save_training_checkpoint, train_metrics_path
+from moat_ovha_torch.train.controlled_aux_losses import controlled_v2_adapter_losses
 from moat_ovha_torch.train.losses import prediction_loss
 from moat_ovha_torch.train.metrics import relative_l2, summarize_relative_l2
 
@@ -35,8 +36,18 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     write_environment(output_dir, config.device, config.config_hash())
     zoo = MetadataFreeOperatorZoo(seed=config.seed)
-    model = build_model(model_name, d_model=config.d_model, memory_tokens=config.memory_tokens, top_k=config.top_k).to(config.device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
+    model = build_model(
+        model_name,
+        d_model=config.d_model,
+        memory_tokens=config.memory_tokens,
+        top_k=config.top_k,
+        controlled_generator_variant=config.controlled_generator_variant,
+    ).to(config.device)
+    _apply_training_freezes(model, config)
+    trainable_parameters = [param for param in model.parameters() if param.requires_grad]
+    if not trainable_parameters:
+        raise ValueError(f"no trainable parameters remain for {model_name}; check freeze_* config")
+    optimizer = torch.optim.Adam(trainable_parameters, lr=config.lr)
     metrics_path = train_metrics_path(output_dir, model_name, config.seed)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -65,15 +76,36 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
             episode_id=episode_id,
             controlled_generator_variant=config.controlled_generator_variant,
         )
-        output = model(batch)
+        primitive_names = _primitive_names(model)
+        route_override = _oracle_route_override(step, hidden, primitive_names, config, config.device, torch)
+        active_primitive_mask = route_override > 0.5 if route_override is not None and config.train_active_primitive_only else None
+        output = model(batch, route_override=route_override, active_primitive_mask=active_primitive_mask)
         pred_loss = prediction_loss(output.y_hat, batch.target_y, batch.target_mask)
-        router_aux_loss = _router_auxiliary_loss(output, hidden, _primitive_names(model), config.device)
+        router_aux_loss = _router_auxiliary_loss(output, hidden, primitive_names, config.device)
+        aux_losses = controlled_v2_adapter_losses(output, hidden, primitive_names, batch)
+        router_query_residual_loss = output.diagnostics.get("router_query_residual_norm")
+        if router_query_residual_loss is None:
+            router_query_residual_loss = pred_loss.detach() * 0.0
+        loss_components = {
+            "prediction": pred_loss,
+            "router_ce": router_aux_loss if router_aux_loss is not None else pred_loss.detach() * 0.0,
+            "adapter_param": aux_losses["adapter_param_loss"],
+            "primitive_output": aux_losses["primitive_output_loss"],
+            "oracle_routed_prediction": aux_losses["oracle_routed_prediction_loss"],
+            "param_scope": aux_losses["param_scope_loss"],
+            "router_query_residual": router_query_residual_loss,
+        }
+        loss = config.prediction_loss_weight * pred_loss
         if router_aux_loss is not None and config.router_auxiliary_loss_weight > 0.0:
-            loss = pred_loss + config.router_auxiliary_loss_weight * router_aux_loss
-        else:
-            loss = pred_loss
+            loss = loss + config.router_auxiliary_loss_weight * router_aux_loss
+        loss = loss + config.adapter_auxiliary_loss_weight * aux_losses["adapter_param_loss"]
+        loss = loss + config.primitive_output_loss_weight * aux_losses["primitive_output_loss"]
+        loss = loss + config.oracle_routed_prediction_loss_weight * aux_losses["oracle_routed_prediction_loss"]
+        loss = loss + config.param_scope_loss_weight * aux_losses["param_scope_loss"]
+        loss = loss + config.router_query_residual_loss_weight * router_query_residual_loss
         optimizer.zero_grad()
         loss.backward()
+        grad_norms = _grad_norms(model, primitive_names)
         optimizer.step()
         rel = relative_l2(output.y_hat.detach(), batch.target_y)
         row = {
@@ -86,6 +118,11 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
             "prediction_loss": float(pred_loss.detach().cpu()),
             "router_auxiliary_loss": None if router_aux_loss is None else float(router_aux_loss.detach().cpu()),
             "router_auxiliary_loss_weight": config.router_auxiliary_loss_weight,
+            "loss_components": {name: _loss_float(value) for name, value in loss_components.items()},
+            "adapter_auxiliary_losses": {name: _loss_float(value) for name, value in aux_losses.items()},
+            "grad_norms": grad_norms,
+            "oracle_route_override": route_override is not None,
+            "active_primitive_mask": active_primitive_mask is not None,
             "batch_hash": hash_model_inputs(batch),
             "context_hash": hash_context(batch),
             "target_hash": hash_target(batch),
@@ -171,11 +208,104 @@ def _write_training_report(output_dir: Path, metrics_path: Path, rows: list[dict
     )
 
 
+def _apply_training_freezes(model: object, config: Phase15Config) -> None:
+    core = _core_model(model)
+    if core is None:
+        return
+    if config.freeze_router and hasattr(core, "router"):
+        _set_requires_grad(core.router.parameters(), False)
+    if config.freeze_adapter and hasattr(core, "hyper_adapter"):
+        _set_requires_grad(core.hyper_adapter.parameters(), False)
+    if config.freeze_primitives and hasattr(core, "primitives"):
+        _set_requires_grad(core.primitives.parameters(), False)
+
+
+def _set_requires_grad(parameters: object, value: bool) -> None:
+    for param in parameters:
+        param.requires_grad_(value)
+
+
+def _core_model(model: object):
+    if hasattr(model, "core"):
+        return model.core
+    if hasattr(model, "primitive_names"):
+        return model
+    return None
+
+
+def _loss_float(value: object) -> float:
+    if hasattr(value, "detach"):
+        value = value.detach().cpu()
+    return float(value)
+
+
+def _grad_norms(model: object, primitive_names: tuple[str, ...]) -> dict[str, float]:
+    core = _core_model(model)
+    if core is None:
+        return {}
+    values = {
+        "context_encoder": _module_grad_norm(getattr(core, "context_encoder", None)),
+        "memory_encoder": _module_grad_norm(getattr(core, "memory_encoder", None)),
+        "router": _module_grad_norm(getattr(core, "router", None)),
+        "hyper_adapter": _module_grad_norm(getattr(core, "hyper_adapter", None)),
+        "primitives": _module_grad_norm(getattr(core, "primitives", None)),
+    }
+    adapter = getattr(core, "hyper_adapter", None)
+    if adapter is not None and hasattr(adapter, "parameters_for_primitive"):
+        for name in primitive_names:
+            values[f"adapter_{name}"] = _parameters_grad_norm(adapter.parameters_for_primitive(name))
+    return values
+
+
+def _module_grad_norm(module: object) -> float:
+    if module is None or not hasattr(module, "parameters"):
+        return 0.0
+    return _parameters_grad_norm(module.parameters())
+
+
+def _parameters_grad_norm(parameters: object) -> float:
+    total = 0.0
+    for param in parameters:
+        if getattr(param, "grad", None) is None:
+            continue
+        norm = param.grad.detach().norm(2)
+        total += float(norm.cpu()) ** 2
+    return total**0.5
+
+
 def _primitive_names(model: object) -> tuple[str, ...]:
     primitive_names = getattr(model, "primitive_names", None)
     if primitive_names is None and hasattr(model, "core"):
         primitive_names = getattr(model.core, "primitive_names", None)
     return tuple(primitive_names or ())
+
+
+def _oracle_route_override(
+    step: int,
+    hidden: object,
+    primitive_names: tuple[str, ...],
+    config: Phase15Config,
+    device: str,
+    torch: object,
+):
+    if config.oracle_route_warmup_steps <= 0 and config.oracle_route_probability <= 0.0:
+        return None
+    if step > config.oracle_route_warmup_steps and config.oracle_route_probability < 1.0:
+        if float(torch.rand((), device=device).detach().cpu()) >= config.oracle_route_probability:
+            return None
+    hints = getattr(hidden, "oracle_hints", None) or {}
+    true_weights = hints.get("true_component_weight_by_q")
+    true_order = tuple(hints.get("primitive_order") or ())
+    if true_weights is None or not true_order or not primitive_names:
+        return None
+    reorder = []
+    for name in primitive_names:
+        if name not in true_order:
+            return None
+        reorder.append(true_order.index(name))
+    target = true_weights.to(device) if hasattr(true_weights, "to") else torch.as_tensor(true_weights, device=device)
+    target = target.index_select(-1, torch.tensor(reorder, device=target.device))
+    return target / target.sum(dim=-1, keepdim=True).clamp_min(1e-8)
 
 
 def _router_auxiliary_loss(output: object, hidden: object, primitive_names: tuple[str, ...], device: str):

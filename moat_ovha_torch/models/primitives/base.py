@@ -19,6 +19,8 @@ class PrimitiveParams:
     low_rank_a: Optional[torch.Tensor] = None
     low_rank_b: Optional[torch.Tensor] = None
     kernel_params: Optional[dict[str, torch.Tensor]] = None
+    raw: Optional[dict[str, torch.Tensor]] = None
+    scope: Optional[dict[str, str]] = None
 
 
 def apply_film(value: torch.Tensor, params: PrimitiveParams | None) -> torch.Tensor:

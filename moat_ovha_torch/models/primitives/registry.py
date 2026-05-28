@@ -17,4 +17,14 @@ def make_primitive_registry(names: tuple[str, ...]) -> nn.ModuleDict:
         "vector_value": VectorValuePrimitive,
         "mlp_expert": MLPExpertPrimitive,
     }
-    return nn.ModuleDict({name: builders[name]() for name in names})
+    modules = {}
+    for name in names:
+        builder_name = _builder_name(name)
+        modules[name] = builders[builder_name]()
+    return nn.ModuleDict(modules)
+
+
+def _builder_name(name: str) -> str:
+    if name.startswith("mlp_expert"):
+        return "mlp_expert"
+    return name

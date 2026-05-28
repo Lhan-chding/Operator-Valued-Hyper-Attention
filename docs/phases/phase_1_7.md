@@ -15,8 +15,15 @@ Phase 1.7 follows the GPT Pro next-step report and blocks public benchmark work 
 - `model_aligned` iid generation is constrained to the short-term sanity adapter domain: gain in `[0.9, 1.1]` and local lengthscale in `[0.08, 0.20]`.
 - The separable model primitive uses the same fourth basis as the generator: `cos(2*pi*s) * cos(2*pi*q)`.
 - Router oracle MAE/KL/CE, oracle-router upper bound, oracle-adapter upper bound, model true-param primitive oracle and memory-swap delta are written into eval rows.
-- Context memory tokens include primitive-aligned spectral, local and separable candidate outputs plus residual features.
+- Eval rows now also expose the full oracle matrix: learned router + learned adapter, true router + learned adapter, learned router + true adapter, and true router + true adapter.
+- Context memory tokens include primitive-aligned spectral, local and separable candidate outputs, residual features and sufficient-statistics evidence features.
+- OVHA keeps primitive-specific memory slots and routes/adapts from shared primitive-conditioned memory instead of independent mean-pooled router/adapter heads.
+- `model_aligned` adapter params are episode-global by default. Spectral frequency/phase and local shift are disabled for `model_aligned`; spectral mode logits, separable rank logits, gain, bias and local lengthscale are expanded from episode-level predictions.
+- Controlled-v2 adapter auxiliary losses supervise spectral mode KL, separable rank KL, gain/bias Huber, local lengthscale log Huber, primitive output gap, oracle-routed prediction and q-variance scope.
+- `OVHAOutput` includes `adapter_params`, `router_logits`, `router_output` and `memory_bank`; diagnostics include adapter parameter stats, router prior entropy, query residual norm and per-primitive output gaps.
 - Controlled-v2 training configs use router auxiliary CE with `router_auxiliary_loss_weight = 0.05` when hidden true router weights are available.
+- G1 single-primitive configs use oracle-routed adapter warmup for the full run: router frozen, true route override active, non-active primitive gradients masked, adapter/primitive/oracle-routed auxiliary losses enabled.
+- `mlp_expert_moe` uses distinct expert keys (`mlp_expert_0`, `mlp_expert_1`) so the ModuleDict no longer collapses duplicate names.
 - Public field `operator_transfer` sampling uses non-target demos from the same `operator_group_id` when groups are available.
 
 ## Controlled-v2 Families
@@ -40,7 +47,8 @@ Codex/Mac should run unit and tiny smoke tests only:
 
 ```bash
 .venv/bin/python -m unittest tests.test_phase1_7_controlled_v2_protocol
-.venv/bin/python -m unittest discover tests
+.venv/bin/python -m unittest tests.test_phase1_7_adapter_router_patch
+.venv/bin/python -m unittest discover -s tests -p 'test*.py'
 ```
 
 Do not run the old all-in-one 5k sanity first. The Ubuntu/GPU handoff order is:
@@ -50,6 +58,9 @@ cd <repo>
 git pull
 
 # G1 single-primitive iid gates
+PYTHON=.venv/bin/python python scripts/run_phase1_7_adapter_collapse_gate.py --family all --device cuda
+
+# Equivalent manual commands
 PYTHON=.venv/bin/python python train_torch_meta_operator.py --config configs/phase1_7_g1_single_iid_spectral.json
 PYTHON=.venv/bin/python python eval_torch_meta_operator.py --config configs/phase1_7_g1_single_iid_spectral.json
 PYTHON=.venv/bin/python python scripts/summarize_phase1_6.py --root outputs/phase1_7/g1_single_iid_spectral

@@ -8,51 +8,144 @@ from moat_ovha_torch.models.ovha import OVHAMetaOperator, OVHAOutput
 from moat_ovha_torch.models.router import primitive_entropy
 
 
-def build_model(name: str, d_model: int = 64, memory_tokens: int = 4, top_k: int | None = None) -> nn.Module:
+def build_model(
+    name: str,
+    d_model: int = 64,
+    memory_tokens: int = 4,
+    top_k: int | None = None,
+    controlled_generator_variant: str = "model_aligned",
+) -> nn.Module:
     if name == "ovha_full":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, top_k=top_k)
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            top_k=top_k,
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "ovha_vector_value_big":
-        return OVHAMetaOperator(d_model=max(d_model + d_model // 2, d_model + 1), memory_tokens=memory_tokens, primitive_names=("vector_value",))
+        return OVHAMetaOperator(
+            d_model=max(d_model + d_model // 2, d_model + 1),
+            memory_tokens=memory_tokens,
+            primitive_names=("vector_value",),
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "transformer_only" or name == "ovha_vector_value_only":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, primitive_names=("vector_value",))
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            primitive_names=("vector_value",),
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "perceiver_io_style":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, primitive_names=("vector_value", "mlp_expert"))
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            primitive_names=("vector_value", "mlp_expert"),
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "icon_style":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, primitive_names=("mlp_expert",))
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            primitive_names=("mlp_expert",),
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "spectral_only" or name == "ovha_single_primitive_spectral":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, primitive_names=("spectral",))
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            primitive_names=("spectral",),
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "separable_only" or name == "ovha_single_primitive_separable":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, primitive_names=("separable",))
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            primitive_names=("separable",),
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "local_only" or name == "ovha_single_primitive_local":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, primitive_names=("local",))
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            primitive_names=("local",),
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "simple_stack":
         return SimpleStackModel(d_model=d_model, memory_tokens=memory_tokens)
     if name == "mlp_expert_moe":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, primitive_names=("mlp_expert", "mlp_expert"))
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            primitive_names=("mlp_expert_0", "mlp_expert_1"),
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "mlp_expert_moe_big_optional":
         return OVHAMetaOperator(
             d_model=max(d_model + d_model // 2, d_model + 1),
             memory_tokens=memory_tokens,
-            primitive_names=("mlp_expert", "mlp_expert"),
+            primitive_names=("mlp_expert_0", "mlp_expert_1"),
+            controlled_generator_variant=controlled_generator_variant,
         )
     if name == "ovha_no_memory":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, use_memory=False)
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            use_memory=False,
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "ovha_learned_global_memory":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, use_memory=False)
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            use_memory=False,
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "ovha_zero_memory" or name == "target_only":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, use_memory=False, trainable_global_memory=False)
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            use_memory=False,
+            trainable_global_memory=False,
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "shuffled_context_memory" or name == "ovha_shuffled_context_memory":
         return ShuffledContextMemoryModel(d_model=d_model, memory_tokens=memory_tokens, top_k=top_k)
     if name == "ovha_no_hyper_adapter":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, use_hyper_adapter=False)
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            use_hyper_adapter=False,
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "ovha_random_router":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, random_router=True)
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            random_router=True,
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "ovha_no_query_router":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, query_conditioned_router=False)
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            query_conditioned_router=False,
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "ovha_no_query_adapter":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, query_conditioned_adapter=False)
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            query_conditioned_adapter=False,
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "oracle_metadata_upper_bound":
-        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, top_k=1)
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            top_k=1,
+            controlled_generator_variant=controlled_generator_variant,
+        )
     raise ValueError(f"unknown phase1.5 model: {name}")
 
 

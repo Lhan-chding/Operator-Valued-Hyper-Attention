@@ -74,7 +74,11 @@ class Phase17ProtocolContractTests(unittest.TestCase):
                 self.assertLessEqual(config.steps, 2000)
                 self.assertIn("ovha_full", config.training_model_names())
                 self.assertIn(family.replace("single_primitive_", "") + "_only", config.training_model_names())
-                self.assertEqual(config.router_auxiliary_loss_weight, 0.05)
+                self.assertEqual(config.router_auxiliary_loss_weight, 0.0)
+                self.assertEqual(config.oracle_route_warmup_steps, config.steps)
+                self.assertTrue(config.train_active_primitive_only)
+                self.assertTrue(config.freeze_router)
+                self.assertGreater(config.adapter_auxiliary_loss_weight, 0.0)
 
         components = Phase15Config.from_file(root / "configs" / "phase1_7_g2_g3_component_iid.json")
         self.assertEqual(components.eval_splits, ("iid",))
@@ -253,11 +257,11 @@ class Phase17ControlledV2ProtocolTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(params["spectral"].scale, torch.ones(2, 5, 1), atol=1e-6))
         self.assertTrue(torch.allclose(params["spectral"].bias, torch.zeros(2, 5, 1), atol=1e-6))
-        self.assertTrue(torch.allclose(params["spectral"].spectral_frequency, torch.ones(2, 5, 1), atol=1e-6))
-        self.assertTrue(torch.allclose(params["spectral"].spectral_phase, torch.zeros(2, 5, 1), atol=1e-6))
+        self.assertIsNone(params["spectral"].spectral_frequency)
+        self.assertIsNone(params["spectral"].spectral_phase)
         self.assertTrue(torch.allclose(params["spectral"].spectral_mode_logits, torch.zeros(2, 5, 4), atol=1e-6))
         self.assertTrue(torch.allclose(params["local"].local_lengthscale, torch.full((2, 5, 1), -2.0), atol=1e-6))
-        self.assertTrue(torch.allclose(params["local"].local_shift, torch.zeros(2, 5, 1), atol=1e-6))
+        self.assertIsNone(params["local"].local_shift)
         self.assertTrue(torch.allclose(params["separable"].separable_rank_logits, torch.zeros(2, 5, 4), atol=1e-6))
 
     def test_context_encoder_uses_primitive_aligned_feature_bank(self):
@@ -281,8 +285,9 @@ class Phase17ControlledV2ProtocolTests(unittest.TestCase):
         tokens = encoder(batch)
 
         self.assertEqual(tuple(tokens.shape), (2, 3, 5, 12))
-        self.assertEqual(encoder.input_dim, 30)
+        self.assertEqual(encoder.input_dim, 66)
         self.assertEqual(encoder.candidate_feature_count, 12)
+        self.assertEqual(encoder.evidence_feature_count, 36)
 
     def test_training_records_router_auxiliary_loss_when_oracles_are_available(self):
         import json

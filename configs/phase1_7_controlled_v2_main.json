@@ -59,6 +59,18 @@
   "test_episode_base": 2000000,
   "eval_episode_count": 512,
   "controlled_generator_variant": "model_aligned",
+  "prediction_loss_weight": 1.0,
   "router_auxiliary_loss_weight": 0.05,
+  "adapter_auxiliary_loss_weight": 0.2,
+  "primitive_output_loss_weight": 0.2,
+  "oracle_routed_prediction_loss_weight": 0.2,
+  "param_scope_loss_weight": 0.05,
+  "router_query_residual_loss_weight": 0.01,
+  "oracle_route_warmup_steps": 5000,
+  "oracle_route_probability": 0.25,
+  "train_active_primitive_only": false,
+  "freeze_router": false,
+  "freeze_adapter": false,
+  "freeze_primitives": false,
   "allow_metadata_inputs": false
 }

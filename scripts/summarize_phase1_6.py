@@ -124,6 +124,76 @@ def summarize(root: Path) -> Path:
     lines.extend(
         [
             "",
+            "## Adapter Parameter Diagnostics",
+            "",
+            "| model | family | adapter_stats |",
+            "|---|---|---|",
+        ]
+    )
+    if summary["adapter_parameter_diagnostics"]:
+        for row in summary["adapter_parameter_diagnostics"]:
+            lines.append(f"| {row['model']} | {row['family']} | {_fmt_nested_mapping(row.get('adapter_stats'))} |")
+    else:
+        lines.append("| not_available | not_available | no adapter parameter diagnostics found |")
+
+    lines.extend(
+        [
+            "",
+            "## Primitive Output Oracle Matrix",
+            "",
+            "| model | family | learned/learned | true-router/learned-adapter | learned-router/true-adapter | true/true |",
+            "|---|---|---:|---:|---:|---:|",
+        ]
+    )
+    if summary["primitive_output_oracle_matrix"]:
+        for row in summary["primitive_output_oracle_matrix"]:
+            lines.append(
+                f"| {row['model']} | {row['family']} | {_fmt(row.get('learned_learned'))} | "
+                f"{_fmt(row.get('true_router_learned_adapter'))} | "
+                f"{_fmt(row.get('learned_router_true_adapter'))} | {_fmt(row.get('true_router_true_adapter'))} |"
+            )
+    else:
+        lines.append("| not_available | not_available |  |  |  | no oracle matrix metrics found |")
+
+    lines.extend(
+        [
+            "",
+            "## Gradient / Loss Balance",
+            "",
+            "| model | seed | loss_components | grad_norms |",
+            "|---|---:|---|---|",
+        ]
+    )
+    if summary["loss_gradient_balance"]:
+        for row in summary["loss_gradient_balance"]:
+            lines.append(
+                f"| {row['model']} | {row['seed']} | {_fmt_mapping(row.get('loss_components'))} | "
+                f"{_fmt_mapping(row.get('grad_norms'))} |"
+            )
+    else:
+        lines.append("| not_available |  | no loss component rows found | no gradient rows found |")
+
+    lines.extend(
+        [
+            "",
+            "## Specialist Collapse Gate",
+            "",
+            "| family | full_true_router_learned_adapter | matched_single | threshold | passed |",
+            "|---|---:|---:|---:|---|",
+        ]
+    )
+    if summary["specialist_collapse_gate"]:
+        for row in summary["specialist_collapse_gate"]:
+            lines.append(
+                f"| {row['family']} | {_fmt(row.get('full_true_router_learned_adapter'))} | "
+                f"{_fmt(row.get('matched_single'))} | {_fmt(row.get('threshold'))} | {row.get('passed')} |"
+            )
+    else:
+        lines.append("| not_available |  |  |  | no specialist gate rows found |")
+
+    lines.extend(
+        [
+            "",
             "## Public Benchmark Pilot",
             "",
             "| dataset | split | ovha_full | best_baseline | delta | win? |",
@@ -282,6 +352,10 @@ def _build_summary(
         "public_benchmark": public_rows,
         "oracle_untrained": oracle_untrained,
         "diagnostic_signals": _diagnostic_signals(diagnostic_rows or []),
+        "adapter_parameter_diagnostics": _adapter_parameter_diagnostics(diagnostic_rows or []),
+        "primitive_output_oracle_matrix": _primitive_output_oracle_matrix(eval_rows),
+        "loss_gradient_balance": _loss_gradient_balance(train_rows),
+        "specialist_collapse_gate": _specialist_collapse_gate(eval_rows),
         "aggregate": _aggregate(eval_rows),
         "go_no_go": go,
     }
@@ -397,6 +471,92 @@ def _diagnostic_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return signals
 
 
+def _adapter_parameter_diagnostics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped = defaultdict(list)
+    for row in rows:
+        model = row.get("model_name", row.get("model"))
+        family = row.get("family")
+        if model and family:
+            grouped[(model, family)].append(row)
+    diagnostics = []
+    for (model, family), items in sorted(grouped.items()):
+        diagnostics.append({"model": model, "family": family, "adapter_stats": _mean_nested_mapping(items, "adapter_stats")})
+    return diagnostics
+
+
+def _primitive_output_oracle_matrix(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped = defaultdict(list)
+    for row in rows:
+        model = row.get("model_name", row.get("model"))
+        family = row.get("family")
+        if model and family:
+            grouped[(model, family)].append(row)
+    matrix = []
+    for (model, family), items in sorted(grouped.items()):
+        if not any(row.get("true_router_learned_adapter_relative_l2") is not None for row in items):
+            continue
+        matrix.append(
+            {
+                "model": model,
+                "family": family,
+                "learned_learned": _mean_field(items, "relative_l2"),
+                "true_router_learned_adapter": _mean_field(items, "true_router_learned_adapter_relative_l2"),
+                "learned_router_true_adapter": _mean_field(items, "learned_router_true_adapter_relative_l2"),
+                "true_router_true_adapter": _mean_field(items, "true_router_true_adapter_relative_l2"),
+            }
+        )
+    return matrix
+
+
+def _loss_gradient_balance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    final_by_model_seed = {}
+    for row in rows:
+        key = (row.get("model"), row.get("seed"))
+        final_by_model_seed[key] = row
+    balance = []
+    for (model, seed), row in sorted(final_by_model_seed.items()):
+        if row.get("loss_components") or row.get("grad_norms"):
+            balance.append(
+                {
+                    "model": model,
+                    "seed": seed,
+                    "loss_components": row.get("loss_components") or {},
+                    "grad_norms": row.get("grad_norms") or {},
+                }
+            )
+    return balance
+
+
+def _specialist_collapse_gate(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_family_model = defaultdict(list)
+    for row in rows:
+        family = row.get("family")
+        model = row.get("model_name", row.get("model"))
+        if family in {"single_primitive_spectral", "single_primitive_local", "single_primitive_separable"} and model:
+            by_family_model[(family, model)].append(row)
+    gate_rows = []
+    for family in sorted({key[0] for key in by_family_model}):
+        values = {model: items for (fam, model), items in by_family_model.items() if fam == family}
+        full = _mean_field(values.get("ovha_full", []), "true_router_learned_adapter_relative_l2")
+        if full is None:
+            full = _mean_field(values.get("ovha_full", []), "relative_l2")
+        matched = _matched_single_value(
+            family,
+            {model: _mean_field(items, "relative_l2") for model, items in values.items() if _mean_field(items, "relative_l2") is not None},
+        )
+        threshold = None if matched is None else 1.05 * matched + 0.01
+        gate_rows.append(
+            {
+                "family": family,
+                "full_true_router_learned_adapter": full,
+                "matched_single": matched,
+                "threshold": threshold,
+                "passed": bool(full is not None and threshold is not None and full <= threshold),
+            }
+        )
+    return gate_rows
+
+
 def _mean_field(rows: list[dict[str, Any]], field: str) -> float | None:
     values = [float(row[field]) for row in rows if row.get(field) is not None]
     return mean(values) if values else None
@@ -409,6 +569,19 @@ def _mean_mapping(rows: list[dict[str, Any]], field: str) -> dict[str, float]:
         for key, value in mapping.items():
             values_by_key[key].append(float(value))
     return {key: mean(values) for key, values in sorted(values_by_key.items())}
+
+
+def _mean_nested_mapping(rows: list[dict[str, Any]], field: str) -> dict[str, dict[str, float]]:
+    values_by_key = defaultdict(lambda: defaultdict(list))
+    for row in rows:
+        mapping = row.get(field) or {}
+        for outer_key, inner in mapping.items():
+            for inner_key, value in (inner or {}).items():
+                values_by_key[outer_key][inner_key].append(float(value))
+    return {
+        outer_key: {inner_key: mean(values) for inner_key, values in sorted(inner_values.items())}
+        for outer_key, inner_values in sorted(values_by_key.items())
+    }
 
 
 def _read_jsonl_paths(paths: list[Path]) -> list[dict[str, Any]]:
@@ -437,6 +610,12 @@ def _fmt_mapping(value: Any) -> str:
     if not value:
         return ""
     return ", ".join(f"{key}={_fmt(item)}" for key, item in value.items())
+
+
+def _fmt_nested_mapping(value: Any) -> str:
+    if not value:
+        return ""
+    return "; ".join(f"{outer}: {_fmt_mapping(inner)}" for outer, inner in value.items())
 
 
 def main() -> None:

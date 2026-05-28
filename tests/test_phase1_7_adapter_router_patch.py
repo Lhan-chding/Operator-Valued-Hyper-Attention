@@ -129,8 +129,8 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
         self.assertIsNotNone(output.memory_bank)
         per_primitive = output.diagnostics["per_primitive_outputs_train"]
         self.assertEqual(tuple(per_primitive.shape), (2, 5, 3, 1))
-        self.assertGreater(float(per_primitive[..., 0, :].abs().sum()), 0.0)
-        self.assertEqual(float(per_primitive[..., 1:, :].abs().sum()), 0.0)
+        self.assertGreater(float(per_primitive[..., 0, :].detach().abs().sum()), 0.0)
+        self.assertEqual(float(per_primitive[..., 1:, :].detach().abs().sum()), 0.0)
 
     def test_controlled_v2_adapter_losses_expose_required_components(self):
         import torch

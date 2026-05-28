@@ -40,7 +40,13 @@ def run_evaluation(config: Phase15Config) -> Path:
     progress_interval = _progress_interval("OVHA_EVAL_PROGRESS_INTERVAL", 128)
 
     for model_name in config.evaluation_model_names():
-        model = build_model(model_name, d_model=config.d_model, memory_tokens=config.memory_tokens, top_k=config.top_k)
+        model = build_model(
+            model_name,
+            d_model=config.d_model,
+            memory_tokens=config.memory_tokens,
+            top_k=config.top_k,
+            controlled_generator_variant=config.controlled_generator_variant,
+        )
         ckpt = checkpoint_path(output_dir, model_name, config.seed)
         checkpoint_payload = None
         checkpoint_loaded = False
@@ -254,10 +260,16 @@ def _diagnostic_row(
         "primitive_load": primitive_load(output.primitive_weights, primitive_names),
         "primitive_entropy": _to_float(output.diagnostics["primitive_entropy"]),
         "memory_norm": _to_float(output.diagnostics["memory_norms"]),
+        "router_context_prior_entropy": _to_float(output.diagnostics.get("router_context_prior_entropy", 0.0)),
+        "router_query_residual_norm": _to_float(output.diagnostics.get("router_query_residual_norm", 0.0)),
         "memory_swap_delta": memory_swap_delta,
         "adapter_norms": {
             name: _to_float(value)
             for name, value in output.diagnostics.get("adapter_norms", {}).items()
+        },
+        "adapter_stats": {
+            name: {stat_name: _to_float(stat_value) for stat_name, stat_value in stats.items()}
+            for name, stats in output.diagnostics.get("adapter_stats", {}).items()
         },
     }
     row.update(oracle_metrics or {})
