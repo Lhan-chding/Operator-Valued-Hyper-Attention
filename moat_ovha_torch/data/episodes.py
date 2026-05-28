@@ -80,6 +80,23 @@ def assert_no_metadata_leakage(inputs: dict[str, Any]) -> None:
 
 def hash_model_inputs(batch: MetaOperatorBatch) -> str:
     payload = {name: _stable_value(getattr(batch, name)) for name in batch_public_tensor_names()}
+    return _hash_payload(payload)
+
+
+def hash_batch_parts(batch: MetaOperatorBatch, names: tuple[str, ...]) -> str:
+    payload = {name: _stable_value(getattr(batch, name)) for name in names}
+    return _hash_payload(payload)
+
+
+def hash_context(batch: MetaOperatorBatch) -> str:
+    return hash_batch_parts(batch, ("context_u", "context_q", "context_y", "context_mask"))
+
+
+def hash_target(batch: MetaOperatorBatch) -> str:
+    return hash_batch_parts(batch, ("target_u", "target_q", "target_y", "target_mask", "support_grid"))
+
+
+def _hash_payload(payload: dict[str, Any]) -> str:
     text = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 

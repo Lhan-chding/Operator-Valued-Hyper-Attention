@@ -15,6 +15,8 @@ EpisodeMode = Literal["same_sample", "operator_transfer", "few_shot_operator"]
 class EpisodeSamplingRecord:
     context_indices: Any
     query_indices: Any
+    demo_indices: Any
+    target_indices: Any
     mode: str
     context_sampling: str
 
@@ -34,6 +36,7 @@ class FieldToEpisodeAdapter:
         query_points: int,
         mode: EpisodeMode,
         context_sampling: SamplingMode,
+        episode_id: int = 0,
     ) -> MetaOperatorBatch:
         torch = require_torch()
         if mode not in {"same_sample", "operator_transfer", "few_shot_operator"}:
@@ -51,16 +54,19 @@ class FieldToEpisodeAdapter:
 
         batch_size, total_points = input_field.shape[0], input_field.shape[1]
         device = input_field.device
-        context_indices = _sample_indices(torch, total_points, context_points, context_sampling, self.seed, device)
-        query_indices = _sample_indices(torch, total_points, query_points, "stratified", self.seed + 1009, device)
-        demo_indices = _demo_indices(torch, batch_size, num_demos, mode, self.seed, device)
+        operator_group_id = sample_batch.get("operator_group_id")
+        if operator_group_id is not None:
+            operator_group_id = operator_group_id.to(device)
+        context_indices = _sample_indices(torch, total_points, context_points, context_sampling, self.seed + episode_id, device)
+        query_indices = _sample_indices(torch, total_points, query_points, "stratified", self.seed + 1009 + episode_id, device)
+        target_source_indices = _target_indices(torch, batch_size, mode, self.seed + episode_id, device)
+        demo_indices = _demo_indices(torch, batch_size, num_demos, mode, self.seed + episode_id, device, target_source_indices, operator_group_id)
 
         context_u = input_field.index_select(0, demo_indices.reshape(-1)).view(batch_size, num_demos, total_points, -1)
         context_q = _expand_coordinates(coordinates, batch_size, num_demos, context_indices)
         context_y_full = output_field.index_select(0, demo_indices.reshape(-1)).view(batch_size, num_demos, total_points, -1)
         context_y = context_y_full.index_select(2, context_indices)
 
-        target_source_indices = demo_indices[:, 0] if mode == "same_sample" else torch.arange(batch_size, device=device)
         target_u = input_field.index_select(0, target_source_indices)
         target_q = _expand_target_coordinates(coordinates, batch_size, query_indices)
         target_y = output_field.index_select(0, target_source_indices).index_select(1, query_indices)
@@ -71,6 +77,8 @@ class FieldToEpisodeAdapter:
         self.last_record = EpisodeSamplingRecord(
             context_indices=context_indices.detach().cpu(),
             query_indices=query_indices.detach().cpu(),
+            demo_indices=demo_indices.detach().cpu(),
+            target_indices=target_source_indices.detach().cpu(),
             mode=mode,
             context_sampling=context_sampling,
         )
@@ -118,14 +126,50 @@ def _sample_indices(torch: Any, total_points: int, count: int, mode: str, seed: 
     return torch.randperm(total_points, generator=generator, device="cpu")[:count].sort().values.to(device)
 
 
-def _demo_indices(torch: Any, batch_size: int, num_demos: int, mode: str, seed: int, device: Any):
+def _target_indices(torch: Any, batch_size: int, mode: str, seed: int, device: Any):
+    if mode in {"same_sample", "operator_transfer"}:
+        return torch.arange(batch_size, device=device)
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(seed + 13)
+    return torch.randint(0, batch_size, (batch_size,), generator=generator, device="cpu").to(device)
+
+
+def _demo_indices(
+    torch: Any,
+    batch_size: int,
+    num_demos: int,
+    mode: str,
+    seed: int,
+    device: Any,
+    target_indices: Any,
+    operator_group_id: Any | None,
+):
     if mode == "same_sample":
-        return torch.arange(batch_size, device=device).view(batch_size, 1).repeat(1, num_demos)
-    if mode == "operator_transfer":
-        return torch.arange(batch_size, device=device).view(batch_size, 1).repeat(1, num_demos)
+        return target_indices.view(batch_size, 1).repeat(1, num_demos)
     generator = torch.Generator(device="cpu")
     generator.manual_seed(seed + 17)
+    if mode == "operator_transfer" and operator_group_id is not None:
+        return _grouped_demo_indices(torch, batch_size, num_demos, target_indices, operator_group_id, generator, device)
+    if mode == "operator_transfer":
+        offsets = torch.arange(1, num_demos + 1, device=device).view(1, num_demos)
+        return (target_indices.view(batch_size, 1) + offsets) % batch_size
+    if operator_group_id is not None:
+        return _grouped_demo_indices(torch, batch_size, num_demos, target_indices, operator_group_id, generator, device)
     return torch.randint(0, batch_size, (batch_size, num_demos), generator=generator, device="cpu").to(device)
+
+
+def _grouped_demo_indices(torch: Any, batch_size: int, num_demos: int, target_indices: Any, operator_group_id: Any, generator: Any, device: Any):
+    rows = []
+    for row in range(batch_size):
+        target_index = int(target_indices[row].detach().cpu())
+        group = operator_group_id[target_index]
+        candidates = torch.nonzero(operator_group_id == group, as_tuple=False).flatten()
+        candidates = candidates[candidates != target_indices[row]]
+        if candidates.numel() == 0:
+            raise ValueError(f"operator group {group.item()} has no non-target demo candidate")
+        choice_positions = torch.randint(0, int(candidates.numel()), (num_demos,), generator=generator, device="cpu").to(device)
+        rows.append(candidates.index_select(0, choice_positions))
+    return torch.stack(rows, dim=0)
 
 
 def _expand_coordinates(coordinates: Any, batch_size: int, num_demos: int, indices: Any):

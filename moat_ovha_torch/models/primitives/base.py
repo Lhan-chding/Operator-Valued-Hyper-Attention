@@ -10,6 +10,12 @@ import torch
 class PrimitiveParams:
     scale: Optional[torch.Tensor] = None
     bias: Optional[torch.Tensor] = None
+    spectral_frequency: Optional[torch.Tensor] = None
+    spectral_phase: Optional[torch.Tensor] = None
+    spectral_mode_logits: Optional[torch.Tensor] = None
+    local_lengthscale: Optional[torch.Tensor] = None
+    local_shift: Optional[torch.Tensor] = None
+    separable_rank_logits: Optional[torch.Tensor] = None
     low_rank_a: Optional[torch.Tensor] = None
     low_rank_b: Optional[torch.Tensor] = None
     kernel_params: Optional[dict[str, torch.Tensor]] = None

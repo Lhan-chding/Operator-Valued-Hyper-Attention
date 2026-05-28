@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from moat_ovha_torch.config import Phase15Config
+from moat_ovha_torch.data.episodes import hash_context, hash_model_inputs, hash_target
 from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
 from moat_ovha_torch.models.baselines import build_model
 from moat_ovha_torch.runtime import require_torch, write_environment
@@ -43,6 +44,7 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
 
     for step in range(1, config.steps + 1):
         family = config.families[(step - 1) % len(config.families)]
+        episode_id = config.train_episode_base + step - 1
         batch, hidden = zoo.sample_batch(
             batch_size=config.batch_size,
             num_demos=config.num_demos,
@@ -53,19 +55,25 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
             split=config.train_split,
             mode=config.mode,
             device=config.device,
+            episode_id=episode_id,
+            controlled_generator_variant=config.controlled_generator_variant,
         )
         output = model(batch)
-        loss = prediction_loss(output.y_hat, batch.target_y)
+        loss = prediction_loss(output.y_hat, batch.target_y, batch.target_mask)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         rel = relative_l2(output.y_hat.detach(), batch.target_y)
         row = {
             "step": step,
+            "episode_id": episode_id,
             "split": config.train_split,
             "family": hidden.family,
             "model": model_name,
             "loss": float(loss.detach().cpu()),
+            "batch_hash": hash_model_inputs(batch),
+            "context_hash": hash_context(batch),
+            "target_hash": hash_target(batch),
             "primitive_entropy": float(output.diagnostics["primitive_entropy"].detach().cpu()),
             "wall_time_seconds": round(time.time() - start, 3),
             "device": config.device,

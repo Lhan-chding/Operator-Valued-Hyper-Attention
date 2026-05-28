@@ -25,10 +25,11 @@ class OVHAMetaOperator(nn.Module):
         self,
         d_model: int = 64,
         memory_tokens: int = 4,
-        primitive_names: tuple[str, ...] = ("spectral", "separable", "local"),
+        primitive_names: tuple[str, ...] = ("spectral", "local", "separable"),
         memory_kind: str = "perceiver",
         top_k: int | None = None,
         use_memory: bool = True,
+        trainable_global_memory: bool = True,
         use_hyper_adapter: bool = True,
         query_conditioned_router: bool = True,
         query_conditioned_adapter: bool = True,
@@ -43,7 +44,11 @@ class OVHAMetaOperator(nn.Module):
             self.memory_encoder = PoolingMemoryEncoder(d_model, memory_tokens)
         else:
             self.memory_encoder = PerceiverMemoryEncoder(d_model, memory_tokens)
-        self.no_memory = nn.Parameter(torch.zeros(memory_tokens, d_model))
+        no_memory = torch.zeros(memory_tokens, d_model)
+        if trainable_global_memory:
+            self.no_memory = nn.Parameter(no_memory)
+        else:
+            self.register_buffer("no_memory", no_memory)
         self.hyper_adapter = HyperAdapter(primitive_names, d_model, query_conditioned_adapter)
         self.router = PrimitiveRouter(primitive_names, d_model, top_k, query_conditioned_router, random_router)
         self.primitives = make_primitive_registry(primitive_names)

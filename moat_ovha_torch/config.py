@@ -53,6 +53,11 @@ class Phase15Config:
     eval_models: Union[str, tuple[str, ...]] = "same_as_train_models"
     require_checkpoint: bool = True
     eval_seed_offset: int = 1000
+    train_episode_base: int = 0
+    eval_episode_base: int = 1_000_000
+    test_episode_base: int = 2_000_000
+    eval_episode_count: int = 1
+    controlled_generator_variant: str = "model_aligned"
     seeds: tuple[int, ...] = ()
     datasets: tuple[str, ...] = ()
     top_k: Optional[int] = None

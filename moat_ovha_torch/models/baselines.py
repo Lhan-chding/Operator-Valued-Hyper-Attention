@@ -37,6 +37,12 @@ def build_model(name: str, d_model: int = 64, memory_tokens: int = 4, top_k: int
         )
     if name == "ovha_no_memory":
         return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, use_memory=False)
+    if name == "ovha_learned_global_memory":
+        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, use_memory=False)
+    if name == "ovha_zero_memory" or name == "target_only":
+        return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, use_memory=False, trainable_global_memory=False)
+    if name == "shuffled_context_memory" or name == "ovha_shuffled_context_memory":
+        return ShuffledContextMemoryModel(d_model=d_model, memory_tokens=memory_tokens, top_k=top_k)
     if name == "ovha_no_hyper_adapter":
         return OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, use_hyper_adapter=False)
     if name == "ovha_random_router":
@@ -58,7 +64,7 @@ class SimpleStackModel(nn.Module):
         self.core = OVHAMetaOperator(
             d_model=d_model,
             memory_tokens=memory_tokens,
-            primitive_names=("spectral", "separable", "local"),
+            primitive_names=("spectral", "local", "separable"),
             use_hyper_adapter=False,
             query_conditioned_router=False,
         )
@@ -70,3 +76,43 @@ class SimpleStackModel(nn.Module):
         diagnostics = dict(output.diagnostics)
         diagnostics["primitive_entropy"] = primitive_entropy(weights)
         return OVHAOutput(y_hat=y_hat, primitive_weights=weights, diagnostics=diagnostics)
+
+
+class ShuffledContextMemoryModel(nn.Module):
+    """Ablation that breaks context-target pairing while preserving tensor shapes."""
+
+    def __init__(self, d_model: int = 64, memory_tokens: int = 4, top_k: int | None = None):
+        super().__init__()
+        self.core = OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, top_k=top_k)
+        self.primitive_names = self.core.primitive_names
+
+    def forward(self, batch: MetaOperatorBatch) -> OVHAOutput:
+        shuffled = _shuffled_context_batch(batch)
+        return self.core(shuffled)
+
+
+def _shuffled_context_batch(batch: MetaOperatorBatch) -> MetaOperatorBatch:
+    if batch.context_u.shape[0] > 1:
+        index = torch.roll(torch.arange(batch.context_u.shape[0], device=batch.context_u.device), shifts=1)
+        return MetaOperatorBatch(
+            context_u=batch.context_u.index_select(0, index),
+            context_q=batch.context_q.index_select(0, index),
+            context_y=batch.context_y.index_select(0, index),
+            target_u=batch.target_u,
+            target_q=batch.target_q,
+            target_y=batch.target_y,
+            support_grid=batch.support_grid,
+            context_mask=batch.context_mask.index_select(0, index) if batch.context_mask is not None else None,
+            target_mask=batch.target_mask,
+        )
+    return MetaOperatorBatch(
+        context_u=batch.context_u.flip(1),
+        context_q=batch.context_q.flip(1),
+        context_y=batch.context_y.flip(1),
+        target_u=batch.target_u,
+        target_q=batch.target_q,
+        target_y=batch.target_y,
+        support_grid=batch.support_grid,
+        context_mask=batch.context_mask.flip(1) if batch.context_mask is not None else None,
+        target_mask=batch.target_mask,
+    )

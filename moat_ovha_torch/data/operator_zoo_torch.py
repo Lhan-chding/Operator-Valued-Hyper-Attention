@@ -4,7 +4,7 @@ import math
 import random
 from typing import Any, Optional
 
-from moat_ovha_torch.data.episodes import EpisodeHiddenInfo, MetaOperatorBatch
+from moat_ovha_torch.data.episodes import EpisodeHiddenInfo, MetaOperatorBatch, hash_context, hash_model_inputs, hash_target
 from moat_ovha_torch.data.component_stress_zoo import CONTROLLED_STRESS_FAMILIES, sample_component_stress_batch
 from moat_ovha_torch.runtime import require_torch
 
@@ -35,8 +35,11 @@ class MetadataFreeOperatorZoo:
         mode: str,
         device: str = "cpu",
         resolution_multiplier: int = 1,
+        episode_id: Optional[int] = None,
+        controlled_generator_variant: str = "model_aligned",
     ) -> tuple[MetaOperatorBatch, EpisodeHiddenInfo]:
         torch = require_torch()
+        episode_id_value = 0 if episode_id is None else int(episode_id)
         if family in CONTROLLED_STRESS_FAMILIES:
             return sample_component_stress_batch(
                 seed=self.seed,
@@ -50,6 +53,8 @@ class MetadataFreeOperatorZoo:
                 mode=mode,
                 device=device,
                 resolution_multiplier=resolution_multiplier,
+                episode_id=episode_id_value,
+                generator_variant=controlled_generator_variant,
             )
         if family not in self.families:
             raise ValueError(f"unknown family: {family}")
@@ -57,7 +62,7 @@ class MetadataFreeOperatorZoo:
             raise ValueError(f"unknown mode: {mode}")
 
         generator = torch.Generator(device=_generator_device(device))
-        generator.manual_seed(_stable_seed(self.seed, family, split, mode, batch_size, support_points, query_points))
+        generator.manual_seed(_stable_seed(self.seed, family, split, mode, episode_id_value, batch_size, support_points, query_points))
         support_points = support_points * max(1, resolution_multiplier)
         support_grid = torch.linspace(0.0, 1.0, support_points, device=device).view(1, support_points, 1)
         target_q = torch.linspace(0.0, 1.0, query_points * max(1, resolution_multiplier), device=device)
@@ -95,7 +100,13 @@ class MetadataFreeOperatorZoo:
             family=family,
             latent_params={key: _to_python(value) for key, value in params.items() if key != "mixture"},
             mixture_weights=_to_python(params.get("mixture")),
-            oracle_hints={"family": family},
+            oracle_hints={
+                "family": family,
+                "episode_id": episode_id_value,
+                "batch_hash": hash_model_inputs(batch),
+                "context_hash": hash_context(batch),
+                "target_hash": hash_target(batch),
+            },
         )
         return batch, hidden
 
