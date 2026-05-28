@@ -72,7 +72,11 @@ def build_model(
             controlled_generator_variant=controlled_generator_variant,
         )
     if name == "simple_stack":
-        return SimpleStackModel(d_model=d_model, memory_tokens=memory_tokens)
+        return SimpleStackModel(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "mlp_expert_moe":
         return OVHAMetaOperator(
             d_model=d_model,
@@ -110,7 +114,12 @@ def build_model(
             controlled_generator_variant=controlled_generator_variant,
         )
     if name == "shuffled_context_memory" or name == "ovha_shuffled_context_memory":
-        return ShuffledContextMemoryModel(d_model=d_model, memory_tokens=memory_tokens, top_k=top_k)
+        return ShuffledContextMemoryModel(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            top_k=top_k,
+            controlled_generator_variant=controlled_generator_variant,
+        )
     if name == "ovha_no_hyper_adapter":
         return OVHAMetaOperator(
             d_model=d_model,
@@ -152,7 +161,7 @@ def build_model(
 class SimpleStackModel(nn.Module):
     """Primitive stack without query/context-conditioned operator-valued aggregation."""
 
-    def __init__(self, d_model: int = 64, memory_tokens: int = 4):
+    def __init__(self, d_model: int = 64, memory_tokens: int = 4, controlled_generator_variant: str = "model_aligned"):
         super().__init__()
         self.core = OVHAMetaOperator(
             d_model=d_model,
@@ -160,28 +169,59 @@ class SimpleStackModel(nn.Module):
             primitive_names=("spectral", "local", "separable"),
             use_hyper_adapter=False,
             query_conditioned_router=False,
+            controlled_generator_variant=controlled_generator_variant,
         )
+        self.primitive_names = self.core.primitive_names
 
-    def forward(self, batch: MetaOperatorBatch) -> OVHAOutput:
-        output = self.core(batch)
+    def forward(
+        self,
+        batch: MetaOperatorBatch,
+        route_override: torch.Tensor | None = None,
+        active_primitive_mask: torch.Tensor | None = None,
+    ) -> OVHAOutput:
+        output = self.core(batch, route_override=route_override, active_primitive_mask=active_primitive_mask)
         weights = torch.full_like(output.primitive_weights, 1.0 / output.primitive_weights.shape[-1])
         y_hat = (weights.unsqueeze(-1) * output.diagnostics["per_primitive_outputs_train"]).sum(dim=-2)
         diagnostics = dict(output.diagnostics)
         diagnostics["primitive_entropy"] = primitive_entropy(weights)
-        return OVHAOutput(y_hat=y_hat, primitive_weights=weights, diagnostics=diagnostics)
+        return OVHAOutput(
+            y_hat=y_hat,
+            primitive_weights=weights,
+            diagnostics=diagnostics,
+            adapter_params=output.adapter_params,
+            router_logits=output.router_logits,
+            memory_bank=output.memory_bank,
+            router_output=output.router_output,
+        )
 
 
 class ShuffledContextMemoryModel(nn.Module):
     """Ablation that breaks context-target pairing while preserving tensor shapes."""
 
-    def __init__(self, d_model: int = 64, memory_tokens: int = 4, top_k: int | None = None):
+    def __init__(
+        self,
+        d_model: int = 64,
+        memory_tokens: int = 4,
+        top_k: int | None = None,
+        controlled_generator_variant: str = "model_aligned",
+    ):
         super().__init__()
-        self.core = OVHAMetaOperator(d_model=d_model, memory_tokens=memory_tokens, top_k=top_k)
+        self.core = OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            top_k=top_k,
+            controlled_generator_variant=controlled_generator_variant,
+        )
         self.primitive_names = self.core.primitive_names
 
-    def forward(self, batch: MetaOperatorBatch) -> OVHAOutput:
+    def forward(
+        self,
+        batch: MetaOperatorBatch,
+        route_override: torch.Tensor | None = None,
+        active_primitive_mask: torch.Tensor | None = None,
+    ) -> OVHAOutput:
         shuffled = _shuffled_context_batch(batch)
-        return self.core(shuffled)
+        return self.core(shuffled, route_override=route_override, active_primitive_mask=active_primitive_mask)
 
 
 def _shuffled_context_batch(batch: MetaOperatorBatch) -> MetaOperatorBatch:

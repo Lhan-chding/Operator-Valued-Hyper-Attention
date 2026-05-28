@@ -181,6 +181,34 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
         self.assertEqual(len(set(model.primitive_names)), 2)
         self.assertEqual(len(model.primitives), 2)
 
+    def test_ablation_wrappers_accept_trainer_route_kwargs(self):
+        import torch
+
+        from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
+        from moat_ovha_torch.models.baselines import build_model
+
+        zoo = MetadataFreeOperatorZoo(seed=321)
+        batch, hidden = zoo.sample_batch(
+            batch_size=2,
+            num_demos=1,
+            context_points=4,
+            support_points=12,
+            query_points=5,
+            family="query_piecewise_router",
+            split="iid",
+            mode="operator_transfer",
+            device="cpu",
+            episode_id=13,
+        )
+        true_weights = hidden.oracle_hints["true_component_weight_by_q"]
+
+        for model_name in ("simple_stack", "ovha_shuffled_context_memory"):
+            with self.subTest(model=model_name):
+                model = build_model(model_name, d_model=16, memory_tokens=2)
+                output = model(batch, route_override=true_weights, active_primitive_mask=true_weights > 0.5)
+                self.assertEqual(tuple(output.y_hat.shape), (2, 5, 1))
+                self.assertTrue(torch.isfinite(output.y_hat).all())
+
     def test_oracle_metrics_include_router_adapter_matrix_and_adapter_stats(self):
         from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
         from moat_ovha_torch.eval.oracle_metrics import controlled_oracle_metrics
