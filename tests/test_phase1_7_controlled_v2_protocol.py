@@ -146,6 +146,26 @@ class Phase17ControlledV2ProtocolTests(unittest.TestCase):
                 reconstructed = (weights.unsqueeze(-1) * outputs).sum(dim=-2)
                 self.assertTrue(torch.allclose(reconstructed, batch.target_y, atol=1e-5))
 
+    def test_hyper_adapter_starts_from_identity_primitive_defaults(self):
+        import torch
+
+        from moat_ovha_torch.models.hyper_adapter import HyperAdapter
+
+        adapter = HyperAdapter(("spectral", "local", "separable"), d_model=8)
+        memory = torch.zeros(2, 3, 8)
+        target_q = torch.linspace(0.0, 1.0, 5).view(1, 5, 1).repeat(2, 1, 1)
+
+        params = adapter(memory, target_q)
+
+        self.assertTrue(torch.allclose(params["spectral"].scale, torch.ones(2, 5, 1), atol=1e-6))
+        self.assertTrue(torch.allclose(params["spectral"].bias, torch.zeros(2, 5, 1), atol=1e-6))
+        self.assertTrue(torch.allclose(params["spectral"].spectral_frequency, torch.ones(2, 5, 1), atol=1e-6))
+        self.assertTrue(torch.allclose(params["spectral"].spectral_phase, torch.zeros(2, 5, 1), atol=1e-6))
+        self.assertTrue(torch.allclose(params["spectral"].spectral_mode_logits, torch.zeros(2, 5, 4), atol=1e-6))
+        self.assertTrue(torch.allclose(params["local"].local_lengthscale, torch.full((2, 5, 1), -2.0), atol=1e-6))
+        self.assertTrue(torch.allclose(params["local"].local_shift, torch.zeros(2, 5, 1), atol=1e-6))
+        self.assertTrue(torch.allclose(params["separable"].separable_rank_logits, torch.zeros(2, 5, 4), atol=1e-6))
+
     def test_training_rows_record_episode_and_batch_hashes(self):
         from moat_ovha_torch.train.trainer import run_training_for_model
 

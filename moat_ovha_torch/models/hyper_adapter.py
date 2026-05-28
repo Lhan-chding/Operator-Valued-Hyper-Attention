@@ -29,6 +29,7 @@ class HyperAdapter(nn.Module):
                 for name in primitive_names
             }
         )
+        self._initialize_identity_defaults()
 
     def forward(self, memory: torch.Tensor, target_q: torch.Tensor) -> dict[str, PrimitiveParams]:
         pooled = memory.mean(dim=1)
@@ -51,7 +52,7 @@ class HyperAdapter(nn.Module):
         scale = 1.0 + 0.1 * torch.tanh(raw[..., 0:1])
         bias = 0.1 * torch.tanh(raw[..., 1:2])
         if primitive_name == "spectral":
-            frequency = 1.0 + torch.nn.functional.softplus(raw[..., 2:3])
+            frequency = 1.0 + 0.25 * torch.tanh(raw[..., 2:3])
             phase = torch.pi * torch.tanh(raw[..., 3:4])
             mode_logits = raw[..., 4 : 4 + self.spectral_modes]
             return PrimitiveParams(
@@ -63,7 +64,7 @@ class HyperAdapter(nn.Module):
                 kernel_params={"frequency": frequency, "phase": phase, "mode_logits": mode_logits},
             )
         if primitive_name == "local":
-            lengthscale = raw[..., 2:3]
+            lengthscale = -2.0 + 0.5 * torch.tanh(raw[..., 2:3])
             shift = 0.25 * torch.tanh(raw[..., 3:4])
             return PrimitiveParams(
                 scale=scale,
@@ -82,3 +83,10 @@ class HyperAdapter(nn.Module):
             )
         kernel = {"lengthscale": raw[..., 2:3]} if raw.shape[-1] > 2 else None
         return PrimitiveParams(scale=scale, bias=bias, kernel_params=kernel)
+
+    def _initialize_identity_defaults(self) -> None:
+        for head in self.heads.values():
+            final = head[-1]
+            if isinstance(final, nn.Linear):
+                nn.init.zeros_(final.weight)
+                nn.init.zeros_(final.bias)
