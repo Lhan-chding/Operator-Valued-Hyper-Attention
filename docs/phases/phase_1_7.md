@@ -10,8 +10,13 @@ Phase 1.7 follows the GPT Pro next-step report and blocks public benchmark work 
 - Evaluation uses fixed paired episode ids through `eval_episode_base + offset`; GPU configs use 128 to 512 eval episodes per split/family.
 - Train and eval rows write `episode_id`, `batch_hash`, `context_hash` and `target_hash`.
 - Controlled-v2 exposes `true_primitive_outputs_by_q`, `true_component_weight_by_q`, `true_operator_params`, modality reliability and history preference only through hidden diagnostics.
+- Controlled-v2 also keeps full hidden `true_operator_tensors` for non-public oracle diagnostics; these tensors are not part of model inputs.
 - Primitive order is aligned as `spectral`, `local`, `separable`.
-- Router oracle MAE/KL/CE, oracle-router upper bound, oracle-adapter upper bound and memory-swap delta are written into eval rows.
+- `model_aligned` iid generation is constrained to the short-term sanity adapter domain: gain in `[0.9, 1.1]` and local lengthscale in `[0.08, 0.20]`.
+- The separable model primitive uses the same fourth basis as the generator: `cos(2*pi*s) * cos(2*pi*q)`.
+- Router oracle MAE/KL/CE, oracle-router upper bound, oracle-adapter upper bound, model true-param primitive oracle and memory-swap delta are written into eval rows.
+- Context memory tokens include primitive-aligned spectral, local and separable candidate outputs plus residual features.
+- Controlled-v2 training configs use router auxiliary CE with `router_auxiliary_loss_weight = 0.05` when hidden true router weights are available.
 - Public field `operator_transfer` sampling uses non-target demos from the same `operator_group_id` when groups are available.
 
 ## Controlled-v2 Families
@@ -35,17 +40,35 @@ Codex/Mac should run unit and tiny smoke tests only:
 
 ```bash
 .venv/bin/python -m unittest tests.test_phase1_7_controlled_v2_protocol
+.venv/bin/python -m unittest discover tests
 ```
 
-The 5k sanity run is intentionally an Ubuntu/GPU handoff:
+Do not run the old all-in-one 5k sanity first. The Ubuntu/GPU handoff order is:
 
 ```bash
 cd <repo>
 git pull
-PYTHON=.venv/bin/python bash scripts/run_phase1_7_controlled_v2_sanity.sh
+
+# G1 single-primitive iid gates
+PYTHON=.venv/bin/python python train_torch_meta_operator.py --config configs/phase1_7_g1_single_iid_spectral.json
+PYTHON=.venv/bin/python python eval_torch_meta_operator.py --config configs/phase1_7_g1_single_iid_spectral.json
+PYTHON=.venv/bin/python python scripts/summarize_phase1_6.py --root outputs/phase1_7/g1_single_iid_spectral
+
+PYTHON=.venv/bin/python python train_torch_meta_operator.py --config configs/phase1_7_g1_single_iid_local.json
+PYTHON=.venv/bin/python python eval_torch_meta_operator.py --config configs/phase1_7_g1_single_iid_local.json
+PYTHON=.venv/bin/python python scripts/summarize_phase1_6.py --root outputs/phase1_7/g1_single_iid_local
+
+PYTHON=.venv/bin/python python train_torch_meta_operator.py --config configs/phase1_7_g1_single_iid_separable.json
+PYTHON=.venv/bin/python python eval_torch_meta_operator.py --config configs/phase1_7_g1_single_iid_separable.json
+PYTHON=.venv/bin/python python scripts/summarize_phase1_6.py --root outputs/phase1_7/g1_single_iid_separable
+
+# G2/G3 router and memory iid gates
+PYTHON=.venv/bin/python python train_torch_meta_operator.py --config configs/phase1_7_g2_g3_component_iid.json
+PYTHON=.venv/bin/python python eval_torch_meta_operator.py --config configs/phase1_7_g2_g3_component_iid.json
+PYTHON=.venv/bin/python python scripts/summarize_phase1_6.py --root outputs/phase1_7/g2_g3_component_iid
 ```
 
-The script defaults to GPU 3, while still allowing an explicit override:
+Only after those gates pass should the 5k sanity run be started:
 
 ```bash
 CUDA_VISIBLE_DEVICES=3 PYTHON=.venv/bin/python bash scripts/run_phase1_7_controlled_v2_sanity.sh
@@ -97,6 +120,8 @@ Do not start PDEBench-mini, Mechanical-MNIST-mini, OpenFWI-mini or any larger pu
 - `ovha_full` wins on `context_identifiable_mixture` over zero/global/shuffled/target-only memory ablations.
 - `ovha_full` wins on `hyper_parameter_family` over `ovha_no_hyper_adapter`.
 - `same_target_counterfactual` fails for target-only/no-memory and succeeds for full.
+
+At this stage no public dataset download and no external pretrained model download is required. Public data remains blocked until G0/G1/G2/G3 and the iid-only controlled sanity gate are interpretable.
 
 ## Next Gate
 

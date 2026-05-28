@@ -63,7 +63,7 @@ def sample_component_stress_batch(
     support_grid = torch.linspace(0.0, 1.0, support_points, device=device).view(1, support_points, 1)
     target_q = torch.linspace(0.0, 1.0, query_points, device=device).view(1, query_points, 1).repeat(batch_size, 1, 1)
     context_q = _sample_context_q(torch, batch_size, num_demos, context_points, split, generator, device)
-    params = _sample_params(torch, batch_size, split, episode_id_value, generator, device)
+    params = _sample_params(torch, batch_size, split, episode_id_value, generator, device, generator_variant)
 
     context_u = _sample_functions(torch, batch_size, num_demos, support_grid, generator, device)
     if mode == "same_function_field":
@@ -119,7 +119,9 @@ def sample_component_stress_batch(
             "primitive_order": PRIMITIVE_ORDER,
             "true_component_weight_by_q": true_weights.detach().cpu(),
             "true_primitive_outputs_by_q": true_outputs.detach().cpu(),
+            "true_operator_tensors": _detach_param_tensors(params),
             "true_operator_params": _public_param_summary(params),
+            "controlled_generator_variant": generator_variant,
             "modality_reliability": _to_python(params["modality_reliability"]),
             "history_session_preference": _to_python(params["history_session_preference"]),
             "batch_hash": hash_model_inputs(batch),
@@ -248,18 +250,32 @@ def _sample_counterfactual_target_functions(torch: Any, seed: int, batch_size: i
     return _sample_functions(torch, batch_size, 1, support_grid, generator, device)[:, 0]
 
 
-def _sample_params(torch: Any, batch_size: int, split: str, episode_id: int, generator: Any, device: str) -> dict[str, Any]:
+def _sample_params(
+    torch: Any,
+    batch_size: int,
+    split: str,
+    episode_id: int,
+    generator: Any,
+    device: str,
+    generator_variant: str,
+) -> dict[str, Any]:
     holdout = 0.7 if split == "parameter_holdout" else 0.0
     raw_mix = torch.rand(batch_size, 3, generator=generator, device=device)
     raw_reliability = 0.1 + torch.rand(batch_size, 3, generator=generator, device=device)
     raw_history = 0.1 + torch.rand(batch_size, 3, generator=generator, device=device)
+    if generator_variant == "model_aligned" and split != "parameter_holdout":
+        gain = 0.9 + 0.2 * torch.rand(batch_size, 1, 1, 1, generator=generator, device=device)
+        lengthscale = 0.08 + 0.12 * torch.rand(batch_size, 1, 1, 1, generator=generator, device=device)
+    else:
+        gain = 0.8 + holdout + 0.4 * torch.rand(batch_size, 1, 1, 1, generator=generator, device=device)
+        lengthscale = 0.08 + 0.25 * torch.rand(batch_size, 1, 1, 1, generator=generator, device=device)
     return {
-        "gain": 0.8 + holdout + 0.4 * torch.rand(batch_size, 1, 1, 1, generator=generator, device=device),
+        "gain": gain,
         "bias": 0.05 * torch.randn(batch_size, 1, 1, 1, generator=generator, device=device),
         "frequency": 1.0 + holdout + 2.0 * torch.rand(batch_size, 1, 1, 1, generator=generator, device=device),
         "phase": 2.0 * math.pi * torch.rand(batch_size, 1, 1, 1, generator=generator, device=device),
         "spectral_mode_logits": torch.randn(batch_size, 4, generator=generator, device=device),
-        "lengthscale": 0.08 + 0.25 * torch.rand(batch_size, 1, 1, 1, generator=generator, device=device),
+        "lengthscale": lengthscale,
         "shift": -0.15 + 0.3 * torch.rand(batch_size, 1, 1, 1, generator=generator, device=device),
         "separable_rank_logits": torch.randn(batch_size, 4, generator=generator, device=device),
         "mixture": raw_mix / raw_mix.sum(dim=-1, keepdim=True),
@@ -346,6 +362,25 @@ def _public_param_summary(params: dict[str, Any]) -> dict[str, Any]:
             "modality_reliability",
             "history_session_preference",
             "confound_sign",
+        }
+    }
+
+
+def _detach_param_tensors(params: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value.detach().cpu()
+        for key, value in params.items()
+        if hasattr(value, "detach")
+        and key
+        in {
+            "gain",
+            "bias",
+            "frequency",
+            "phase",
+            "spectral_mode_logits",
+            "lengthscale",
+            "shift",
+            "separable_rank_logits",
         }
     }
 

@@ -87,19 +87,20 @@ def summarize(root: Path) -> Path:
             "",
             "## Controlled Stress Tasks",
             "",
-            "| family | ovha_full | best_single | vector_big | no_memory | no_router | no_adapter | conclusion |",
-            "|---|---:|---:|---:|---:|---:|---:|---|",
+            "| family | split | ovha_full | matched_single | best_single | vector_big | no_memory | no_router | no_adapter | conclusion |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
         ]
     )
     if summary["controlled_stress"]:
         for row in summary["controlled_stress"]:
             lines.append(
-                f"| {row['family']} | {_fmt(row.get('ovha_full'))} | {_fmt(row.get('best_single'))} | "
+                f"| {row['family']} | {row.get('split', '')} | {_fmt(row.get('ovha_full'))} | "
+                f"{_fmt(row.get('matched_single'))} | {_fmt(row.get('best_single'))} | "
                 f"{_fmt(row.get('vector_big'))} | {_fmt(row.get('no_memory'))} | {_fmt(row.get('no_router'))} | "
                 f"{_fmt(row.get('no_adapter'))} | {row['conclusion']} |"
             )
     else:
-        lines.append("| not_available |  |  |  |  |  |  | no controlled stress metrics found |")
+        lines.append("| not_available |  |  |  |  |  |  |  |  | no controlled stress metrics found |")
 
     lines.extend(
         [
@@ -200,18 +201,25 @@ def _build_summary(
         )
 
     stress_rows = []
-    by_family_model = defaultdict(list)
+    by_family_split_model = defaultdict(list)
     for row in eval_rows:
         family = row.get("family")
         if family in CONTROLLED_STRESS_FAMILIES:
-            by_family_model[(family, row.get("model_name", row.get("model")))].append(float(row["relative_l2"]))
-    for family in sorted({key[0] for key in by_family_model}):
-        values = {model: mean(items) for (fam, model), items in by_family_model.items() if fam == family}
+            split = row.get("split", "unknown")
+            by_family_split_model[(family, split, row.get("model_name", row.get("model")))].append(float(row["relative_l2"]))
+    for family, split in sorted({(key[0], key[1]) for key in by_family_split_model}):
+        values = {
+            model: mean(items)
+            for (fam, sp, model), items in by_family_split_model.items()
+            if fam == family and sp == split
+        }
         singles = [values[name] for name in ("local_only", "separable_only", "spectral_only") if name in values]
         best_single = min(singles) if singles else None
+        matched_single = _matched_single_value(family, values)
         full = values.get("ovha_full")
         conclusion = _controlled_stress_conclusion(
             full=full,
+            matched_single=matched_single,
             best_single=best_single,
             vector_big=values.get("ovha_vector_value_big"),
             no_memory=_best_available(values, MEMORY_ABLATION_MODELS),
@@ -221,7 +229,9 @@ def _build_summary(
         stress_rows.append(
             {
                 "family": family,
+                "split": split,
                 "ovha_full": full,
+                "matched_single": matched_single,
                 "best_single": best_single,
                 "vector_big": values.get("ovha_vector_value_big"),
                 "no_memory": _best_available(values, MEMORY_ABLATION_MODELS),
@@ -280,6 +290,7 @@ def _build_summary(
 def _controlled_stress_conclusion(
     *,
     full: float | None,
+    matched_single: float | None,
     best_single: float | None,
     vector_big: float | None,
     no_memory: float | None,
@@ -288,7 +299,8 @@ def _controlled_stress_conclusion(
 ) -> str:
     if full is None:
         return "incomplete; ovha_full missing"
-    baseline_values = [value for value in (best_single, vector_big) if value is not None]
+    single_baseline = matched_single if matched_single is not None else best_single
+    baseline_values = [value for value in (single_baseline, vector_big) if value is not None]
     if not baseline_values:
         return "incomplete; baseline missing"
     if full >= min(baseline_values):
@@ -302,6 +314,18 @@ def _controlled_stress_conclusion(
 def _best_available(values: dict[str, float], names: tuple[str, ...]) -> float | None:
     candidates = [values[name] for name in names if name in values]
     return min(candidates) if candidates else None
+
+
+def _matched_single_value(family: str, values: dict[str, float]) -> float | None:
+    mapping = {
+        "single_primitive_spectral": "spectral_only",
+        "single_primitive_local": "local_only",
+        "single_primitive_separable": "separable_only",
+    }
+    model_name = mapping.get(family)
+    if model_name is None:
+        return None
+    return values.get(model_name)
 
 
 def _go_no_go(checkpoint_rows: list[dict[str, Any]], stress_rows: list[dict[str, Any]]) -> str:

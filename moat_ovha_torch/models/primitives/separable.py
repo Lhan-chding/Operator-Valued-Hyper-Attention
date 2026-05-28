@@ -25,23 +25,27 @@ class SeparableBasisPrimitive(nn.Module):
         memory: torch.Tensor | None = None,
     ) -> torch.Tensor:
         grid = expand_grid(support_grid, target_u.shape[0])
-        branches = [target_u.mean(dim=1)]
-        if self.rank >= 2:
-            branches.append((target_u * grid).mean(dim=1))
-        if self.rank >= 3:
-            branches.append((target_u * torch.sin(math.pi * grid)).mean(dim=1))
+        branches = [
+            target_u.mean(dim=1),
+            (target_u * grid).mean(dim=1),
+            (target_u * torch.sin(math.pi * grid)).mean(dim=1),
+            (target_u * torch.cos(2.0 * math.pi * grid)).mean(dim=1),
+        ]
+        next_frequency = 3.0
         while len(branches) < self.rank:
-            freq = len(branches)
-            branches.append((target_u * torch.cos(math.pi * freq * grid)).mean(dim=1))
+            branches.append((target_u * torch.cos(math.pi * next_frequency * grid)).mean(dim=1))
+            next_frequency += 1.0
         branch = torch.stack(branches[: self.rank], dim=-1)
-        trunks = [torch.ones_like(target_q)]
-        if self.rank >= 2:
-            trunks.append(target_q)
-        if self.rank >= 3:
-            trunks.append(torch.sin(math.pi * target_q))
+        trunks = [
+            torch.ones_like(target_q),
+            target_q,
+            torch.sin(math.pi * target_q),
+            torch.cos(2.0 * math.pi * target_q),
+        ]
+        next_frequency = 3.0
         while len(trunks) < self.rank:
-            freq = len(trunks)
-            trunks.append(torch.cos(math.pi * freq * target_q))
+            trunks.append(torch.cos(math.pi * next_frequency * target_q))
+            next_frequency += 1.0
         trunk = torch.stack(trunks[: self.rank], dim=-1)
         if params is not None and params.separable_rank_logits is not None:
             weights = torch.softmax(params.separable_rank_logits[..., : self.rank], dim=-1).unsqueeze(-2)

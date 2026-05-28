@@ -66,7 +66,12 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
             controlled_generator_variant=config.controlled_generator_variant,
         )
         output = model(batch)
-        loss = prediction_loss(output.y_hat, batch.target_y, batch.target_mask)
+        pred_loss = prediction_loss(output.y_hat, batch.target_y, batch.target_mask)
+        router_aux_loss = _router_auxiliary_loss(output, hidden, _primitive_names(model), config.device)
+        if router_aux_loss is not None and config.router_auxiliary_loss_weight > 0.0:
+            loss = pred_loss + config.router_auxiliary_loss_weight * router_aux_loss
+        else:
+            loss = pred_loss
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -78,6 +83,9 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
             "family": hidden.family,
             "model": model_name,
             "loss": float(loss.detach().cpu()),
+            "prediction_loss": float(pred_loss.detach().cpu()),
+            "router_auxiliary_loss": None if router_aux_loss is None else float(router_aux_loss.detach().cpu()),
+            "router_auxiliary_loss_weight": config.router_auxiliary_loss_weight,
             "batch_hash": hash_model_inputs(batch),
             "context_hash": hash_context(batch),
             "target_hash": hash_target(batch),
@@ -161,3 +169,31 @@ def _write_training_report(output_dir: Path, metrics_path: Path, rows: list[dict
         )
         + "\n"
     )
+
+
+def _primitive_names(model: object) -> tuple[str, ...]:
+    primitive_names = getattr(model, "primitive_names", None)
+    if primitive_names is None and hasattr(model, "core"):
+        primitive_names = getattr(model.core, "primitive_names", None)
+    return tuple(primitive_names or ())
+
+
+def _router_auxiliary_loss(output: object, hidden: object, primitive_names: tuple[str, ...], device: str):
+    hints = getattr(hidden, "oracle_hints", None) or {}
+    true_weights = hints.get("true_component_weight_by_q")
+    true_order = tuple(hints.get("primitive_order") or ())
+    if true_weights is None or not true_order or not primitive_names:
+        return None
+    reorder = []
+    for name in primitive_names:
+        if name not in true_order:
+            return None
+        reorder.append(true_order.index(name))
+    predicted = output.primitive_weights
+    if predicted.shape[-1] != len(reorder):
+        return None
+    torch = require_torch()
+    target = true_weights.to(device) if hasattr(true_weights, "to") else torch.as_tensor(true_weights, device=device)
+    target = target.index_select(-1, torch.tensor(reorder, device=target.device))
+    target = target / target.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+    return -(target * predicted.clamp_min(1e-8).log()).sum(dim=-1).mean()

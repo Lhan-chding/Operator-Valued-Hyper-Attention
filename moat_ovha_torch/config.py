@@ -58,6 +58,7 @@ class Phase15Config:
     test_episode_base: int = 2_000_000
     eval_episode_count: int = 1
     controlled_generator_variant: str = "model_aligned"
+    router_auxiliary_loss_weight: float = 0.0
     seeds: tuple[int, ...] = ()
     datasets: tuple[str, ...] = ()
     top_k: Optional[int] = None

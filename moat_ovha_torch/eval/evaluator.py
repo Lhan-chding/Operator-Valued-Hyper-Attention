@@ -88,7 +88,7 @@ def run_evaluation(config: Phase15Config) -> Path:
                         )
                         output = model(batch)
                         rel = relative_l2(output.y_hat, batch.target_y)
-                        oracle_metrics = controlled_oracle_metrics(output, batch.target_y, hidden, primitive_names)
+                        oracle_metrics = controlled_oracle_metrics(output, batch.target_y, hidden, primitive_names, batch=batch)
                         memory_swap_delta = _memory_swap_delta(model, batch, output)
                         row = {
                             "episode_id": episode_id,

@@ -35,6 +35,10 @@ class Phase17ProtocolContractTests(unittest.TestCase):
             root / "data" / "ovha_controlled_v2" / "generator_config.json",
             root / "configs" / "phase1_7_controlled_v2_sanity.json",
             root / "configs" / "phase1_7_controlled_v2_main.json",
+            root / "configs" / "phase1_7_g1_single_iid_spectral.json",
+            root / "configs" / "phase1_7_g1_single_iid_local.json",
+            root / "configs" / "phase1_7_g1_single_iid_separable.json",
+            root / "configs" / "phase1_7_g2_g3_component_iid.json",
             root / "scripts" / "run_phase1_7_controlled_v2_sanity.sh",
             root / "docs" / "phases" / "phase_1_7.md",
         ]
@@ -50,6 +54,33 @@ class Phase17ProtocolContractTests(unittest.TestCase):
         self.assertIn("ovha_vector_value_big", sanity.training_model_names())
         for family in ("single_primitive_spectral", "single_primitive_local", "single_primitive_separable"):
             self.assertIn(family, sanity.families)
+
+    def test_phase17_gated_configs_follow_root_cause_audit_order(self):
+        root = Path(__file__).resolve().parents[1]
+
+        sanity = Phase15Config.from_file(root / "configs" / "phase1_7_controlled_v2_sanity.json")
+        self.assertEqual(sanity.eval_splits, ("iid",))
+        self.assertEqual(sanity.router_auxiliary_loss_weight, 0.05)
+
+        for name, family in (
+            ("phase1_7_g1_single_iid_spectral.json", "single_primitive_spectral"),
+            ("phase1_7_g1_single_iid_local.json", "single_primitive_local"),
+            ("phase1_7_g1_single_iid_separable.json", "single_primitive_separable"),
+        ):
+            with self.subTest(config=name):
+                config = Phase15Config.from_file(root / "configs" / name)
+                self.assertEqual(config.families, (family,))
+                self.assertEqual(config.eval_splits, ("iid",))
+                self.assertLessEqual(config.steps, 2000)
+                self.assertIn("ovha_full", config.training_model_names())
+                self.assertIn(family.replace("single_primitive_", "") + "_only", config.training_model_names())
+                self.assertEqual(config.router_auxiliary_loss_weight, 0.05)
+
+        components = Phase15Config.from_file(root / "configs" / "phase1_7_g2_g3_component_iid.json")
+        self.assertEqual(components.eval_splits, ("iid",))
+        self.assertEqual(components.families, ("query_piecewise_router", "context_identifiable_mixture"))
+        self.assertIn("ovha_no_query_router", components.training_model_names())
+        self.assertIn("ovha_shuffled_context_memory", components.training_model_names())
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; Phase 1.7 tensor protocol tests skipped.")
@@ -229,6 +260,58 @@ class Phase17ControlledV2ProtocolTests(unittest.TestCase):
         self.assertTrue(torch.allclose(params["local"].local_shift, torch.zeros(2, 5, 1), atol=1e-6))
         self.assertTrue(torch.allclose(params["separable"].separable_rank_logits, torch.zeros(2, 5, 4), atol=1e-6))
 
+    def test_context_encoder_uses_primitive_aligned_feature_bank(self):
+        from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
+        from moat_ovha_torch.models.context_encoder import ContextTokenEncoder
+
+        zoo = MetadataFreeOperatorZoo(seed=44)
+        batch, _ = zoo.sample_batch(
+            batch_size=2,
+            num_demos=3,
+            context_points=5,
+            support_points=16,
+            query_points=7,
+            family="query_piecewise_router",
+            split="iid",
+            mode="operator_transfer",
+            device="cpu",
+            episode_id=5,
+        )
+        encoder = ContextTokenEncoder(d_model=12)
+        tokens = encoder(batch)
+
+        self.assertEqual(tuple(tokens.shape), (2, 3, 5, 12))
+        self.assertEqual(encoder.input_dim, 30)
+        self.assertEqual(encoder.candidate_feature_count, 12)
+
+    def test_training_records_router_auxiliary_loss_when_oracles_are_available(self):
+        import json
+
+        from moat_ovha_torch.train.trainer import run_training_for_model
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Phase15Config(
+                seed=45,
+                output_dir=Path(tmp),
+                steps=1,
+                batch_size=2,
+                support_points=12,
+                query_points=5,
+                num_demos=1,
+                context_points=4,
+                d_model=16,
+                memory_tokens=2,
+                families=("query_piecewise_router",),
+                train_models=("ovha_full",),
+                eval_models=("ovha_full",),
+                router_auxiliary_loss_weight=0.05,
+            )
+            run_training_for_model(config, "ovha_full")
+            row = json.loads((Path(tmp) / "train_metrics" / "ovha_full" / "seed_45.jsonl").read_text().splitlines()[0])
+
+        self.assertGreater(row["router_auxiliary_loss"], 0.0)
+        self.assertAlmostEqual(row["loss"], row["prediction_loss"] + 0.05 * row["router_auxiliary_loss"], places=6)
+
     def test_training_rows_record_episode_and_batch_hashes(self):
         from moat_ovha_torch.train.trainer import run_training_for_model
 
@@ -295,6 +378,7 @@ class Phase17ControlledV2ProtocolTests(unittest.TestCase):
             self.assertIn("router_true_weight_kl", row)
             self.assertIn("memory_swap_delta", row)
             self.assertIn("oracle_router_upper_bound_relative_l2", row)
+            self.assertIn("model_primitive_true_param_relative_l2", row)
             self.assertRegex(row["batch_hash"], r"^[0-9a-f]{64}$")
 
     def test_field_adapter_operator_transfer_uses_grouped_non_target_demos(self):
