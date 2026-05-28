@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -41,6 +42,12 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
     rows = []
     start = time.time()
     params = parameter_count(model)
+    progress_interval = _progress_interval("OVHA_PROGRESS_INTERVAL", 25)
+    print(
+        f"[train:start] seed={config.seed} model={model_name} steps={config.steps} "
+        f"families={','.join(config.families)} device={config.device} progress_interval={progress_interval}",
+        flush=True,
+    )
 
     for step in range(1, config.steps + 1):
         family = config.families[(step - 1) % len(config.families)]
@@ -84,11 +91,44 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
         }
         row.update(summarize_relative_l2(rel))
         rows.append(row)
+        if _should_log_progress(step, config.steps, progress_interval):
+            _print_train_progress(row, start)
 
     metrics_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
     ckpt = save_training_checkpoint(model, config, model_name)
     _write_training_report(output_dir, metrics_path, rows)
+    print(f"[train:done] seed={config.seed} model={model_name} checkpoint={ckpt}", flush=True)
     return ckpt
+
+
+def _progress_interval(env_name: str, default: int) -> int:
+    raw = os.environ.get(env_name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(0, value)
+
+
+def _should_log_progress(current: int, total: int, interval: int) -> bool:
+    return current == 1 or current == total or (interval > 0 and current % interval == 0)
+
+
+def _print_train_progress(row: dict[str, object], start: float) -> None:
+    step = int(row["step"])
+    total = int(row["train_steps"])
+    elapsed = time.time() - start
+    steps_per_second = step / max(elapsed, 1e-6)
+    remaining = (total - step) / max(steps_per_second, 1e-6)
+    percent = 100.0 * step / max(total, 1)
+    print(
+        "[train] "
+        f"seed={row['seed']} model={row['model']} step={step}/{total} ({percent:.1f}%) "
+        f"episode={row['episode_id']} family={row['family']} "
+        f"loss={float(row['loss']):.6f} relL2={float(row['relative_l2']):.6f} "
+        f"elapsed={elapsed:.1f}s eta={remaining:.1f}s speed={steps_per_second:.2f} step/s",
+        flush=True,
+    )
 
 
 def _write_legacy_train_metrics(output_dir: Path, model_names: tuple[str, ...], seed: int) -> Path:

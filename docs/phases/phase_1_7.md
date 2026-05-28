@@ -54,6 +54,19 @@ It uses unbuffered Python output and prints GPU/process status every 10 seconds.
 outputs/phase1_7/controlled_v2_sanity/process_monitor.log
 ```
 
+It also prints code-level progress from inside the training/evaluation loops. Defaults:
+
+```text
+OVHA_PROGRESS_INTERVAL=25
+OVHA_EVAL_PROGRESS_INTERVAL=128
+```
+
+For maximum verbosity during debugging:
+
+```bash
+OVHA_PROGRESS_INTERVAL=1 OVHA_EVAL_PROGRESS_INTERVAL=1 PYTHON=.venv/bin/python bash scripts/run_phase1_7_controlled_v2_sanity.sh
+```
+
 To stop a foreground run, press `Ctrl-C`. If the Python process does not exit, run:
 
 ```bash

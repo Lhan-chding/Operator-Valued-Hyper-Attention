@@ -7,6 +7,8 @@ PYTHON_BIN="${PYTHON:-python3}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-3}"
 export CUDA_VISIBLE_DEVICES
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
+export OVHA_PROGRESS_INTERVAL="${OVHA_PROGRESS_INTERVAL:-25}"
+export OVHA_EVAL_PROGRESS_INTERVAL="${OVHA_EVAL_PROGRESS_INTERVAL:-128}"
 MONITOR_INTERVAL_SECONDS="${MONITOR_INTERVAL_SECONDS:-10}"
 MONITOR_LOG="${OUTPUT_DIR}/process_monitor.log"
 MONITOR_PID=""
@@ -54,6 +56,7 @@ run_python() {
 }
 
 echo "Using GPU ${CUDA_VISIBLE_DEVICES}; monitor log: ${MONITOR_LOG}"
+echo "Training progress interval: ${OVHA_PROGRESS_INTERVAL} step(s); eval progress interval: ${OVHA_EVAL_PROGRESS_INTERVAL} row(s)"
 start_monitor
 
 run_python train_torch_meta_operator.py --config "${CONFIG}" --device cuda --output-dir "${OUTPUT_DIR}"

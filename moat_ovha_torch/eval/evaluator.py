@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ def run_evaluation(config: Phase15Config) -> Path:
     rows = []
     diagnostics = []
     start = time.time()
+    progress_interval = _progress_interval("OVHA_EVAL_PROGRESS_INTERVAL", 128)
 
     for model_name in config.evaluation_model_names():
         model = build_model(model_name, d_model=config.d_model, memory_tokens=config.memory_tokens, top_k=config.top_k)
@@ -56,6 +58,13 @@ def run_evaluation(config: Phase15Config) -> Path:
         model_rows: list[dict[str, object]] = []
         model_diagnostics: list[dict[str, object]] = []
         primitive_names = _primitive_names(model)
+        total_eval_rows = len(config.eval_splits) * len(config.families) * config.eval_episode_count
+        model_eval_index = 0
+        print(
+            f"[eval:start] seed={config.seed} eval_seed={eval_seed} model={model_name} "
+            f"rows={total_eval_rows} checkpoint_loaded={checkpoint_loaded} progress_interval={progress_interval}",
+            flush=True,
+        )
 
         for split in config.eval_splits:
             resolution_multiplier = 2 if split == "resolution_transfer" else 1
@@ -108,6 +117,9 @@ def run_evaluation(config: Phase15Config) -> Path:
                         row.update(summarize_relative_l2(rel))
                         rows.append(row)
                         model_rows.append(row)
+                        model_eval_index += 1
+                        if _should_log_progress(model_eval_index, total_eval_rows, progress_interval):
+                            _print_eval_progress(row, model_eval_index, total_eval_rows, start)
                         if primitive_names:
                             diagnostic = _diagnostic_row(
                                 split=split,
@@ -132,10 +144,41 @@ def run_evaluation(config: Phase15Config) -> Path:
         model_diagnostics_path = diagnostics_path(output_dir, model_name, config.seed)
         model_diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
         model_diagnostics_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in model_diagnostics))
+        print(f"[eval:done] seed={config.seed} model={model_name} metrics={model_metrics_path}", flush=True)
 
     metrics_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
     legacy_diagnostics_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in diagnostics))
     return metrics_path
+
+
+def _progress_interval(env_name: str, default: int) -> int:
+    raw = os.environ.get(env_name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(0, value)
+
+
+def _should_log_progress(current: int, total: int, interval: int) -> bool:
+    return current == 1 or current == total or (interval > 0 and current % interval == 0)
+
+
+def _print_eval_progress(row: dict[str, object], current: int, total: int, start: float) -> None:
+    elapsed = time.time() - start
+    rows_per_second = current / max(elapsed, 1e-6)
+    remaining = (total - current) / max(rows_per_second, 1e-6)
+    percent = 100.0 * current / max(total, 1)
+    router_mae = row.get("router_true_weight_mae")
+    router_text = "" if router_mae is None else f" router_mae={float(router_mae):.6f}"
+    print(
+        "[eval] "
+        f"seed={row['seed']} model={row['model_name']} row={current}/{total} ({percent:.1f}%) "
+        f"split={row['split']} family={row['family']} episode={row['episode_id']} "
+        f"relL2={float(row['relative_l2']):.6f} swap={float(row['memory_swap_delta']):.6f}"
+        f"{router_text} elapsed={elapsed:.1f}s eta={remaining:.1f}s speed={rows_per_second:.2f} row/s",
+        flush=True,
+    )
 
 
 def _primitive_names(model: Any) -> tuple[str, ...]:
