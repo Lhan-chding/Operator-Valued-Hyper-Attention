@@ -5,10 +5,6 @@ CONFIG="${1:-configs/phase1_7_controlled_v2_sanity.json}"
 OUTPUT_DIR="${2:-outputs/phase1_7/controlled_v2_sanity}"
 PYTHON_BIN="${PYTHON:-python3}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-3}"
-if [[ "${CUDA_VISIBLE_DEVICES}" != "3" ]]; then
-  echo "Refusing to start: this script is locked to GPU 3, got CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}."
-  exit 2
-fi
 export CUDA_VISIBLE_DEVICES
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 MONITOR_INTERVAL_SECONDS="${MONITOR_INTERVAL_SECONDS:-10}"

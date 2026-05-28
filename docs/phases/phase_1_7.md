@@ -42,7 +42,7 @@ git pull
 PYTHON=.venv/bin/python bash scripts/run_phase1_7_controlled_v2_sanity.sh
 ```
 
-The script is locked to GPU 3 and refuses to start if `CUDA_VISIBLE_DEVICES` is not `3`:
+The script defaults to GPU 3, while still allowing an explicit override:
 
 ```bash
 CUDA_VISIBLE_DEVICES=3 PYTHON=.venv/bin/python bash scripts/run_phase1_7_controlled_v2_sanity.sh
