@@ -42,6 +42,25 @@ git pull
 PYTHON=.venv/bin/python bash scripts/run_phase1_7_controlled_v2_sanity.sh
 ```
 
+The script is locked to GPU 3 and refuses to start if `CUDA_VISIBLE_DEVICES` is not `3`:
+
+```bash
+CUDA_VISIBLE_DEVICES=3 PYTHON=.venv/bin/python bash scripts/run_phase1_7_controlled_v2_sanity.sh
+```
+
+It uses unbuffered Python output and prints GPU/process status every 10 seconds. The same status is saved to:
+
+```text
+outputs/phase1_7/controlled_v2_sanity/process_monitor.log
+```
+
+To stop a foreground run, press `Ctrl-C`. If the Python process does not exit, run:
+
+```bash
+pkill -TERM -f 'train_torch_meta_operator.py|eval_torch_meta_operator.py'
+pkill -KILL -f 'train_torch_meta_operator.py|eval_torch_meta_operator.py'  # only if TERM fails
+```
+
 Do not start PDEBench-mini, Mechanical-MNIST-mini, OpenFWI-mini or any larger public benchmark until the sanity run shows the expected component pattern:
 
 - `ovha_full` wins on `query_piecewise_router` over no-router/simple-stack.
