@@ -70,6 +70,20 @@ For maximum verbosity during debugging:
 OVHA_PROGRESS_INTERVAL=1 OVHA_EVAL_PROGRESS_INTERVAL=1 PYTHON=.venv/bin/python bash scripts/run_phase1_7_controlled_v2_sanity.sh
 ```
 
+If only GPU 3 is available, use the single-GPU parallel runner to keep the A800 busier without touching other cards:
+
+```bash
+PYTHON=.venv/bin/python JOBS_PER_GPU=2 bash scripts/run_phase1_7_controlled_v2_sanity_gpu3_parallel.sh
+```
+
+This shards by `(seed, model)` into independent output directories under:
+
+```text
+outputs/phase1_7/controlled_v2_sanity_gpu3_parallel/
+```
+
+Default `JOBS_PER_GPU=2` is conservative for an 80GB A800. If `nvidia-smi` shows GPU memory and utilization remain low, try `JOBS_PER_GPU=3` or `JOBS_PER_GPU=4`; if host CPU load, dataloader time or other users become a problem, drop back to `1`.
+
 To stop a foreground run, press `Ctrl-C`. If the Python process does not exit, run:
 
 ```bash
