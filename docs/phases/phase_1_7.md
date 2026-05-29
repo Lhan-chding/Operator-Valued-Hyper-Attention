@@ -19,11 +19,11 @@ Phase 1.7 follows the GPT Pro next-step report and blocks public benchmark work 
 - Context memory tokens include primitive-aligned spectral, local and separable candidate outputs, residual features and sufficient-statistics evidence features.
 - OVHA keeps primitive-specific memory slots and routes/adapts from shared primitive-conditioned memory instead of independent mean-pooled router/adapter heads.
 - Oracle route overrides are propagated into the hyper-adapter posterior features, not only into the final mixture weights. Stage-C sanity/main configs force oracle routing on single-primitive batches so mixed training cannot keep corrupting the specialist gates; router CE is computed from the learned router output, not the teacher-forced mixture weights.
-- Hyper-adapter heads receive a direct per-primitive evidence channel (`ls_coeff`, residual energy and uncertainty) alongside pooled memory and router posterior features, so separable/spectral parameter inference can use the sufficient statistics already computed from public context triples. The local adapter also derives a public-evidence lengthscale prior from local candidate Gram/correlation scores before applying learned residual corrections.
+- Hyper-adapter heads receive a direct per-primitive evidence channel (`ls_coeff`, residual energy and uncertainty) alongside pooled memory and router posterior features, so separable/spectral parameter inference can use the sufficient statistics already computed from public context triples. The local adapter also derives a `model_aligned`-only public-evidence lengthscale prior from amplitude-normalized local candidate Gram/correlation scores, gated by local router posterior, before applying learned residual corrections.
 - `model_aligned` adapter params are episode-global by default. Spectral frequency/phase and local shift are disabled for `model_aligned`; spectral mode logits, separable rank logits, gain, bias and local lengthscale are expanded from episode-level predictions.
-- Controlled-v2 adapter auxiliary losses supervise spectral mode KL, separable rank KL, gain/bias Huber, local lengthscale log Huber, primitive output gap, oracle-routed prediction and q-variance scope. Parameter and primitive-output auxiliary terms are weighted by hidden true component activity, so single-primitive batches do not train inactive adapters on unidentifiable nuisance params. Mixed Stage-C configs weight adapter, primitive-output and oracle-routed prediction supervision at `0.75` to reduce the G1-vs-sanity training-regime gap.
+- Controlled-v2 adapter auxiliary losses supervise spectral mode KL, separable rank KL, gain/bias Huber, local lengthscale log Huber, primitive output gap, oracle-routed prediction and q-variance scope. Parameter and primitive-output auxiliary terms are weighted by hidden true component activity, so single-primitive batches do not train inactive adapters on unidentifiable nuisance params. Mixed Stage-C configs rebalance router-vs-adapter supervision with router CE at `0.25` and adapter, primitive-output and oracle-routed prediction supervision at `0.4`.
 - `OVHAOutput` includes `adapter_params`, `router_logits`, `router_output` and `memory_bank`; diagnostics include adapter parameter stats, router prior entropy, query residual norm and per-primitive output gaps.
-- Controlled-v2 training configs use router auxiliary CE with `router_auxiliary_loss_weight = 0.05` when hidden true router weights are available.
+- Controlled-v2 training configs use router auxiliary CE with `router_auxiliary_loss_weight = 0.25` when hidden true router weights are available.
 - Single-primitive controlled-stress conclusions use the specialist-collapse tolerance (`full_true_router_learned_adapter <= 1.05 * matched_single + 0.01`) instead of requiring OVHA-full to strictly beat a dedicated single-family specialist.
 - G1 single-primitive configs use oracle-routed adapter warmup for the full run: router frozen, true route override active, non-active primitive gradients masked, adapter/primitive/oracle-routed auxiliary losses enabled.
 - `mlp_expert_moe` uses distinct expert keys (`mlp_expert_0`, `mlp_expert_1`) so the ModuleDict no longer collapses duplicate names.
@@ -85,7 +85,7 @@ PYTHON=.venv/bin/python python scripts/summarize_phase1_6.py --root outputs/phas
 Only after those gates pass should the 5k sanity run be started:
 
 ```bash
-CUDA_VISIBLE_DEVICES=3 PYTHON=.venv/bin/python bash scripts/run_phase1_7_controlled_v2_sanity.sh
+CUDA_VISIBLE_DEVICES=4 PYTHON=.venv/bin/python bash scripts/run_phase1_7_controlled_v2_sanity.sh
 ```
 
 It uses unbuffered Python output and prints GPU/process status every 10 seconds. The same status is saved to:
@@ -107,16 +107,16 @@ For maximum verbosity during debugging:
 OVHA_PROGRESS_INTERVAL=1 OVHA_EVAL_PROGRESS_INTERVAL=1 PYTHON=.venv/bin/python bash scripts/run_phase1_7_controlled_v2_sanity.sh
 ```
 
-If only GPU 3 is available, use the single-GPU parallel runner to keep the A800 busier without touching other cards:
+If only GPU 4 is available, use the single-GPU parallel runner to keep the A800 busier without touching other cards:
 
 ```bash
-PYTHON=.venv/bin/python JOBS_PER_GPU=2 bash scripts/run_phase1_7_controlled_v2_sanity_gpu3_parallel.sh
+PYTHON=.venv/bin/python JOBS_PER_GPU=2 bash scripts/run_phase1_7_controlled_v2_sanity_gpu4_parallel.sh
 ```
 
 This shards by `(seed, model)` into independent output directories under:
 
 ```text
-outputs/phase1_7/controlled_v2_sanity_gpu3_parallel/
+outputs/phase1_7/controlled_v2_sanity_gpu4_parallel/
 ```
 
 Default `JOBS_PER_GPU=2` is conservative for an 80GB A800. If `nvidia-smi` shows GPU memory and utilization remain low, try `JOBS_PER_GPU=3` or `JOBS_PER_GPU=4`; if host CPU load, dataloader time or other users become a problem, drop back to `1`.

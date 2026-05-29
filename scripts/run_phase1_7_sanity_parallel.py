@@ -40,7 +40,7 @@ def main() -> None:
     base_config = json.loads(base_config_path.read_text())
     gpus = _parse_gpus(args.gpus)
     if not gpus:
-        raise SystemExit("No GPUs specified. Use --gpus 3 or --gpus 0,1,2,3.")
+        raise SystemExit("No GPUs specified. Use --gpus 4 or --gpus 0,1,2,3,4.")
     if args.jobs_per_gpu < 1:
         raise SystemExit("--jobs-per-gpu must be >= 1")
 

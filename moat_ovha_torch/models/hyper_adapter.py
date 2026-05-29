@@ -22,7 +22,7 @@ DEFAULT_PARAM_SCOPE = {
     "spectral_phase": "episode",
 }
 LOCAL_LENGTHSCALE_CANDIDATES = (0.08, 0.12, 0.16, 0.20)
-LOCAL_LENGTHSCALE_EVIDENCE_TEMPERATURE = 0.003
+LOCAL_LENGTHSCALE_EVIDENCE_TEMPERATURE = 0.05
 
 
 class EpisodeGlobalParamHead(nn.Module):
@@ -131,7 +131,14 @@ class HyperAdapter(nn.Module):
         global_raw = self.global_heads[key](global_features).expand(-1, target_q.shape[1], -1)
         query_raw = self.query_heads[key](query_features)
         selected_raw = self._select_raw_by_scope(primitive_name, global_raw, query_raw)
-        selected_raw = _apply_evidence_priors(primitive_name, selected_raw, evidence_bank, target_q)
+        selected_raw = _apply_evidence_priors(
+            primitive_name,
+            selected_raw,
+            evidence_bank,
+            target_q,
+            self.controlled_generator_variant,
+            posterior.mean(dim=1) if router_out is not None else None,
+        )
         return self._params_for(primitive_name, selected_raw, global_raw, query_raw)
 
     def _select_raw_by_scope(self, primitive_name: str, global_raw: torch.Tensor, query_raw: torch.Tensor) -> torch.Tensor:
@@ -297,14 +304,20 @@ def _apply_evidence_priors(
     raw: torch.Tensor,
     evidence_bank: EvidenceBank | None,
     target_q: torch.Tensor,
+    controlled_generator_variant: str,
+    prior_gate: torch.Tensor | None,
 ) -> torch.Tensor:
-    if _primitive_kind(primitive_name) != "local":
+    if _primitive_kind(primitive_name) != "local" or controlled_generator_variant != "model_aligned":
         return raw
     prior = _local_lengthscale_prior_raw(evidence_bank, target_q)
     if prior is None:
         return raw
+    if prior_gate is None:
+        gate = torch.ones_like(prior)
+    else:
+        gate = prior_gate.to(device=prior.device, dtype=prior.dtype).clamp(min=0.0, max=1.0)
     adjusted = raw.clone()
-    adjusted[..., 2:3] = adjusted[..., 2:3] + prior.unsqueeze(1).expand(-1, target_q.shape[1], -1)
+    adjusted[..., 2:3] = adjusted[..., 2:3] + (prior * gate).unsqueeze(1).expand(-1, target_q.shape[1], -1)
     return adjusted
 
 
@@ -324,8 +337,10 @@ def _local_lengthscale_prior_raw(
         return None
     diagonal = gram.diagonal(dim1=-2, dim2=-1).clamp_min(1e-8)
     score = corr.square() / diagonal
-    if bool((score.abs().sum(dim=-1) <= 1e-12).all()):
+    score_sum = score.sum(dim=-1, keepdim=True)
+    if bool((score_sum <= 1e-12).all()):
         return None
+    score = score / score_sum.clamp_min(1e-12)
     candidates = torch.tensor(LOCAL_LENGTHSCALE_CANDIDATES, dtype=target_q.dtype, device=target_q.device)
     weights = torch.softmax(score / LOCAL_LENGTHSCALE_EVIDENCE_TEMPERATURE, dim=-1)
     lengthscale = (weights * candidates).sum(dim=-1, keepdim=True)

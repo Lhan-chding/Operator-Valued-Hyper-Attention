@@ -110,6 +110,24 @@ def summarize(root: Path) -> Path:
     lines.extend(
         [
             "",
+            "## Router Accuracy By Stress Family",
+            "",
+            "| family | split | router_true_weight_mae_by_model |",
+            "|---|---|---|",
+        ]
+    )
+    router_rows = [row for row in summary["controlled_stress"] if row.get("router_mae_by_model")]
+    if router_rows:
+        for row in router_rows:
+            lines.append(
+                f"| {row['family']} | {row.get('split', '')} | {_fmt_mapping(row.get('router_mae_by_model'))} |"
+            )
+    else:
+        lines.append("| not_available |  | no router MAE rows found |")
+
+    lines.extend(
+        [
+            "",
             "## Diagnostic Signals",
             "",
             "| model | family | entropy | memory_norm | adapter_norm | primitive_load |",
@@ -295,6 +313,15 @@ def _build_summary(
         best_single = min(singles) if singles else None
         matched_single = _matched_single_value(family, values)
         full = values.get("ovha_full")
+        router_mae_by_model = {
+            model: value
+            for model, value in {
+                model: _mean_field(rows, "router_true_weight_mae")
+                for (fam, sp, model), rows in by_family_split_model_rows.items()
+                if fam == family and sp == split
+            }.items()
+            if value is not None
+        }
         full_gate = full
         if family in SINGLE_PRIMITIVE_FAMILIES:
             full_gate = _mean_field(
@@ -325,6 +352,7 @@ def _build_summary(
                 "no_memory": _best_available(values, MEMORY_ABLATION_MODELS),
                 "no_router": values.get("ovha_no_query_router"),
                 "no_adapter": values.get("ovha_no_hyper_adapter"),
+                "router_mae_by_model": router_mae_by_model,
                 "conclusion": conclusion,
             }
         )
