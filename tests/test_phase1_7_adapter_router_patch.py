@@ -145,6 +145,30 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
 
         self.assertGreater(float(params["separable"].scale.detach().max()), 1.5)
 
+    def test_local_lengthscale_uses_public_evidence_candidate_prior(self):
+        import torch
+
+        from moat_ovha_torch.models.hyper_adapter import HyperAdapter
+
+        adapter = HyperAdapter(("local",), d_model=8)
+        memory = torch.zeros(2, 2, 8)
+        target_q = torch.linspace(0.0, 1.0, 5).view(1, 5, 1).repeat(2, 1, 1)
+        evidence = _evidence_bank(torch, batch_size=2)
+        evidence.gram["local"] = torch.eye(4).unsqueeze(0).repeat(2, 1, 1)
+        evidence.corr["local"] = torch.tensor(
+            [
+                [0.0, 0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0, 0.0],
+            ],
+            dtype=target_q.dtype,
+        )
+
+        params = adapter(memory, target_q, evidence_bank=evidence)
+        lengthscale = torch.nn.functional.softplus(params["local"].local_lengthscale.detach()) + 1e-3
+
+        self.assertGreater(float(lengthscale[0].mean()), 0.18)
+        self.assertLess(float(lengthscale[1].mean()), 0.10)
+
     def test_ovha_forward_accepts_oracle_route_and_active_primitive_mask(self):
         import torch
 
