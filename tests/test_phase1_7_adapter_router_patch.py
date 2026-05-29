@@ -143,7 +143,7 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
 
         params = adapter(memory, target_q)
 
-        self.assertGreater(float(params["separable"].scale.max()), 1.5)
+        self.assertGreater(float(params["separable"].scale.detach().max()), 1.5)
 
     def test_ovha_forward_accepts_oracle_route_and_active_primitive_mask(self):
         import torch
@@ -192,7 +192,7 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
         route_override[..., 2] = 1.0
         captured = {}
 
-        def capture_forward(memory, target_q, router_out=None):
+        def capture_forward(memory, target_q, router_out=None, evidence_bank=None):
             captured["weights"] = router_out.weights.detach().clone()
             return {name: PrimitiveParams() for name in adapter.router.primitive_names}
 

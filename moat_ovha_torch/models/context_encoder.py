@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from moat_ovha_torch.data.episodes import MetaOperatorBatch
-from moat_ovha_torch.models.evidence import PrimitiveEvidenceEncoder, primitive_candidate_outputs
+from moat_ovha_torch.models.evidence import EvidenceBank, PrimitiveEvidenceEncoder, primitive_candidate_outputs
 
 
 class ContextTokenEncoder(nn.Module):
@@ -23,6 +23,10 @@ class ContextTokenEncoder(nn.Module):
         )
 
     def forward(self, batch: MetaOperatorBatch) -> torch.Tensor:
+        tokens, _ = self.encode_with_evidence(batch)
+        return tokens
+
+    def encode_with_evidence(self, batch: MetaOperatorBatch) -> tuple[torch.Tensor, EvidenceBank]:
         context_u = batch.context_u
         context_q = batch.context_q
         context_y = batch.context_y
@@ -47,7 +51,7 @@ class ContextTokenEncoder(nn.Module):
         )
         residuals = context_y - candidates
         features = torch.cat([summary, context_q, context_y, candidates, residuals, evidence.point_features], dim=-1)
-        return self.net(features)
+        return self.net(features), evidence
 
 
 def _primitive_candidate_outputs(context_u: torch.Tensor, support_grid: torch.Tensor, context_q: torch.Tensor) -> torch.Tensor:

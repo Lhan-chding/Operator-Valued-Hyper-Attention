@@ -25,6 +25,11 @@ CONTROLLED_STRESS_FAMILIES = {
     "anti_single_primitive_family",
     "confounded_family_pair",
 }
+SINGLE_PRIMITIVE_FAMILIES = {
+    "single_primitive_spectral",
+    "single_primitive_local",
+    "single_primitive_separable",
+}
 MEMORY_ABLATION_MODELS = (
     "ovha_zero_memory",
     "ovha_learned_global_memory",
@@ -272,11 +277,14 @@ def _build_summary(
 
     stress_rows = []
     by_family_split_model = defaultdict(list)
+    by_family_split_model_rows = defaultdict(list)
     for row in eval_rows:
         family = row.get("family")
         if family in CONTROLLED_STRESS_FAMILIES:
             split = row.get("split", "unknown")
-            by_family_split_model[(family, split, row.get("model_name", row.get("model")))].append(float(row["relative_l2"]))
+            model = row.get("model_name", row.get("model"))
+            by_family_split_model[(family, split, model)].append(float(row["relative_l2"]))
+            by_family_split_model_rows[(family, split, model)].append(row)
     for family, split in sorted({(key[0], key[1]) for key in by_family_split_model}):
         values = {
             model: mean(items)
@@ -287,8 +295,17 @@ def _build_summary(
         best_single = min(singles) if singles else None
         matched_single = _matched_single_value(family, values)
         full = values.get("ovha_full")
+        full_gate = full
+        if family in SINGLE_PRIMITIVE_FAMILIES:
+            full_gate = _mean_field(
+                by_family_split_model_rows.get((family, split, "ovha_full"), []),
+                "true_router_learned_adapter_relative_l2",
+            )
+            if full_gate is None:
+                full_gate = full
         conclusion = _controlled_stress_conclusion(
-            full=full,
+            family=family,
+            full=full_gate,
             matched_single=matched_single,
             best_single=best_single,
             vector_big=values.get("ovha_vector_value_big"),
@@ -301,6 +318,7 @@ def _build_summary(
                 "family": family,
                 "split": split,
                 "ovha_full": full,
+                "ovha_full_gate": full_gate,
                 "matched_single": matched_single,
                 "best_single": best_single,
                 "vector_big": values.get("ovha_vector_value_big"),
@@ -363,6 +381,7 @@ def _build_summary(
 
 def _controlled_stress_conclusion(
     *,
+    family: str,
     full: float | None,
     matched_single: float | None,
     best_single: float | None,
@@ -373,6 +392,13 @@ def _controlled_stress_conclusion(
 ) -> str:
     if full is None:
         return "incomplete; ovha_full missing"
+    if family in SINGLE_PRIMITIVE_FAMILIES:
+        if matched_single is None:
+            return "incomplete; matched specialist missing"
+        threshold = 1.05 * matched_single + 0.01
+        if full <= threshold:
+            return "provisional component signal"
+        return "negative component signal"
     single_baseline = matched_single if matched_single is not None else best_single
     baseline_values = [value for value in (single_baseline, vector_big) if value is not None]
     if not baseline_values:

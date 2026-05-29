@@ -78,7 +78,9 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
         )
         primitive_names = _primitive_names(model)
         route_override = _oracle_route_override(step, hidden, primitive_names, config, config.device, torch)
-        active_primitive_mask = route_override > 0.5 if route_override is not None and config.train_active_primitive_only else None
+        active_primitive_mask = (
+            _active_primitive_mask_from_route(route_override) if route_override is not None and config.train_active_primitive_only else None
+        )
         output = model(batch, route_override=route_override, active_primitive_mask=active_primitive_mask)
         pred_loss = prediction_loss(output.y_hat, batch.target_y, batch.target_mask)
         router_aux_loss = _router_auxiliary_loss(output, hidden, primitive_names, config.device)
@@ -310,6 +312,10 @@ def _oracle_route_override(
     return target / target.sum(dim=-1, keepdim=True).clamp_min(1e-8)
 
 
+def _active_primitive_mask_from_route(route_override: object, eps: float = 0.0):
+    return route_override > eps
+
+
 def _single_primitive_oracle_probability(hidden: object, config: Phase15Config) -> float:
     family = str(getattr(hidden, "family", ""))
     if not family.startswith("single_primitive_"):
@@ -328,7 +334,10 @@ def _router_auxiliary_loss(output: object, hidden: object, primitive_names: tupl
         if name not in true_order:
             return None
         reorder.append(true_order.index(name))
-    predicted = output.primitive_weights
+    router_output = getattr(output, "router_output", None)
+    predicted = getattr(router_output, "weights", None)
+    if predicted is None:
+        predicted = output.primitive_weights
     if predicted.shape[-1] != len(reorder):
         return None
     torch = require_torch()

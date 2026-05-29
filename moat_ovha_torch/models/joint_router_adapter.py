@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from moat_ovha_torch.models.evidence import EvidenceBank
 from moat_ovha_torch.models.hyper_adapter import HyperAdapter
 from moat_ovha_torch.models.primitives.base import PrimitiveParams
 from moat_ovha_torch.models.router import PrimitiveRouter, RouterOutput
@@ -35,10 +36,11 @@ class JointRouterAdapter(nn.Module):
         memory_bank: torch.Tensor | dict[str, torch.Tensor],
         target_q: torch.Tensor,
         route_override: torch.Tensor | None = None,
+        evidence_bank: EvidenceBank | None = None,
     ) -> tuple[RouterOutput, dict[str, PrimitiveParams]]:
         router_out = self.router(memory_bank, target_q)
         adapter_router_out = _adapter_router_output(router_out, route_override)
-        params = self.hyper_adapter(memory_bank, target_q, router_out=adapter_router_out)
+        params = self.hyper_adapter(memory_bank, target_q, router_out=adapter_router_out, evidence_bank=evidence_bank)
         return router_out, params
 
 

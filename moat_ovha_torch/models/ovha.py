@@ -81,12 +81,17 @@ class OVHAMetaOperator(nn.Module):
         route_override: torch.Tensor | None = None,
         active_primitive_mask: torch.Tensor | None = None,
     ) -> OVHAOutput:
-        tokens = self.context_encoder(batch)
+        tokens, evidence_bank = self.context_encoder.encode_with_evidence(batch)
         memory = self.memory_encoder(tokens, batch.context_mask)
         if not self.use_memory:
             memory = self.no_memory.unsqueeze(0).expand(tokens.shape[0], -1, -1)
         memory_bank = self.primitive_slot_memory(memory)
-        router_out, params = self.joint_router_adapter(memory_bank, batch.target_q, route_override=route_override)
+        router_out, params = self.joint_router_adapter(
+            memory_bank,
+            batch.target_q,
+            route_override=route_override,
+            evidence_bank=evidence_bank,
+        )
         if not self.use_hyper_adapter:
             params = {name: None for name in self.primitive_names}
         weights = _prepare_weights(router_out.weights, route_override, active_primitive_mask)

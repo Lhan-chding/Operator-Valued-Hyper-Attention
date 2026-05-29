@@ -5,6 +5,7 @@ from typing import Mapping
 import torch
 from torch import nn
 
+from moat_ovha_torch.models.evidence import EvidenceBank
 from moat_ovha_torch.models.memory import primitive_memory, safe_module_name
 from moat_ovha_torch.models.primitives.base import PrimitiveParams
 from moat_ovha_torch.models.router import RouterOutput
@@ -53,6 +54,9 @@ class HyperAdapter(nn.Module):
         param_scope_config: Mapping[str, str] | None = None,
         controlled_generator_variant: str = "model_aligned",
         return_raw: bool = True,
+        direct_evidence_dim: int = 12,
+        scale_span: float = 1.0,
+        bias_span: float = 0.5,
     ):
         super().__init__()
         self.primitive_names = primitive_names
@@ -61,6 +65,9 @@ class HyperAdapter(nn.Module):
         self.separable_rank = separable_rank
         self.controlled_generator_variant = controlled_generator_variant
         self.return_raw = return_raw
+        self.direct_evidence_dim = direct_evidence_dim
+        self.scale_span = scale_span
+        self.bias_span = bias_span
         self.param_scope_config = dict(DEFAULT_PARAM_SCOPE)
         if controlled_generator_variant == "model_aligned":
             self.param_scope_config["spectral_frequency"] = "disabled"
@@ -79,8 +86,8 @@ class HyperAdapter(nn.Module):
         for name in primitive_names:
             key = safe_module_name(name)
             output_dim = self._output_dim(name)
-            self.global_heads[key] = EpisodeGlobalParamHead(d_model + 2, d_model, output_dim)
-            self.query_heads[key] = QueryLocalParamHead(d_model + 3, d_model, output_dim)
+            self.global_heads[key] = EpisodeGlobalParamHead(d_model + 2 + direct_evidence_dim, d_model, output_dim)
+            self.query_heads[key] = QueryLocalParamHead(d_model + 3 + direct_evidence_dim, d_model, output_dim)
         self._initialize_identity_defaults()
 
     def forward(
@@ -88,8 +95,9 @@ class HyperAdapter(nn.Module):
         memory: torch.Tensor | dict[str, torch.Tensor],
         target_q: torch.Tensor,
         router_out: RouterOutput | None = None,
+        evidence_bank: EvidenceBank | None = None,
     ) -> dict[str, PrimitiveParams]:
-        return {name: self._params_for_name(name, memory, target_q, router_out) for name in self.primitive_names}
+        return {name: self._params_for_name(name, memory, target_q, router_out, evidence_bank) for name in self.primitive_names}
 
     def parameters_for_primitive(self, primitive_name: str):
         key = safe_module_name(primitive_name)
@@ -102,13 +110,21 @@ class HyperAdapter(nn.Module):
         memory: torch.Tensor | dict[str, torch.Tensor],
         target_q: torch.Tensor,
         router_out: RouterOutput | None,
+        evidence_bank: EvidenceBank | None,
     ) -> PrimitiveParams:
         primitive_index = self.primitive_names.index(primitive_name)
         pooled = primitive_memory(memory, primitive_name).mean(dim=1)
         posterior, entropy = _router_features(router_out, primitive_index, target_q)
-        global_features = torch.cat([pooled, posterior.mean(dim=1), entropy.mean(dim=1)], dim=-1)
+        evidence_features = _primitive_evidence_features(
+            evidence_bank,
+            primitive_name,
+            target_q,
+            self.direct_evidence_dim,
+        )
+        global_features = torch.cat([pooled, posterior.mean(dim=1), entropy.mean(dim=1), evidence_features], dim=-1)
         repeated = pooled.unsqueeze(1).expand(-1, target_q.shape[1], -1)
-        query_features = torch.cat([repeated, target_q, posterior, entropy], dim=-1)
+        query_evidence = evidence_features.unsqueeze(1).expand(-1, target_q.shape[1], -1)
+        query_features = torch.cat([repeated, target_q, posterior, entropy, query_evidence], dim=-1)
         key = safe_module_name(primitive_name)
         global_raw = self.global_heads[key](global_features).expand(-1, target_q.shape[1], -1)
         query_raw = self.query_heads[key](query_features)
@@ -173,8 +189,8 @@ class HyperAdapter(nn.Module):
         query_raw: torch.Tensor,
     ) -> PrimitiveParams:
         kind = _primitive_kind(primitive_name)
-        scale = 1.0 + 0.1 * torch.tanh(raw[..., 0:1])
-        bias = 0.1 * torch.tanh(raw[..., 1:2])
+        scale = 1.0 + self.scale_span * torch.tanh(raw[..., 0:1])
+        bias = self.bias_span * torch.tanh(raw[..., 1:2])
         raw_payload = {"selected": raw, "global": global_raw, "query": query_raw} if self.return_raw else None
         scope = dict(self.param_scope_config)
         if kind == "spectral":
@@ -238,6 +254,39 @@ class HyperAdapter(nn.Module):
             if isinstance(final, nn.Linear):
                 nn.init.zeros_(final.weight)
                 nn.init.zeros_(final.bias)
+
+
+def _primitive_evidence_features(
+    evidence_bank: EvidenceBank | None,
+    primitive_name: str,
+    target_q: torch.Tensor,
+    expected_dim: int,
+) -> torch.Tensor:
+    batch_size = target_q.shape[0]
+    if expected_dim <= 0:
+        return torch.zeros(batch_size, 0, dtype=target_q.dtype, device=target_q.device)
+    if evidence_bank is None:
+        return torch.zeros(batch_size, expected_dim, dtype=target_q.dtype, device=target_q.device)
+    pieces = []
+    for field in (evidence_bank.ls_coeff, evidence_bank.residual_energy, evidence_bank.uncertainty):
+        value = field.get(primitive_name)
+        if value is None:
+            continue
+        pieces.append(value.to(device=target_q.device, dtype=target_q.dtype))
+    if not pieces:
+        return torch.zeros(batch_size, expected_dim, dtype=target_q.dtype, device=target_q.device)
+    features = torch.cat(pieces, dim=-1)
+    if features.shape[-1] == expected_dim:
+        return features
+    if features.shape[-1] > expected_dim:
+        return features[..., :expected_dim]
+    pad = torch.zeros(
+        batch_size,
+        expected_dim - features.shape[-1],
+        dtype=target_q.dtype,
+        device=target_q.device,
+    )
+    return torch.cat([features, pad], dim=-1)
 
 
 def _router_features(
