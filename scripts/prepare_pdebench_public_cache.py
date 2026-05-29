@@ -82,6 +82,15 @@ def inspect_sources(raw_root: Path, specs: Iterable[SourceSpec]) -> None:
             print("missing")
             continue
         with h5py.File(path, "r") as handle:
+            group_names = sample_group_names(handle)
+            if group_names:
+                print(f"sample_groups {len(group_names)}; showing first 3 groups")
+                for group_name in group_names[:3]:
+                    print(f"  [{group_name}]")
+                    for name, obj in iter_group_datasets(handle[group_name]):
+                        print(f"    {name} {tuple(obj.shape)} {obj.dtype}")
+                continue
+
             def visit(name: str, obj: Any) -> None:
                 if hasattr(obj, "shape"):
                     print(name, tuple(obj.shape), obj.dtype)
@@ -149,6 +158,9 @@ def read_source(path: Path, *, family: str, sample_count: int, seed: int, spatia
 
 
 def infer_sample_count(handle: Any) -> int:
+    groups = sample_group_names(handle)
+    if groups:
+        return len(groups)
     candidates = []
     handle.visititems(lambda _name, obj: candidates.append(int(obj.shape[0])) if hasattr(obj, "shape") and obj.shape else None)
     if not candidates:
@@ -163,6 +175,8 @@ def choose_indices(total: int, requested: int, seed: int) -> np.ndarray:
 
 
 def read_operator_pair(handle: Any, *, family: str, indices: np.ndarray, spatial_stride: int) -> dict[str, np.ndarray]:
+    if sample_group_names(handle):
+        return read_grouped_time_dependent_pair(handle, indices=indices, spatial_stride=spatial_stride)
     if family == "pdebench_darcy_2d":
         input_key = first_existing(handle, ("nu", "coeff", "coefficient", "input", "input_field", "a"))
         output_key = first_existing(handle, ("tensor", "solution", "output", "output_field", "u"))
@@ -172,6 +186,27 @@ def read_operator_pair(handle: Any, *, family: str, indices: np.ndarray, spatial
             coordinates = coordinates_for_shape(handle, input_field.shape[1:-1] if input_field.ndim >= 4 else input_field.shape[1:], spatial_stride)
             return {"input_field": input_field, "output_field": output_field, "coordinates": coordinates}
     return read_time_dependent_pair(handle, indices=indices, spatial_stride=spatial_stride)
+
+
+def read_grouped_time_dependent_pair(handle: Any, *, indices: np.ndarray, spatial_stride: int) -> dict[str, np.ndarray]:
+    groups = sample_group_names(handle)
+    if not groups:
+        raise ValueError("grouped reader requires top-level sample groups")
+    selected_groups = [handle[groups[int(index)]] for index in indices]
+    dataset_path = infer_time_dataset_path(selected_groups[0])
+    input_rows = []
+    output_rows = []
+    for group in selected_groups:
+        data = np.asarray(group[dataset_path][()], dtype=np.float32)
+        input_rows.append(slice_sample_time(data, time_index=0))
+        output_rows.append(slice_sample_time(data, time_index=-1))
+    input_field = canonicalize_field_layout(np.stack(input_rows, axis=0))
+    output_field = canonicalize_field_layout(np.stack(output_rows, axis=0))
+    input_field = apply_spatial_stride(input_field, spatial_stride)
+    output_field = apply_spatial_stride(output_field, spatial_stride)
+    spatial_shape = input_field.shape[1:-1] if input_field.ndim >= 4 else input_field.shape[1:]
+    coordinates = coordinates_for_shape(handle, spatial_shape, spatial_stride)
+    return {"input_field": input_field, "output_field": output_field, "coordinates": coordinates}
 
 
 def read_time_dependent_pair(handle: Any, *, indices: np.ndarray, spatial_stride: int) -> dict[str, np.ndarray]:
@@ -191,6 +226,45 @@ def read_time_dependent_pair(handle: Any, *, indices: np.ndarray, spatial_stride
     return {"input_field": input_field, "output_field": output_field, "coordinates": coordinates}
 
 
+def sample_group_names(handle: Any) -> list[str]:
+    import h5py
+
+    names = [name for name, obj in handle.items() if isinstance(obj, h5py.Group)]
+    numeric = [name for name in names if name.isdigit()]
+    selected = numeric if numeric else names
+    return sorted(selected)
+
+
+def iter_group_datasets(group: Any) -> Iterable[tuple[str, Any]]:
+    datasets = []
+
+    def visit(name: str, obj: Any) -> None:
+        if hasattr(obj, "shape"):
+            datasets.append((name, obj))
+
+    group.visititems(visit)
+    return datasets
+
+
+def infer_time_dataset_path(group: Any) -> str:
+    candidates = []
+    for name, obj in iter_group_datasets(group):
+        if len(obj.shape) < 3:
+            continue
+        if any(part.lower() in {"x", "y", "grid", "coord", "coords", "coordinates"} for part in name.split("/")):
+            continue
+        size = int(np.prod(obj.shape))
+        score = size
+        lowered = name.lower()
+        if any(token in lowered for token in ("tensor", "data", "solution", "u", "height", "water")):
+            score += size
+        candidates.append((score, name))
+    if not candidates:
+        available = [f"{name}{tuple(obj.shape)}" for name, obj in iter_group_datasets(group)]
+        raise KeyError(f"cannot infer grouped time dataset; available datasets: {available}")
+    return max(candidates)[1]
+
+
 def read_dataset(dataset: Any, indices: np.ndarray) -> np.ndarray:
     return np.asarray(dataset[indices], dtype=np.float32)
 
@@ -203,6 +277,18 @@ def read_time_slice(dataset: Any, indices: np.ndarray, time_index: int) -> np.nd
     if dataset.ndim == 5:
         return np.asarray(dataset[indices, time_index, :, :, :], dtype=np.float32)
     raise ValueError(f"unsupported time-dependent tensor shape: {tuple(dataset.shape)}")
+
+
+def slice_sample_time(array: np.ndarray, time_index: int) -> np.ndarray:
+    if array.ndim == 3:
+        return array[time_index, :, :]
+    if array.ndim == 4:
+        if array.shape[0] <= 8 and array.shape[1] > array.shape[0]:
+            return array[:, time_index, :, :]
+        return array[time_index, ...]
+    if array.ndim == 5:
+        return array[time_index, ...]
+    raise ValueError(f"unsupported grouped sample tensor shape: {array.shape}")
 
 
 def canonicalize_field_layout(array: np.ndarray) -> np.ndarray:

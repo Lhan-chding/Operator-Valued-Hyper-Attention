@@ -55,6 +55,16 @@ class PreparePDEBenchPublicCacheTests(unittest.TestCase):
         self.assertEqual(module.canonicalize_field_layout(one_d).shape, (3, 8, 2))
         self.assertEqual(module.canonicalize_field_layout(two_d).shape, (3, 4, 5, 2))
 
+    def test_slice_sample_time_handles_time_first_and_channel_first_time(self):
+        module = _load_module()
+        time_first = np.zeros((4, 5, 6), dtype=np.float32)
+        channel_time = np.zeros((2, 4, 5, 6), dtype=np.float32)
+        time_channel = np.zeros((4, 2, 5, 6), dtype=np.float32)
+
+        self.assertEqual(module.slice_sample_time(time_first, 0).shape, (5, 6))
+        self.assertEqual(module.slice_sample_time(channel_time, 0).shape, (2, 5, 6))
+        self.assertEqual(module.slice_sample_time(time_channel, 0).shape, (2, 5, 6))
+
     def test_end_to_end_converts_small_burgers_cache_when_h5py_is_available(self):
         try:
             import h5py
@@ -94,6 +104,47 @@ class PreparePDEBenchPublicCacheTests(unittest.TestCase):
             self.assertEqual(train["input_field"].shape, (8, 4, 1))
             self.assertEqual(iid["input_field"].shape, (2, 4, 1))
             self.assertEqual(resolution["input_field"].shape, (4, 8, 1))
+
+    def test_end_to_end_converts_grouped_shallow_water_cache_when_h5py_is_available(self):
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest("h5py is not installed")
+        module = _load_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_root = Path(tmp) / "raw"
+            cache_root = Path(tmp) / "cache"
+            raw_root.mkdir()
+            with h5py.File(raw_root / "2D_rdb_NA_NA.h5", "w") as handle:
+                for index in range(6):
+                    group = handle.create_group(f"{index:04d}")
+                    group.create_dataset("data", data=np.zeros((4, 1, 6, 8), dtype=np.float32) + index)
+
+            args = type(
+                "Args",
+                (),
+                {
+                    "max_samples": 5,
+                    "holdout_samples": 3,
+                    "train_fraction": 0.8,
+                    "seed": 81,
+                    "spatial_stride_1d": 2,
+                    "spatial_stride_2d": 2,
+                    "write_resolution_transfer": True,
+                    "overwrite": False,
+                },
+            )()
+            spec = module.SourceSpec("pdebench_shallow_water_2d", "base", "2D_rdb_NA_NA.h5", "base")
+
+            module.prepare_family(raw_root, cache_root, "pdebench_shallow_water_2d", [spec], args)
+
+            train = np.load(cache_root / "pdebench_shallow_water_2d" / "train.npz")
+            iid = np.load(cache_root / "pdebench_shallow_water_2d" / "iid.npz")
+            resolution = np.load(cache_root / "pdebench_shallow_water_2d" / "resolution_transfer.npz")
+            self.assertEqual(train["input_field"].shape, (4, 12, 1))
+            self.assertEqual(iid["input_field"].shape, (1, 12, 1))
+            self.assertEqual(resolution["input_field"].shape, (3, 48, 1))
 
 
 if __name__ == "__main__":
