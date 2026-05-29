@@ -21,6 +21,8 @@ DEFAULT_PARAM_SCOPE = {
     "spectral_frequency": "episode",
     "spectral_phase": "episode",
 }
+LOCAL_LENGTHSCALE_CANDIDATES = (0.08, 0.12, 0.16, 0.20)
+LOCAL_LENGTHSCALE_EVIDENCE_TEMPERATURE = 0.003
 
 
 class EpisodeGlobalParamHead(nn.Module):
@@ -129,6 +131,7 @@ class HyperAdapter(nn.Module):
         global_raw = self.global_heads[key](global_features).expand(-1, target_q.shape[1], -1)
         query_raw = self.query_heads[key](query_features)
         selected_raw = self._select_raw_by_scope(primitive_name, global_raw, query_raw)
+        selected_raw = _apply_evidence_priors(primitive_name, selected_raw, evidence_bank, target_q)
         return self._params_for(primitive_name, selected_raw, global_raw, query_raw)
 
     def _select_raw_by_scope(self, primitive_name: str, global_raw: torch.Tensor, query_raw: torch.Tensor) -> torch.Tensor:
@@ -287,6 +290,56 @@ def _primitive_evidence_features(
         device=target_q.device,
     )
     return torch.cat([features, pad], dim=-1)
+
+
+def _apply_evidence_priors(
+    primitive_name: str,
+    raw: torch.Tensor,
+    evidence_bank: EvidenceBank | None,
+    target_q: torch.Tensor,
+) -> torch.Tensor:
+    if _primitive_kind(primitive_name) != "local":
+        return raw
+    prior = _local_lengthscale_prior_raw(evidence_bank, target_q)
+    if prior is None:
+        return raw
+    adjusted = raw.clone()
+    adjusted[..., 2:3] = adjusted[..., 2:3] + prior.unsqueeze(1).expand(-1, target_q.shape[1], -1)
+    return adjusted
+
+
+def _local_lengthscale_prior_raw(
+    evidence_bank: EvidenceBank | None,
+    target_q: torch.Tensor,
+) -> torch.Tensor | None:
+    if evidence_bank is None:
+        return None
+    gram = evidence_bank.gram.get("local")
+    corr = evidence_bank.corr.get("local")
+    if gram is None or corr is None:
+        return None
+    gram = gram.to(device=target_q.device, dtype=target_q.dtype)
+    corr = corr.to(device=target_q.device, dtype=target_q.dtype)
+    if gram.shape[-1] != len(LOCAL_LENGTHSCALE_CANDIDATES) or corr.shape[-1] != len(LOCAL_LENGTHSCALE_CANDIDATES):
+        return None
+    diagonal = gram.diagonal(dim1=-2, dim2=-1).clamp_min(1e-8)
+    score = corr.square() / diagonal
+    if bool((score.abs().sum(dim=-1) <= 1e-12).all()):
+        return None
+    candidates = torch.tensor(LOCAL_LENGTHSCALE_CANDIDATES, dtype=target_q.dtype, device=target_q.device)
+    weights = torch.softmax(score / LOCAL_LENGTHSCALE_EVIDENCE_TEMPERATURE, dim=-1)
+    lengthscale = (weights * candidates).sum(dim=-1, keepdim=True)
+    return _lengthscale_to_local_raw(lengthscale)
+
+
+def _lengthscale_to_local_raw(lengthscale: torch.Tensor) -> torch.Tensor:
+    internal = _softplus_inverse((lengthscale - 1e-3).clamp_min(1e-6))
+    normalized = ((internal + 2.0) / 0.5).clamp(min=-0.999, max=0.999)
+    return torch.atanh(normalized)
+
+
+def _softplus_inverse(value: torch.Tensor) -> torch.Tensor:
+    return value + torch.log(-torch.expm1(-value))
 
 
 def _router_features(
