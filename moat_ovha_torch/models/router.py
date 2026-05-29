@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import torch
 from torch import nn
@@ -48,7 +49,9 @@ class PrimitiveRouter(nn.Module):
             repeated_features = primitive_features[:, None, :, :].expand(-1, target_q.shape[1], -1, -1)
             repeated_q = target_q[:, :, None, :].expand(-1, -1, len(self.primitive_names), -1)
             query_features = torch.cat([repeated_features, repeated_q], dim=-1)
-            query_residual_logits = self.query_residual(query_features).squeeze(-1)
+            raw_query_residual_logits = self.query_residual(query_features).squeeze(-1)
+            gate = _context_uncertainty_gate(context_prior_logits).view(target_q.shape[0], 1, 1)
+            query_residual_logits = raw_query_residual_logits * gate
         else:
             query_residual_logits = torch.zeros(
                 target_q.shape[0],
@@ -69,6 +72,15 @@ class PrimitiveRouter(nn.Module):
 
 def primitive_entropy(weights: torch.Tensor) -> torch.Tensor:
     return -(weights * weights.clamp_min(1e-12).log()).sum(dim=-1).mean()
+
+
+def _context_uncertainty_gate(context_prior_logits: torch.Tensor) -> torch.Tensor:
+    if context_prior_logits.shape[-1] <= 1:
+        return torch.zeros(context_prior_logits.shape[0], dtype=context_prior_logits.dtype, device=context_prior_logits.device)
+    prior = torch.softmax(context_prior_logits, dim=-1)
+    entropy = -(prior * prior.clamp_min(1e-12).log()).sum(dim=-1)
+    max_entropy = math.log(context_prior_logits.shape[-1])
+    return (entropy / max(max_entropy, 1e-6)).clamp(min=0.0, max=1.0)
 
 
 def _normalize_logits(logits: torch.Tensor, top_k: int | None) -> torch.Tensor:

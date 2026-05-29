@@ -51,7 +51,6 @@ class Phase17AdapterRouterStaticContractTests(unittest.TestCase):
 class Phase17AdapterRouterPatchTests(unittest.TestCase):
     def test_router_returns_logits_prior_and_query_residual(self):
         import torch
-        from torch import nn
 
         from moat_ovha_torch.models.router import PrimitiveRouter, RouterOutput
 

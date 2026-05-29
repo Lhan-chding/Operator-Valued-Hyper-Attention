@@ -109,6 +109,8 @@ def _empty_metrics() -> dict[str, None]:
         "adapter_spectral_mode_true_kl": None,
         "adapter_separable_rank_true_kl": None,
         "adapter_local_lengthscale_log_mae": None,
+        "adapter_local_scale_mae": None,
+        "adapter_local_bias_mae": None,
     }
 
 
@@ -123,6 +125,8 @@ def adapter_param_metrics(
             "adapter_spectral_mode_true_kl": None,
             "adapter_separable_rank_true_kl": None,
             "adapter_local_lengthscale_log_mae": None,
+            "adapter_local_scale_mae": None,
+            "adapter_local_bias_mae": None,
         }
     hints = hidden.oracle_hints or {}
     tensors = hints.get("true_operator_tensors") or {}
@@ -130,6 +134,8 @@ def adapter_param_metrics(
         "adapter_spectral_mode_true_kl": None,
         "adapter_separable_rank_true_kl": None,
         "adapter_local_lengthscale_log_mae": None,
+        "adapter_local_scale_mae": None,
+        "adapter_local_bias_mae": None,
     }
     spectral = output.adapter_params.get("spectral")
     if spectral is not None and spectral.spectral_mode_logits is not None and "spectral_mode_logits" in tensors:
@@ -156,6 +162,12 @@ def adapter_param_metrics(
         pred_lengthscale = torch.nn.functional.softplus(local.local_lengthscale) + 1e-3
         true_lengthscale = _expand_scalar(tensors["lengthscale"], batch.target_q).clamp_min(1e-6)
         metrics["adapter_local_lengthscale_log_mae"] = float((pred_lengthscale.log() - true_lengthscale.log()).abs().mean().detach().cpu())
+    if local is not None and local.scale is not None and "gain" in tensors:
+        true_scale = _expand_scalar(tensors["gain"], batch.target_q)
+        metrics["adapter_local_scale_mae"] = float((local.scale - true_scale).abs().mean().detach().cpu())
+    if local is not None and local.bias is not None and "bias" in tensors:
+        true_bias = _expand_scalar(tensors["bias"], batch.target_q)
+        metrics["adapter_local_bias_mae"] = float((local.bias - true_bias).abs().mean().detach().cpu())
     return metrics
 
 
