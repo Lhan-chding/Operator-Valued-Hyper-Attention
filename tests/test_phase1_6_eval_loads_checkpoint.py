@@ -1,13 +1,24 @@
 import importlib.util
+import inspect
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from moat_ovha_torch.config import Phase15Config
 
 
 TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
+
+
+class Phase16CheckpointLoaderContractTests(unittest.TestCase):
+    def test_checkpoint_loader_exposes_map_location_parameter(self):
+        from moat_ovha_torch.train.checkpoints import load_checkpoint_for_eval
+
+        signature = inspect.signature(load_checkpoint_for_eval)
+
+        self.assertIn("map_location", signature.parameters)
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; checkpoint integrity tests skipped.")
@@ -63,6 +74,29 @@ class Phase16CheckpointEvaluationTests(unittest.TestCase):
             self.assertEqual(payload["seed"], config.seed)
             self.assertEqual(payload["train_steps"], config.steps)
             self.assertIn("config_hash", payload)
+
+    def test_checkpoint_loader_accepts_explicit_map_location(self):
+        import torch
+
+        from moat_ovha_torch.models.baselines import build_model
+        from moat_ovha_torch.train.checkpoints import load_checkpoint_for_eval
+        from moat_ovha_torch.train.trainer import run_training_for_model
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config(Path(tmp))
+            checkpoint = run_training_for_model(config, "ovha_full")
+            model = build_model("ovha_full", d_model=config.d_model, memory_tokens=config.memory_tokens)
+            calls = []
+            original_load = torch.load
+
+            def spy_load(*args, **kwargs):
+                calls.append(kwargs.get("map_location"))
+                return original_load(*args, **kwargs)
+
+            with patch("torch.load", side_effect=spy_load):
+                load_checkpoint_for_eval(model, checkpoint, strict=True, map_location="cpu")
+
+        self.assertEqual(calls, ["cpu"])
 
     def test_changing_checkpoint_weights_changes_eval_output(self):
         import torch

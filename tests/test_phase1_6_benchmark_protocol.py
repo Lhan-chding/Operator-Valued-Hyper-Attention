@@ -1,4 +1,5 @@
 import importlib.util
+import inspect
 import json
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from moat_ovha_torch.config import Phase15Config
 
 ROOT = Path(__file__).resolve().parents[1]
 TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
+NUMPY_AVAILABLE = importlib.util.find_spec("numpy") is not None
 
 
 class Phase16BenchmarkProtocolArtifactTests(unittest.TestCase):
@@ -84,6 +86,27 @@ class Phase16BenchmarkProtocolArtifactTests(unittest.TestCase):
 
             with self.assertRaisesRegex(FileNotFoundError, "PDEBench subset not found"):
                 loader.load_split("train")
+
+    def test_phase17_config_accepts_public_data_root(self):
+        config = Phase15Config.from_mapping(
+            {
+                "public_data_root": "/tmp/ovha-public-cache",
+                "public_context_sampling": "random",
+                "families": ["pdebench_burgers_1d"],
+                "datasets": ["pdebench_mini_ovha"],
+            }
+        )
+
+        self.assertEqual(str(config.public_data_root), "/tmp/ovha-public-cache")
+        self.assertEqual(config.public_context_sampling, "random")
+
+    def test_public_episode_source_contract_is_available(self):
+        from moat_ovha_torch.data.public_episode_source import PublicBenchmarkEpisodeSource
+
+        signature = inspect.signature(PublicBenchmarkEpisodeSource.sample_batch)
+
+        for name in ("family", "split", "device", "episode_id"):
+            self.assertIn(name, signature.parameters)
 
     def test_phase16_summary_separates_checkpoint_integrity_from_scientific_go(self):
         from scripts.summarize_phase1_6 import _build_summary
@@ -212,6 +235,115 @@ class Phase16BenchmarkProtocolArtifactTests(unittest.TestCase):
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; Phase 1.6 tensor protocol tests skipped.")
 class Phase16BenchmarkProtocolTorchTests(unittest.TestCase):
+    def _write_public_cache(self, root: Path, family: str = "pdebench_burgers_1d") -> None:
+        if not NUMPY_AVAILABLE:
+            self.skipTest("NumPy is required to write public benchmark cache fixtures")
+        import numpy as np
+
+        family_root = root / family
+        family_root.mkdir(parents=True, exist_ok=True)
+        coordinates = np.linspace(0.0, 1.0, 12, dtype="float32").reshape(12, 1)
+        sample_ids = np.arange(6, dtype="float32").reshape(6, 1, 1)
+        input_field = np.sin(sample_ids + coordinates.reshape(1, 12, 1)).astype("float32")
+        output_field = (0.5 * input_field + coordinates.reshape(1, 12, 1)).astype("float32")
+        operator_group_id = np.array([0, 0, 1, 1, 2, 2], dtype="int64")
+        for split in ("train", "iid"):
+            np.savez(
+                family_root / f"{split}.npz",
+                input_field=input_field,
+                output_field=output_field,
+                coordinates=coordinates,
+                operator_group_id=operator_group_id,
+            )
+
+    def test_public_cache_episode_source_reads_npz_without_hidden_metadata(self):
+        from moat_ovha_torch.data.public_episode_source import PublicBenchmarkEpisodeSource
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_public_cache(Path(tmp))
+            config = Phase15Config.from_mapping(
+                {
+                    "seed": 17,
+                    "public_data_root": tmp,
+                    "datasets": ["pdebench_mini_ovha"],
+                    "families": ["pdebench_burgers_1d"],
+                    "batch_size": 2,
+                    "num_demos": 1,
+                    "context_points": 4,
+                    "query_points": 5,
+                    "mode": "operator_transfer",
+                }
+            )
+            source = PublicBenchmarkEpisodeSource(config, seed=17)
+
+            batch, hidden = source.sample_batch(
+                batch_size=2,
+                num_demos=1,
+                context_points=4,
+                support_points=12,
+                query_points=5,
+                family="pdebench_burgers_1d",
+                split="train",
+                mode="operator_transfer",
+                device="cpu",
+                episode_id=3,
+            )
+
+        self.assertEqual(tuple(batch.context_u.shape), (2, 1, 12, 1))
+        self.assertEqual(tuple(batch.context_q.shape), (2, 1, 4, 1))
+        self.assertEqual(tuple(batch.target_q.shape), (2, 5, 1))
+        self.assertEqual(hidden.family, "pdebench_burgers_1d")
+        self.assertEqual(hidden.oracle_hints["dataset"], "pdebench_burgers_1d")
+        self.assertTrue(hidden.oracle_hints["public_benchmark"])
+        self.assertNotIn("true_component_weight_by_q", hidden.oracle_hints)
+
+    def test_training_and_eval_use_public_cache_when_configured(self):
+        from moat_ovha_torch.eval.evaluator import run_evaluation
+        from moat_ovha_torch.train.trainer import run_training_for_model
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_public_cache(root)
+            config = Phase15Config.from_mapping(
+                {
+                    "seed": 19,
+                    "output_dir": str(root / "outputs"),
+                    "public_data_root": str(root),
+                    "device": "cpu",
+                    "steps": 1,
+                    "batch_size": 2,
+                    "support_points": 12,
+                    "query_points": 5,
+                    "num_demos": 1,
+                    "context_points": 4,
+                    "d_model": 16,
+                    "memory_tokens": 2,
+                    "lr": 0.001,
+                    "mode": "operator_transfer",
+                    "train_split": "train",
+                    "eval_splits": ["iid"],
+                    "families": ["pdebench_burgers_1d"],
+                    "datasets": ["pdebench_mini_ovha"],
+                    "train_models": ["ovha_full"],
+                    "eval_models": ["ovha_full"],
+                    "require_checkpoint": True,
+                    "eval_episode_count": 1,
+                }
+            )
+
+            checkpoint = run_training_for_model(config, "ovha_full")
+            metrics_path = run_evaluation(config)
+
+            train_rows = [json.loads(line) for line in (config.output_dir / "train_metrics" / "ovha_full" / "seed_19.jsonl").read_text().splitlines()]
+            eval_rows = [json.loads(line) for line in metrics_path.read_text().splitlines()]
+
+        self.assertTrue(checkpoint.exists())
+        self.assertEqual(train_rows[0]["family"], "pdebench_burgers_1d")
+        self.assertEqual(train_rows[0]["dataset"], "pdebench_burgers_1d")
+        self.assertEqual(eval_rows[0]["family"], "pdebench_burgers_1d")
+        self.assertEqual(eval_rows[0]["dataset"], "pdebench_burgers_1d")
+        self.assertTrue(eval_rows[0]["checkpoint_loaded"])
+
     def test_controlled_stress_hidden_component_weights_do_not_enter_inputs(self):
         import torch
 
