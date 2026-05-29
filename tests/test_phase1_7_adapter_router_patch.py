@@ -132,6 +132,29 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
         self.assertGreater(float(per_primitive[..., 0, :].detach().abs().sum()), 0.0)
         self.assertEqual(float(per_primitive[..., 1:, :].detach().abs().sum()), 0.0)
 
+    def test_route_override_conditions_hyper_adapter_posterior_features(self):
+        import torch
+
+        from moat_ovha_torch.models.joint_router_adapter import JointRouterAdapter
+        from moat_ovha_torch.models.primitives.base import PrimitiveParams
+
+        adapter = JointRouterAdapter(("spectral", "local", "separable"), d_model=8)
+        memory_bank = {name: torch.zeros(2, 2, 8) for name in adapter.router.primitive_names}
+        target_q = torch.linspace(0.0, 1.0, 5).view(1, 5, 1).repeat(2, 1, 1)
+        route_override = torch.zeros(2, 5, 3)
+        route_override[..., 2] = 1.0
+        captured = {}
+
+        def capture_forward(memory, target_q, router_out=None):
+            captured["weights"] = router_out.weights.detach().clone()
+            return {name: PrimitiveParams() for name in adapter.router.primitive_names}
+
+        adapter.hyper_adapter.forward = capture_forward
+
+        adapter(memory_bank, target_q, route_override=route_override)
+
+        self.assertTrue(torch.equal(captured["weights"], route_override))
+
     def test_controlled_v2_adapter_losses_expose_required_components(self):
         import torch
 
