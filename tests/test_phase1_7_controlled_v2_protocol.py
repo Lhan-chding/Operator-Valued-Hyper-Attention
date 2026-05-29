@@ -62,6 +62,9 @@ class Phase17ProtocolContractTests(unittest.TestCase):
         self.assertEqual(sanity.eval_splits, ("iid",))
         self.assertEqual(sanity.router_auxiliary_loss_weight, 0.05)
         self.assertEqual(sanity.oracle_route_single_primitive_probability, 1.0)
+        self.assertGreaterEqual(sanity.adapter_auxiliary_loss_weight, 0.5)
+        self.assertGreaterEqual(sanity.primitive_output_loss_weight, 0.5)
+        self.assertGreaterEqual(sanity.oracle_routed_prediction_loss_weight, 0.5)
 
         for name, family in (
             ("phase1_7_g1_single_iid_spectral.json", "single_primitive_spectral"),
@@ -224,7 +227,7 @@ class Phase17ControlledV2ProtocolTests(unittest.TestCase):
         import torch
 
         from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
-        from moat_ovha_torch.train.trainer import _oracle_route_override
+        from moat_ovha_torch.train.trainer import _active_primitive_mask_from_route, _oracle_route_override
 
         zoo = MetadataFreeOperatorZoo(seed=987)
         config = Phase15Config(
@@ -266,6 +269,36 @@ class Phase17ControlledV2ProtocolTests(unittest.TestCase):
         mixed_route = _oracle_route_override(10_000, mixed_hidden, primitive_names, config, "cpu", torch)
 
         self.assertIsNone(mixed_route)
+
+        mixture_route = torch.tensor([[[0.34, 0.33, 0.33]]])
+        mixture_mask = _active_primitive_mask_from_route(mixture_route)
+        self.assertTrue(torch.equal(mixture_mask, mixture_route > 0.0))
+
+    def test_router_auxiliary_loss_uses_learned_router_weights_under_teacher_forcing(self):
+        import math
+        import types
+
+        import torch
+
+        from moat_ovha_torch.train.trainer import _router_auxiliary_loss
+
+        true_weights = torch.zeros(2, 5, 3)
+        true_weights[..., 1] = 1.0
+        learned_weights = torch.full_like(true_weights, 1.0 / 3.0)
+        output = types.SimpleNamespace(
+            primitive_weights=true_weights,
+            router_output=types.SimpleNamespace(weights=learned_weights),
+        )
+        hidden = types.SimpleNamespace(
+            oracle_hints={
+                "true_component_weight_by_q": true_weights,
+                "primitive_order": ("spectral", "local", "separable"),
+            }
+        )
+
+        loss = _router_auxiliary_loss(output, hidden, ("spectral", "local", "separable"), "cpu")
+
+        self.assertAlmostEqual(float(loss), math.log(3.0), places=5)
 
     def test_model_aligned_iid_params_stay_inside_sanity_adapter_domain(self):
         from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo

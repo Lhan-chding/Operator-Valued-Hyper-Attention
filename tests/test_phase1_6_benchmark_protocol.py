@@ -124,6 +124,22 @@ class Phase16BenchmarkProtocolArtifactTests(unittest.TestCase):
         self.assertIn("Scientific No-Go", summary["go_no_go"])
         self.assertIn("checkpoint path is wired", summary["go_no_go"])
 
+    def test_single_primitive_summary_uses_specialist_collapse_tolerance(self):
+        from scripts.summarize_phase1_6 import _controlled_stress_conclusion
+
+        conclusion = _controlled_stress_conclusion(
+            family="single_primitive_local",
+            full=0.118,
+            matched_single=0.112,
+            best_single=0.112,
+            vector_big=0.5,
+            no_memory=0.5,
+            no_router=0.5,
+            no_adapter=0.5,
+        )
+
+        self.assertEqual(conclusion, "provisional component signal")
+
     def test_phase16_summary_includes_diagnostic_signals_from_jsonl(self):
         from scripts.summarize_phase1_6 import summarize
 

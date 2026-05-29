@@ -99,6 +99,52 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
         self.assertEqual(separable.scope["separable_rank_logits"], "episode")
         self.assertTrue(torch.allclose(separable.separable_rank_logits.var(dim=1), torch.zeros(2, 4), atol=1e-8))
 
+    def test_hyper_adapter_accepts_direct_primitive_evidence_features(self):
+        import torch
+
+        from moat_ovha_torch.models.evidence import EvidenceBank
+        from moat_ovha_torch.models.hyper_adapter import HyperAdapter
+
+        adapter = HyperAdapter(("spectral", "local", "separable"), d_model=8)
+        memory = {name: torch.zeros(2, 2, 8) for name in ("global", "spectral", "local", "separable")}
+        target_q = torch.linspace(0.0, 1.0, 5).view(1, 5, 1).repeat(2, 1, 1)
+        evidence = _evidence_bank(torch, batch_size=2)
+        captured = {}
+
+        def capture_global(features):
+            captured["separable_tail"] = features[:, -12:].detach().clone()
+            return torch.zeros(features.shape[0], 1, adapter._output_dim("separable"))
+
+        adapter.global_heads["separable"].forward = capture_global
+
+        adapter(memory, target_q, evidence_bank=evidence)
+
+        expected_tail = torch.cat(
+            [
+                evidence.ls_coeff["separable"],
+                evidence.residual_energy["separable"],
+                evidence.uncertainty["separable"],
+            ],
+            dim=-1,
+        )
+        self.assertTrue(torch.equal(captured["separable_tail"], expected_tail))
+
+    def test_hyper_adapter_scale_range_covers_parameter_holdout_gain(self):
+        import torch
+
+        from moat_ovha_torch.models.hyper_adapter import HyperAdapter
+
+        adapter = HyperAdapter(("separable",), d_model=8)
+        memory = torch.zeros(2, 2, 8)
+        target_q = torch.linspace(0.0, 1.0, 5).view(1, 5, 1).repeat(2, 1, 1)
+
+        with torch.no_grad():
+            adapter.global_heads["separable"].net[-1].bias[0] = 2.0
+
+        params = adapter(memory, target_q)
+
+        self.assertGreater(float(params["separable"].scale.max()), 1.5)
+
     def test_ovha_forward_accepts_oracle_route_and_active_primitive_mask(self):
         import torch
 
@@ -313,3 +359,31 @@ def _relative_mse(prediction, target):
     numerator = (prediction - target).square().mean()
     denominator = target.square().mean().clamp_min(1e-8)
     return numerator / denominator
+
+
+def _evidence_bank(torch, batch_size):
+    from moat_ovha_torch.models.evidence import EvidenceBank
+
+    zeros = torch.zeros(batch_size, 4)
+    return EvidenceBank(
+        basis_outputs={},
+        residuals={},
+        gram={},
+        corr={},
+        ls_coeff={
+            "spectral": zeros + 1.0,
+            "local": zeros + 2.0,
+            "separable": zeros + 3.0,
+        },
+        residual_energy={
+            "spectral": zeros + 4.0,
+            "local": zeros + 5.0,
+            "separable": zeros + 6.0,
+        },
+        uncertainty={
+            "spectral": zeros + 7.0,
+            "local": zeros + 8.0,
+            "separable": zeros + 9.0,
+        },
+        point_features=torch.zeros(batch_size, 1, 1, 36),
+    )
