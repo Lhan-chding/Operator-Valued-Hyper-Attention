@@ -140,6 +140,37 @@ class Phase16BenchmarkProtocolArtifactTests(unittest.TestCase):
 
         self.assertEqual(conclusion, "provisional component signal")
 
+    def test_controlled_stress_summary_surfaces_router_mae_by_model(self):
+        from scripts.summarize_phase1_6 import _build_summary
+
+        eval_rows = [
+            {
+                "family": "single_primitive_separable",
+                "split": "iid",
+                "model_name": "ovha_full",
+                "seed": 61,
+                "relative_l2": 0.50,
+                "true_router_learned_adapter_relative_l2": 0.36,
+                "router_true_weight_mae": 0.14,
+                "checkpoint_loaded": True,
+            },
+            {
+                "family": "single_primitive_separable",
+                "split": "iid",
+                "model_name": "separable_only",
+                "seed": 61,
+                "relative_l2": 0.35,
+                "router_true_weight_mae": 0.0,
+                "checkpoint_loaded": True,
+            },
+        ]
+
+        summary = _build_summary(eval_rows, [])
+        row = summary["controlled_stress"][0]
+
+        self.assertEqual(row["router_mae_by_model"]["ovha_full"], 0.14)
+        self.assertEqual(row["router_mae_by_model"]["separable_only"], 0.0)
+
     def test_phase16_summary_includes_diagnostic_signals_from_jsonl(self):
         from scripts.summarize_phase1_6 import summarize
 

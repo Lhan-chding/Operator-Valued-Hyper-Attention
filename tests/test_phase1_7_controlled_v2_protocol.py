@@ -60,11 +60,14 @@ class Phase17ProtocolContractTests(unittest.TestCase):
 
         sanity = Phase15Config.from_file(root / "configs" / "phase1_7_controlled_v2_sanity.json")
         self.assertEqual(sanity.eval_splits, ("iid",))
-        self.assertEqual(sanity.router_auxiliary_loss_weight, 0.05)
+        self.assertGreaterEqual(sanity.router_auxiliary_loss_weight, 0.2)
         self.assertEqual(sanity.oracle_route_single_primitive_probability, 1.0)
-        self.assertGreaterEqual(sanity.adapter_auxiliary_loss_weight, 0.5)
-        self.assertGreaterEqual(sanity.primitive_output_loss_weight, 0.5)
-        self.assertGreaterEqual(sanity.oracle_routed_prediction_loss_weight, 0.5)
+        self.assertGreaterEqual(sanity.adapter_auxiliary_loss_weight, 0.3)
+        self.assertLessEqual(sanity.adapter_auxiliary_loss_weight, 0.5)
+        self.assertGreaterEqual(sanity.primitive_output_loss_weight, 0.3)
+        self.assertLessEqual(sanity.primitive_output_loss_weight, 0.5)
+        self.assertGreaterEqual(sanity.oracle_routed_prediction_loss_weight, 0.3)
+        self.assertLessEqual(sanity.oracle_routed_prediction_loss_weight, 0.5)
 
         for name, family in (
             ("phase1_7_g1_single_iid_spectral.json", "single_primitive_spectral"),

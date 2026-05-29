@@ -169,6 +169,60 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
         self.assertGreater(float(lengthscale[0].mean()), 0.18)
         self.assertLess(float(lengthscale[1].mean()), 0.10)
 
+    def test_local_lengthscale_prior_is_amplitude_normalized(self):
+        import torch
+
+        from moat_ovha_torch.models.hyper_adapter import HyperAdapter
+
+        adapter = HyperAdapter(("local",), d_model=8)
+        memory = torch.zeros(2, 2, 8)
+        target_q = torch.linspace(0.0, 1.0, 5).view(1, 5, 1).repeat(2, 1, 1)
+        evidence = _evidence_bank(torch, batch_size=2)
+        evidence.gram["local"] = torch.eye(4).unsqueeze(0).repeat(2, 1, 1)
+        evidence.corr["local"] = torch.tensor(
+            [
+                [0.010, 0.012, 0.0, 0.0],
+                [1.000, 1.200, 0.0, 0.0],
+            ],
+            dtype=target_q.dtype,
+        )
+
+        params = adapter(memory, target_q, evidence_bank=evidence)
+        lengthscale = torch.nn.functional.softplus(params["local"].local_lengthscale.detach()) + 1e-3
+
+        self.assertAlmostEqual(float(lengthscale[0].mean()), float(lengthscale[1].mean()), places=4)
+
+    def test_local_lengthscale_prior_is_model_aligned_only_and_router_gated(self):
+        import torch
+
+        from moat_ovha_torch.models.hyper_adapter import HyperAdapter
+        from moat_ovha_torch.models.router import RouterOutput
+
+        target_q = torch.linspace(0.0, 1.0, 5).view(1, 5, 1).repeat(2, 1, 1)
+        evidence = _evidence_bank(torch, batch_size=2)
+        evidence.gram["local"] = torch.eye(4).unsqueeze(0).repeat(2, 1, 1)
+        evidence.corr["local"] = torch.tensor(
+            [
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=target_q.dtype,
+        )
+        full_variant = HyperAdapter(("local",), d_model=8, controlled_generator_variant="full")
+        full_params = full_variant(torch.zeros(2, 2, 8), target_q, evidence_bank=evidence)
+        full_lengthscale = torch.nn.functional.softplus(full_params["local"].local_lengthscale.detach()) + 1e-3
+        self.assertLess(float(full_lengthscale.mean()), 0.14)
+
+        gated = HyperAdapter(("spectral", "local", "separable"), d_model=8)
+        memory = {name: torch.zeros(2, 2, 8) for name in ("global", "spectral", "local", "separable")}
+        router_weights = torch.zeros(2, 5, 3)
+        router_weights[..., 0] = 0.5
+        router_weights[..., 2] = 0.5
+        router_out = RouterOutput(weights=router_weights, logits=router_weights.clamp_min(1e-8).log())
+        gated_params = gated(memory, target_q, router_out=router_out, evidence_bank=evidence)
+        gated_lengthscale = torch.nn.functional.softplus(gated_params["local"].local_lengthscale.detach()) + 1e-3
+        self.assertLess(float(gated_lengthscale.mean()), 0.14)
+
     def test_ovha_forward_accepts_oracle_route_and_active_primitive_mask(self):
         import torch
 
