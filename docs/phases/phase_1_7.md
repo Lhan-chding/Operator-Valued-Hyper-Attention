@@ -150,6 +150,24 @@ bash scripts/run_phase1_6_gpu_public_pilot.sh \
 
 Only move to `configs/phase1_7_public_pdebench_mini.json` after the smoke run proves the public cache is being read (`dataset` and `source_split` populated in train/eval JSONL).
 
+The 2026-05-29 Burgers public smoke first passed on one seed and then passed a 3-seed v2 check using `configs/phase1_7_public_pdebench_iid_smoke_v2.json` on GPU 4. The run used a local cache converted from `1D_Burgers_Sols_Nu0.01.hdf5` into `data/public_benchmark_cache/pdebench_burgers_1d/{train,iid}.npz`, with `tensor[:, 0, :]` as `input_field`, `tensor[:, -1, :]` as `output_field`, and `x-coordinate` as `coordinates`.
+
+Public smoke v2 summary:
+
+| dataset | split | seeds | ovha_full | transformer_only | simple_stack | best_baseline_delta | per-seed wins |
+|---|---|---:|---:|---:|---:|---:|---:|
+| pdebench_burgers_1d | iid | 3 | 0.307594 +/- 0.002463 | 0.381535 +/- 0.003310 | 0.536556 +/- 0.001503 | 0.073940 | 3/3 |
+
+Per-seed v2 means:
+
+| seed | ovha_full | best baseline | delta | win |
+|---:|---:|---:|---:|---|
+| 81 | 0.308088 | transformer_only 0.386120 | 0.078032 | true |
+| 82 | 0.304362 | transformer_only 0.378425 | 0.074063 | true |
+| 83 | 0.310333 | transformer_only 0.380060 | 0.069727 | true |
+
+This is the first external-validity signal on a public PDEBench field cache and proves the public data path end to end: raw HDF5 -> local public cache -> metadata-free episode source -> train checkpoint -> checkpoint-loaded eval -> report. It is still not Phase 2 scientific Go; the next evidence step is to add at least a second PDEBench family/split before making broader method claims.
+
 ## Next Gate
 
 If the 5k sanity run fails, inspect the oracle metrics before adding public data:
