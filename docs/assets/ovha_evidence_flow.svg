@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc">
+  <title id="title">OVHA Evidence 证据构造图</title>
+  <desc id="desc">展示公开 context 三元组如何生成 primitive 候选输出、最小二乘证据和送入 token/hyper-adapter 的 EvidenceBank。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 12 6 L 0 12 z" fill="#111111"/>
+    </marker>
+    <style>
+      .title { font: 700 28px Arial, Helvetica, sans-serif; fill: #111111; }
+      .label { font: 700 18px Arial, Helvetica, sans-serif; fill: #111111; }
+      .small { font: 400 15px Arial, Helvetica, sans-serif; fill: #222222; }
+      .tiny { font: 400 13px Arial, Helvetica, sans-serif; fill: #444444; }
+      .box { stroke: #111111; stroke-width: 3; rx: 12; ry: 12; }
+      .inner { stroke: #111111; stroke-width: 2.1; rx: 9; ry: 9; }
+      .arrow { stroke: #111111; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .thin { stroke: #111111; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="680" fill="#ffffff"/>
+  <text x="600" y="48" text-anchor="middle" class="title">EvidenceBank: 从公开 context 中提取可学习证据</text>
+
+  <rect x="55" y="130" width="215" height="135" class="box" fill="#f7dede"/>
+  <text x="162" y="164" text-anchor="middle" class="label">公开上下文</text>
+  <text x="162" y="198" text-anchor="middle" class="small">(u_i, q_i, y_i)</text>
+  <text x="162" y="226" text-anchor="middle" class="tiny">没有 hidden params</text>
+  <text x="162" y="247" text-anchor="middle" class="tiny">没有真实 primitive 标签</text>
+
+  <rect x="345" y="85" width="250" height="245" class="box" fill="#eee8ff"/>
+  <text x="470" y="119" text-anchor="middle" class="label">Primitive Candidates</text>
+  <rect x="378" y="150" width="184" height="45" class="inner" fill="#ffffff"/>
+  <text x="470" y="179" text-anchor="middle" class="small">spectral basis ×4</text>
+  <rect x="378" y="210" width="184" height="45" class="inner" fill="#ffffff"/>
+  <text x="470" y="239" text-anchor="middle" class="small">local kernels ×4</text>
+  <rect x="378" y="270" width="184" height="45" class="inner" fill="#ffffff"/>
+  <text x="470" y="299" text-anchor="middle" class="small">separable terms ×4</text>
+
+  <rect x="675" y="90" width="250" height="240" class="box" fill="#dff1dd"/>
+  <text x="800" y="124" text-anchor="middle" class="label">Sufficient Stats</text>
+  <rect x="708" y="152" width="184" height="38" class="inner" fill="#ffffff"/>
+  <text x="800" y="176" text-anchor="middle" class="small">Gram matrix</text>
+  <rect x="708" y="202" width="184" height="38" class="inner" fill="#ffffff"/>
+  <text x="800" y="226" text-anchor="middle" class="small">corr with y</text>
+  <rect x="708" y="252" width="184" height="38" class="inner" fill="#ffffff"/>
+  <text x="800" y="276" text-anchor="middle" class="small">ridge LS coeff</text>
+
+  <rect x="675" y="385" width="250" height="145" class="box" fill="#f3f0cf"/>
+  <text x="800" y="419" text-anchor="middle" class="label">Residual Signals</text>
+  <text x="800" y="455" text-anchor="middle" class="small">residual_energy</text>
+  <text x="800" y="482" text-anchor="middle" class="small">uncertainty</text>
+  <text x="800" y="509" text-anchor="middle" class="small">point_features</text>
+
+  <rect x="985" y="170" width="165" height="250" class="box" fill="#e3f6f4"/>
+  <text x="1067" y="207" text-anchor="middle" class="label">EvidenceBank</text>
+  <text x="1067" y="245" text-anchor="middle" class="small">basis_outputs</text>
+  <text x="1067" y="270" text-anchor="middle" class="small">ls_coeff</text>
+  <text x="1067" y="295" text-anchor="middle" class="small">residuals</text>
+  <text x="1067" y="320" text-anchor="middle" class="small">uncertainty</text>
+  <text x="1067" y="354" text-anchor="middle" class="tiny">给 token encoder</text>
+  <text x="1067" y="376" text-anchor="middle" class="tiny">也直接给 adapter</text>
+
+  <rect x="305" y="450" width="245" height="110" class="box" fill="#dceaf8"/>
+  <text x="427" y="486" text-anchor="middle" class="label">Context Tokens</text>
+  <text x="427" y="521" text-anchor="middle" class="small">summary + q + y</text>
+  <text x="427" y="544" text-anchor="middle" class="small">+ candidates + residuals</text>
+
+  <path d="M 270 197 L 345 197" class="arrow"/>
+  <path d="M 595 197 L 675 197" class="arrow"/>
+  <path d="M 595 250 C 650 315 650 430 675 455" class="thin"/>
+  <path d="M 925 210 L 985 250" class="arrow"/>
+  <path d="M 925 455 L 985 350" class="arrow"/>
+  <path d="M 470 330 C 470 390 435 420 427 450" class="thin"/>
+  <path d="M 985 395 C 820 610 565 615 470 560" class="thin"/>
+  <text x="620" y="622" text-anchor="middle" class="tiny">关键修复：不要把 LS coeff 只埋进 pooled memory，要直接送给 hyper-adapter</text>
+</svg>

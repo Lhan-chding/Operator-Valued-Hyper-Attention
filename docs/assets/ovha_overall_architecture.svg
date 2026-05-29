@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="920" viewBox="0 0 1400 920" role="img" aria-labelledby="title desc">
+  <title id="title">OVHA 总体架构图</title>
+  <desc id="desc">从 metadata-free episode 输入，到 context evidence、memory、router、hyper-adapter、primitive mixture，最后输出 y_hat 的完整流程。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 12 6 L 0 12 z" fill="#111111"/>
+    </marker>
+    <style>
+      .title { font: 700 30px Arial, Helvetica, sans-serif; fill: #111111; }
+      .subtitle { font: 400 17px Arial, Helvetica, sans-serif; fill: #333333; }
+      .label { font: 700 18px Arial, Helvetica, sans-serif; fill: #111111; }
+      .small { font: 400 15px Arial, Helvetica, sans-serif; fill: #222222; }
+      .tiny { font: 400 13px Arial, Helvetica, sans-serif; fill: #444444; }
+      .box { stroke: #111111; stroke-width: 3; rx: 12; ry: 12; }
+      .inner { stroke: #111111; stroke-width: 2.2; rx: 9; ry: 9; }
+      .arrow { stroke: #111111; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .thin { stroke: #111111; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .skip { stroke: #111111; stroke-width: 2.2; fill: none; marker-end: url(#arrow); stroke-dasharray: 8 6; }
+      .note { fill: #ffffff; stroke: #111111; stroke-width: 2; rx: 8; ry: 8; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1400" height="920" fill="#ffffff"/>
+  <text x="700" y="54" text-anchor="middle" class="title">OVHA: Metadata-free Context-conditioned Operator Model</text>
+  <text x="700" y="84" text-anchor="middle" class="subtitle">只看公开的 u/q/y 上下文，不把 hidden 参数、真实 primitive 权重或数据集标签喂给模型</text>
+
+  <rect x="55" y="150" width="250" height="210" class="box" fill="#f7dede"/>
+  <text x="180" y="183" text-anchor="middle" class="label">Episode 输入</text>
+  <rect x="82" y="210" width="196" height="50" class="inner" fill="#ffffff"/>
+  <text x="180" y="231" text-anchor="middle" class="small">context demos</text>
+  <text x="180" y="250" text-anchor="middle" class="tiny">(u_i, q_i, y_i)</text>
+  <rect x="82" y="280" width="196" height="50" class="inner" fill="#ffffff"/>
+  <text x="180" y="301" text-anchor="middle" class="small">target query</text>
+  <text x="180" y="320" text-anchor="middle" class="tiny">(u*, q*)</text>
+
+  <rect x="380" y="135" width="270" height="250" class="box" fill="#dff1dd"/>
+  <text x="515" y="168" text-anchor="middle" class="label">Context Token Encoder</text>
+  <rect x="407" y="195" width="216" height="52" class="inner" fill="#ffffff"/>
+  <text x="515" y="217" text-anchor="middle" class="small">基础统计</text>
+  <text x="515" y="236" text-anchor="middle" class="tiny">mean / std / energy / grid moment</text>
+  <rect x="407" y="264" width="216" height="52" class="inner" fill="#ffffff"/>
+  <text x="515" y="286" text-anchor="middle" class="small">Primitive Evidence</text>
+  <text x="515" y="305" text-anchor="middle" class="tiny">basis / residual / LS coeff</text>
+  <rect x="407" y="333" width="216" height="34" class="inner" fill="#ffffff"/>
+  <text x="515" y="355" text-anchor="middle" class="small">context tokens</text>
+
+  <rect x="730" y="150" width="250" height="210" class="box" fill="#dceaf8"/>
+  <text x="855" y="183" text-anchor="middle" class="label">Memory Encoder</text>
+  <rect x="758" y="215" width="194" height="54" class="inner" fill="#ffffff"/>
+  <text x="855" y="237" text-anchor="middle" class="small">Perceiver Memory</text>
+  <text x="855" y="256" text-anchor="middle" class="tiny">N 个 memory tokens</text>
+  <rect x="758" y="292" width="194" height="48" class="inner" fill="#ffffff"/>
+  <text x="855" y="322" text-anchor="middle" class="small">Primitive Slot Memory</text>
+
+  <rect x="1050" y="115" width="275" height="305" class="box" fill="#f3f0cf"/>
+  <text x="1187" y="148" text-anchor="middle" class="label">Joint Router + Adapter</text>
+  <rect x="1078" y="175" width="219" height="62" class="inner" fill="#fff8d8"/>
+  <text x="1187" y="199" text-anchor="middle" class="small">Router</text>
+  <text x="1187" y="219" text-anchor="middle" class="tiny">context prior + gated query residual</text>
+  <rect x="1078" y="258" width="219" height="62" class="inner" fill="#ffe5c7"/>
+  <text x="1187" y="282" text-anchor="middle" class="small">HyperAdapter</text>
+  <text x="1187" y="302" text-anchor="middle" class="tiny">memory + posterior + evidence</text>
+  <rect x="1078" y="341" width="219" height="52" class="inner" fill="#ffffff"/>
+  <text x="1187" y="363" text-anchor="middle" class="small">weights w(q), params θ</text>
+  <text x="1187" y="382" text-anchor="middle" class="tiny">不含 hidden metadata</text>
+
+  <rect x="340" y="500" width="730" height="235" class="box" fill="#eee8ff"/>
+  <text x="705" y="535" text-anchor="middle" class="label">Operator Primitives 产生候选输出</text>
+  <rect x="390" y="575" width="190" height="86" class="inner" fill="#ffffff"/>
+  <text x="485" y="604" text-anchor="middle" class="small">Spectral</text>
+  <text x="485" y="625" text-anchor="middle" class="tiny">频率/谱模式</text>
+  <text x="485" y="644" text-anchor="middle" class="tiny">scale / bias / mode</text>
+  <rect x="610" y="575" width="190" height="86" class="inner" fill="#ffffff"/>
+  <text x="705" y="604" text-anchor="middle" class="small">Local</text>
+  <text x="705" y="625" text-anchor="middle" class="tiny">局部核/lengthscale</text>
+  <text x="705" y="644" text-anchor="middle" class="tiny">scale / bias / kernel</text>
+  <rect x="830" y="575" width="190" height="86" class="inner" fill="#ffffff"/>
+  <text x="925" y="604" text-anchor="middle" class="small">Separable</text>
+  <text x="925" y="625" text-anchor="middle" class="tiny">branch × trunk</text>
+  <text x="925" y="644" text-anchor="middle" class="tiny">scale / bias / rank</text>
+  <rect x="535" y="690" width="340" height="34" class="inner" fill="#ffffff"/>
+  <text x="705" y="713" text-anchor="middle" class="small">stacked primitive outputs</text>
+
+  <rect x="1135" y="555" width="190" height="130" class="box" fill="#e3f6f4"/>
+  <text x="1230" y="591" text-anchor="middle" class="label">Weighted Sum</text>
+  <text x="1230" y="622" text-anchor="middle" class="small">Σ w_k(q) · y_k(q)</text>
+  <text x="1230" y="653" text-anchor="middle" class="small">输出 y_hat(q)</text>
+
+  <rect x="70" y="735" width="280" height="105" class="note"/>
+  <text x="210" y="766" text-anchor="middle" class="label">训练/评估记录</text>
+  <text x="210" y="795" text-anchor="middle" class="small">relative L2 / router MAE</text>
+  <text x="210" y="818" text-anchor="middle" class="small">hash / checkpoint_loaded</text>
+
+  <path d="M 305 255 L 380 255" class="arrow"/>
+  <path d="M 650 255 L 730 255" class="arrow"/>
+  <path d="M 980 255 L 1050 255" class="arrow"/>
+  <path d="M 1187 420 C 1187 470 1000 500 925 575" class="thin"/>
+  <path d="M 1187 420 C 1110 500 820 510 705 575" class="thin"/>
+  <path d="M 1187 420 C 1040 500 630 510 485 575" class="thin"/>
+  <path d="M 875 724 C 990 720 1075 650 1135 625" class="arrow"/>
+  <path d="M 1078 285 C 965 440 620 450 515 385" class="skip"/>
+  <text x="815" y="462" text-anchor="middle" class="tiny">direct evidence channel</text>
+  <path d="M 180 360 C 180 575 190 670 210 735" class="skip"/>
+  <text x="112" y="535" class="tiny">episode/hash 只用于审计</text>
+</svg>

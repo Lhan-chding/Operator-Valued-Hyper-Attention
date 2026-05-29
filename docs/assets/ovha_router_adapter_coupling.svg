@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1250" height="720" viewBox="0 0 1250 720" role="img" aria-labelledby="title desc">
+  <title id="title">OVHA Router 与 HyperAdapter 耦合图</title>
+  <desc id="desc">展示 primitive memory 和 target q 如何进入 router 与 hyper-adapter，route override 如何同时影响最终 mixture 和 adapter posterior features。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 12 6 L 0 12 z" fill="#111111"/>
+    </marker>
+    <style>
+      .title { font: 700 28px Arial, Helvetica, sans-serif; fill: #111111; }
+      .label { font: 700 18px Arial, Helvetica, sans-serif; fill: #111111; }
+      .small { font: 400 15px Arial, Helvetica, sans-serif; fill: #222222; }
+      .tiny { font: 400 13px Arial, Helvetica, sans-serif; fill: #444444; }
+      .box { stroke: #111111; stroke-width: 3; rx: 12; ry: 12; }
+      .inner { stroke: #111111; stroke-width: 2.1; rx: 9; ry: 9; }
+      .arrow { stroke: #111111; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .thin { stroke: #111111; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #111111; stroke-width: 2.2; fill: none; marker-end: url(#arrow); stroke-dasharray: 8 6; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1250" height="720" fill="#ffffff"/>
+  <text x="625" y="48" text-anchor="middle" class="title">JointRouterAdapter: router 和 adapter 必须看同一套路由条件</text>
+
+  <rect x="60" y="130" width="220" height="175" class="box" fill="#dceaf8"/>
+  <text x="170" y="165" text-anchor="middle" class="label">Primitive Memory</text>
+  <rect x="90" y="192" width="160" height="32" class="inner" fill="#ffffff"/>
+  <text x="170" y="214" text-anchor="middle" class="small">spectral slot</text>
+  <rect x="90" y="235" width="160" height="32" class="inner" fill="#ffffff"/>
+  <text x="170" y="257" text-anchor="middle" class="small">local slot</text>
+  <rect x="90" y="278" width="160" height="32" class="inner" fill="#ffffff"/>
+  <text x="170" y="300" text-anchor="middle" class="small">separable slot</text>
+
+  <rect x="60" y="400" width="220" height="80" class="box" fill="#f7dede"/>
+  <text x="170" y="435" text-anchor="middle" class="label">Target Query</text>
+  <text x="170" y="460" text-anchor="middle" class="small">q*</text>
+
+  <rect x="365" y="105" width="270" height="250" class="box" fill="#fff8d8"/>
+  <text x="500" y="140" text-anchor="middle" class="label">PrimitiveRouter</text>
+  <rect x="395" y="170" width="210" height="48" class="inner" fill="#ffffff"/>
+  <text x="500" y="200" text-anchor="middle" class="small">context prior logits</text>
+  <rect x="395" y="235" width="210" height="58" class="inner" fill="#ffffff"/>
+  <text x="500" y="258" text-anchor="middle" class="small">query residual logits</text>
+  <text x="500" y="278" text-anchor="middle" class="tiny">由 context entropy gate 控制</text>
+  <rect x="395" y="310" width="210" height="32" class="inner" fill="#ffffff"/>
+  <text x="500" y="332" text-anchor="middle" class="small">learned weights w(q)</text>
+
+  <rect x="370" y="420" width="260" height="105" class="box" fill="#ffffff"/>
+  <text x="500" y="455" text-anchor="middle" class="label">可选 teacher forcing</text>
+  <text x="500" y="482" text-anchor="middle" class="small">route_override</text>
+  <text x="500" y="505" text-anchor="middle" class="tiny">只在 controlled 训练诊断使用</text>
+
+  <rect x="720" y="120" width="290" height="255" class="box" fill="#ffe5c7"/>
+  <text x="865" y="155" text-anchor="middle" class="label">HyperAdapter</text>
+  <rect x="750" y="185" width="230" height="43" class="inner" fill="#ffffff"/>
+  <text x="865" y="212" text-anchor="middle" class="small">primitive memory</text>
+  <rect x="750" y="242" width="230" height="43" class="inner" fill="#ffffff"/>
+  <text x="865" y="269" text-anchor="middle" class="small">posterior + entropy</text>
+  <rect x="750" y="299" width="230" height="43" class="inner" fill="#ffffff"/>
+  <text x="865" y="326" text-anchor="middle" class="small">direct evidence features</text>
+  <text x="865" y="361" text-anchor="middle" class="small">输出 θ_spectral / θ_local / θ_sep</text>
+
+  <rect x="720" y="470" width="290" height="115" class="box" fill="#eee8ff"/>
+  <text x="865" y="505" text-anchor="middle" class="label">Primitives</text>
+  <text x="865" y="535" text-anchor="middle" class="small">用 θ 产生候选 y_k(q)</text>
+  <text x="865" y="558" text-anchor="middle" class="tiny">spectral / local / separable</text>
+
+  <rect x="1065" y="390" width="140" height="125" class="box" fill="#e3f6f4"/>
+  <text x="1135" y="428" text-anchor="middle" class="label">Mixture</text>
+  <text x="1135" y="459" text-anchor="middle" class="small">Σ w_k y_k</text>
+  <text x="1135" y="490" text-anchor="middle" class="small">y_hat</text>
+
+  <path d="M 280 215 L 365 215" class="arrow"/>
+  <path d="M 280 440 C 320 405 340 330 365 270" class="thin"/>
+  <path d="M 635 325 C 690 325 690 264 720 264" class="arrow"/>
+  <path d="M 630 472 C 675 430 690 330 720 285" class="dash"/>
+  <path d="M 500 420 L 500 355" class="dash"/>
+  <text x="555" y="392" class="tiny">override 同时给 final mixture</text>
+  <path d="M 500 525 C 590 600 680 420 750 320" class="dash"/>
+  <text x="605" y="612" class="tiny">override 也给 adapter posterior features</text>
+  <path d="M 1010 528 L 1065 455" class="arrow"/>
+  <path d="M 605 325 C 835 410 1030 380 1065 425" class="thin"/>
+  <text x="890" y="425" text-anchor="middle" class="tiny">eval 时保留 learned router diagnostics</text>
+</svg>

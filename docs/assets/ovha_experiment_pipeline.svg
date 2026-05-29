@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1250" height="720" viewBox="0 0 1250 720" role="img" aria-labelledby="title desc">
+  <title id="title">OVHA 实验与公共数据流程图</title>
+  <desc id="desc">展示 controlled-v2 机制实验、公共 benchmark smoke、PDEBench mini 和 Phase 2 scientific go 的递进关系。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 12 6 L 0 12 z" fill="#111111"/>
+    </marker>
+    <style>
+      .title { font: 700 28px Arial, Helvetica, sans-serif; fill: #111111; }
+      .label { font: 700 18px Arial, Helvetica, sans-serif; fill: #111111; }
+      .small { font: 400 15px Arial, Helvetica, sans-serif; fill: #222222; }
+      .tiny { font: 400 13px Arial, Helvetica, sans-serif; fill: #444444; }
+      .box { stroke: #111111; stroke-width: 3; rx: 12; ry: 12; }
+      .inner { stroke: #111111; stroke-width: 2.1; rx: 9; ry: 9; }
+      .arrow { stroke: #111111; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #111111; stroke-width: 2.2; fill: none; marker-end: url(#arrow); stroke-dasharray: 8 6; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1250" height="720" fill="#ffffff"/>
+  <text x="625" y="48" text-anchor="middle" class="title">实验路线：先证明机制，再证明真实公共数据有效</text>
+
+  <rect x="70" y="105" width="255" height="210" class="box" fill="#dff1dd"/>
+  <text x="197" y="140" text-anchor="middle" class="label">Controlled-v2 Synthetic</text>
+  <text x="197" y="175" text-anchor="middle" class="small">有 hidden truth</text>
+  <text x="197" y="202" text-anchor="middle" class="small">可算 oracle diagnostics</text>
+  <rect x="98" y="230" width="199" height="55" class="inner" fill="#ffffff"/>
+  <text x="197" y="253" text-anchor="middle" class="tiny">router / adapter / memory</text>
+  <text x="197" y="273" text-anchor="middle" class="tiny">逐项定位是否真的工作</text>
+
+  <rect x="420" y="105" width="255" height="210" class="box" fill="#f3f0cf"/>
+  <text x="548" y="140" text-anchor="middle" class="label">Train + Eval</text>
+  <text x="548" y="175" text-anchor="middle" class="small">checkpoint 必须加载</text>
+  <text x="548" y="202" text-anchor="middle" class="small">episode/hash 固定可审计</text>
+  <rect x="448" y="230" width="199" height="55" class="inner" fill="#ffffff"/>
+  <text x="548" y="253" text-anchor="middle" class="tiny">learned/true router</text>
+  <text x="548" y="273" text-anchor="middle" class="tiny">learned/true adapter 四宫格</text>
+
+  <rect x="770" y="105" width="255" height="210" class="box" fill="#e3f6f4"/>
+  <text x="898" y="140" text-anchor="middle" class="label">Protocol Gate</text>
+  <text x="898" y="175" text-anchor="middle" class="small">controlled stress signal</text>
+  <text x="898" y="202" text-anchor="middle" class="small">specialist collapse gate</text>
+  <rect x="798" y="230" width="199" height="55" class="inner" fill="#ffffff"/>
+  <text x="898" y="253" text-anchor="middle" class="tiny">当前最新结果：</text>
+  <text x="898" y="273" text-anchor="middle" class="tiny">Protocol Go</text>
+
+  <rect x="70" y="420" width="255" height="190" class="box" fill="#f7dede"/>
+  <text x="197" y="455" text-anchor="middle" class="label">Raw Public Data</text>
+  <text x="197" y="490" text-anchor="middle" class="small">PDEBench HDF5</text>
+  <text x="197" y="517" text-anchor="middle" class="small">例如 Burgers 1D</text>
+  <text x="197" y="553" text-anchor="middle" class="tiny">下载慢、文件大</text>
+  <text x="197" y="575" text-anchor="middle" class="tiny">先 smoke，不直接全量</text>
+
+  <rect x="420" y="420" width="255" height="190" class="box" fill="#dceaf8"/>
+  <text x="548" y="455" text-anchor="middle" class="label">Public Cache</text>
+  <text x="548" y="490" text-anchor="middle" class="small">train.npz / iid.npz</text>
+  <text x="548" y="517" text-anchor="middle" class="small">input_field / output_field</text>
+  <text x="548" y="544" text-anchor="middle" class="small">coordinates</text>
+  <text x="548" y="575" text-anchor="middle" class="tiny">不在线下载，不 silent fallback</text>
+
+  <rect x="770" y="420" width="255" height="190" class="box" fill="#eee8ff"/>
+  <text x="898" y="455" text-anchor="middle" class="label">Public Smoke / Mini</text>
+  <text x="898" y="490" text-anchor="middle" class="small">Burgers smoke</text>
+  <text x="898" y="517" text-anchor="middle" class="small">再扩 PDEBench mini</text>
+  <text x="898" y="544" text-anchor="middle" class="small">iid / holdout / resolution</text>
+  <text x="898" y="575" text-anchor="middle" class="tiny">通过后才谈 Phase 2 scientific Go</text>
+
+  <rect x="1070" y="255" width="125" height="205" class="box" fill="#ffffff"/>
+  <text x="1132" y="295" text-anchor="middle" class="label">边界</text>
+  <text x="1132" y="330" text-anchor="middle" class="tiny">controlled</text>
+  <text x="1132" y="350" text-anchor="middle" class="tiny">不是最终证明</text>
+  <text x="1132" y="390" text-anchor="middle" class="tiny">public</text>
+  <text x="1132" y="410" text-anchor="middle" class="tiny">才是外部验证</text>
+
+  <path d="M 325 210 L 420 210" class="arrow"/>
+  <path d="M 675 210 L 770 210" class="arrow"/>
+  <path d="M 898 315 C 930 360 910 385 898 420" class="dash"/>
+  <path d="M 325 515 L 420 515" class="arrow"/>
+  <path d="M 675 515 L 770 515" class="arrow"/>
+  <path d="M 1025 210 C 1070 230 1075 255 1070 315" class="dash"/>
+  <path d="M 1025 515 C 1060 500 1075 470 1070 410" class="dash"/>
+</svg>
