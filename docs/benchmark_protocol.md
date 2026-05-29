@@ -1,5 +1,13 @@
 # OVHA Benchmark Protocol
 
+## Method Boundary
+
+OVHA is not a PDEBench-only, PINN-only, FNO-only, DeepONet-only or electromagnetic-simulation-specific project. PDEBench, DeepONet, FNO, PINN, physical fields, electromagnetic simulation, CV and other domains are staged validation surfaces or explanatory examples, not the research boundary.
+
+The method-level objective is a multimodal and cross-modal operator-learning methodology built around Operator-Valued Attention, implemented through a Hyper-Operator Transformer and an Operator Memory Transformer. The key mechanisms are primitive routing, operator-specific memory, hyper-adapter parameter generation and interpretable operator decomposition.
+
+Benchmark reports must therefore describe controlled-v2 and PDEBench as mechanism/external-validity evidence, not as the definition of the project. The long-term target is a transferable operator-valued attention framework for continuous fields, images, text, audio and cross-modal token spaces.
+
 ## Evidence Roles
 
 Synthetic controlled data is for mechanism identification, not final evidence. It can show whether the router, memory and hyper-adapter respond to known hidden structure, because the generator can emit `true_component_weight_by_q` as an offline diagnostic.

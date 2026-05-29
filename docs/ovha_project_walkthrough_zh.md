@@ -5,6 +5,27 @@
 
 ---
 
+## 0. 长期总目标：不要把 OVHA 收缩成某个 benchmark 项目
+
+项目长期目标见独立文档：
+
+```text
+docs/ovha_project_objective_zh.md
+```
+
+必须先明确一点：OVHA 不是 PDEBench-only、PINN-only、FNO-only、DeepONet-only 或电磁仿真专用项目。PDEBench、DeepONet、FNO、PINN、物理场、电磁仿真、CV 等都只是阶段性验证场景或解释例子，不是研究边界。
+
+OVHA 的核心目标是形成一种面向多模态/跨模态泛化的通用 operator-valued attention 框架：
+
+- 理论核心：**Operator-Valued Attention**
+- 实现框架：**Hyper-Operator Transformer**
+- 上下文机制：**Operator Memory Transformer**
+- 关键机制：**primitive routing**、**operator-specific memory**、**hyper-adapter 参数生成**、**可解释 operator decomposition**
+
+所以后文提到 PDEBench、controlled-v2、Burgers、DeepONet/FNO/PINN 对比时，都应理解为“验证场景”，不是项目最终定义。当前阶段先用 controlled-v2 证明机制，再用 PDEBench smoke/mini 做外部验证；最终目标是迁移到连续场、图像、文本、音频、跨模态 token 等不同数据形态。
+
+---
+
 ## 1. 这个项目到底想做什么
 
 这个项目的目标不是简单训练一个普通神经网络，而是训练一个“看几个示例就能理解当前算子”的模型。
