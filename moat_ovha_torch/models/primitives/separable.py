@@ -5,6 +5,7 @@ import math
 import torch
 from torch import nn
 
+from moat_ovha_torch.models.coordinate_features import coordinate_scalar
 from moat_ovha_torch.models.primitives.base import PrimitiveParams, apply_film, expand_grid
 
 
@@ -25,26 +26,28 @@ class SeparableBasisPrimitive(nn.Module):
         memory: torch.Tensor | None = None,
     ) -> torch.Tensor:
         grid = expand_grid(support_grid, target_u.shape[0])
+        grid_features = coordinate_scalar(grid)
+        target_q_features = coordinate_scalar(target_q)
         branches = [
             target_u.mean(dim=1),
-            (target_u * grid).mean(dim=1),
-            (target_u * torch.sin(math.pi * grid)).mean(dim=1),
-            (target_u * torch.cos(2.0 * math.pi * grid)).mean(dim=1),
+            (target_u * grid_features).mean(dim=1),
+            (target_u * torch.sin(math.pi * grid_features)).mean(dim=1),
+            (target_u * torch.cos(2.0 * math.pi * grid_features)).mean(dim=1),
         ]
         next_frequency = 3.0
         while len(branches) < self.rank:
-            branches.append((target_u * torch.cos(math.pi * next_frequency * grid)).mean(dim=1))
+            branches.append((target_u * torch.cos(math.pi * next_frequency * grid_features)).mean(dim=1))
             next_frequency += 1.0
         branch = torch.stack(branches[: self.rank], dim=-1)
         trunks = [
-            torch.ones_like(target_q),
-            target_q,
-            torch.sin(math.pi * target_q),
-            torch.cos(2.0 * math.pi * target_q),
+            torch.ones_like(target_q_features),
+            target_q_features,
+            torch.sin(math.pi * target_q_features),
+            torch.cos(2.0 * math.pi * target_q_features),
         ]
         next_frequency = 3.0
         while len(trunks) < self.rank:
-            trunks.append(torch.cos(math.pi * next_frequency * target_q))
+            trunks.append(torch.cos(math.pi * next_frequency * target_q_features))
             next_frequency += 1.0
         trunk = torch.stack(trunks[: self.rank], dim=-1)
         if params is not None and params.separable_rank_logits is not None:

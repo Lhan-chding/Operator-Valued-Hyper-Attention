@@ -7,6 +7,7 @@ import torch
 from torch import nn
 
 from moat_ovha_torch.data.episodes import MetaOperatorBatch
+from moat_ovha_torch.models.coordinate_features import coordinate_scalar
 
 
 PRIMITIVE_EVIDENCE_ORDER = ("spectral", "local", "separable")
@@ -103,8 +104,8 @@ def primitive_candidate_outputs(context_u: torch.Tensor, support_grid: torch.Ten
     if support_grid.shape[0] == 1:
         support_grid = support_grid.expand(context_u.shape[0], -1, -1)
     u = context_u.unsqueeze(2)
-    q = context_q.unsqueeze(3)
-    grid = support_grid[:, None, None, :, :]
+    q = coordinate_scalar(context_q).unsqueeze(3)
+    grid = coordinate_scalar(support_grid)[:, None, None, :, :]
 
     spectral = []
     for mode in range(1, 5):
@@ -112,12 +113,16 @@ def primitive_candidate_outputs(context_u: torch.Tensor, support_grid: torch.Ten
         spectral.append((kernel * u).mean(dim=-2))
 
     local = []
+    full_grid = support_grid[:, None, None, :, :]
+    full_q = context_q.unsqueeze(3)
     for lengthscale in (0.08, 0.12, 0.16, 0.20):
-        kernel = torch.exp(-((q - grid) ** 2) / (2.0 * lengthscale**2))
+        distance = (full_q - full_grid).square().sum(dim=-1, keepdim=True)
+        kernel = torch.exp(-(distance) / (2.0 * lengthscale**2))
         kernel = kernel / kernel.sum(dim=-2, keepdim=True).clamp_min(1e-6)
         local.append((kernel * u).sum(dim=-2))
 
-    branch_grid = support_grid[:, None, :, :]
+    branch_grid = coordinate_scalar(support_grid)[:, None, :, :]
+    context_q_features = coordinate_scalar(context_q)
     separable_branches = [
         context_u.mean(dim=2, keepdim=True),
         (context_u * branch_grid).mean(dim=2, keepdim=True),
@@ -125,10 +130,10 @@ def primitive_candidate_outputs(context_u: torch.Tensor, support_grid: torch.Ten
         (context_u * torch.cos(2.0 * math.pi * branch_grid)).mean(dim=2, keepdim=True),
     ]
     separable_trunks = [
-        torch.ones_like(context_q),
-        context_q,
-        torch.sin(math.pi * context_q),
-        torch.cos(2.0 * math.pi * context_q),
+        torch.ones_like(context_q_features),
+        context_q_features,
+        torch.sin(math.pi * context_q_features),
+        torch.cos(2.0 * math.pi * context_q_features),
     ]
     separable = [branch.expand(-1, -1, context_q.shape[2], -1) * trunk for branch, trunk in zip(separable_branches, separable_trunks)]
 

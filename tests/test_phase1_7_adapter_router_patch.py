@@ -433,6 +433,26 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
                 self.assertEqual(tuple(output.y_hat.shape), (2, 5, 1))
                 self.assertTrue(torch.isfinite(output.y_hat).all())
 
+    def test_public_2d_coordinate_batches_keep_fixed_model_shapes(self):
+        import torch
+
+        from moat_ovha_torch.models.baselines import build_model
+
+        batch = _two_dim_operator_batch(torch)
+        for model_name in (
+            "ovha_full",
+            "transformer_only",
+            "simple_stack",
+            "ovha_no_query_router",
+            "ovha_no_hyper_adapter",
+        ):
+            with self.subTest(model=model_name):
+                model = build_model(model_name, d_model=16, memory_tokens=2)
+                output = model(batch)
+
+                self.assertEqual(tuple(output.y_hat.shape), (2, 6, 1))
+                self.assertTrue(torch.isfinite(output.y_hat).all())
+
     def test_oracle_metrics_include_router_adapter_matrix_and_adapter_stats(self):
         from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
         from moat_ovha_torch.eval.oracle_metrics import controlled_oracle_metrics
@@ -479,6 +499,41 @@ def _relative_mse(prediction, target):
     numerator = (prediction - target).square().mean()
     denominator = target.square().mean().clamp_min(1e-8)
     return numerator / denominator
+
+
+def _two_dim_operator_batch(torch):
+    from moat_ovha_torch.data.episodes import MetaOperatorBatch
+
+    coordinates = torch.cartesian_prod(torch.linspace(0.0, 1.0, 4), torch.linspace(0.0, 1.0, 4))
+    support_grid = coordinates.unsqueeze(0)
+
+    def field(coords):
+        return torch.sin(torch.pi * coords[..., 0:1]) + 0.5 * torch.cos(torch.pi * coords[..., 1:2])
+
+    base = field(coordinates).view(1, 1, 16, 1)
+    batch_offsets = torch.tensor([0.0, 0.1]).view(2, 1, 1, 1)
+    demo_offsets = torch.tensor([0.0, -0.05]).view(1, 2, 1, 1)
+    context_u = base.expand(2, 2, -1, -1) + batch_offsets + demo_offsets
+    target_u = context_u[:, 0]
+
+    context_indices = torch.tensor([0, 5, 10, 15])
+    target_indices = torch.tensor([1, 3, 6, 8, 11, 14])
+    context_q = support_grid[:, None, context_indices, :].expand(2, 2, -1, -1)
+    target_q = support_grid[:, target_indices, :].expand(2, -1, -1)
+    context_y = field(context_q) + batch_offsets[:, :, :1, :] + demo_offsets[:, :, :1, :]
+    target_y = field(target_q) + batch_offsets[:, 0, :1, :]
+
+    return MetaOperatorBatch(
+        context_u=context_u,
+        context_q=context_q,
+        context_y=context_y,
+        target_u=target_u,
+        target_q=target_q,
+        target_y=target_y,
+        support_grid=support_grid,
+        context_mask=torch.ones(2, 2, 4, dtype=torch.bool),
+        target_mask=torch.ones(2, 6, dtype=torch.bool),
+    )
 
 
 def _evidence_bank(torch, batch_size):

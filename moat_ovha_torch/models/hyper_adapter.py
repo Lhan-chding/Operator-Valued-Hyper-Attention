@@ -5,6 +5,7 @@ from typing import Mapping
 import torch
 from torch import nn
 
+from moat_ovha_torch.models.coordinate_features import coordinate_scalar
 from moat_ovha_torch.models.evidence import EvidenceBank
 from moat_ovha_torch.models.memory import primitive_memory, safe_module_name
 from moat_ovha_torch.models.primitives.base import PrimitiveParams
@@ -126,7 +127,8 @@ class HyperAdapter(nn.Module):
         global_features = torch.cat([pooled, posterior.mean(dim=1), entropy.mean(dim=1), evidence_features], dim=-1)
         repeated = pooled.unsqueeze(1).expand(-1, target_q.shape[1], -1)
         query_evidence = evidence_features.unsqueeze(1).expand(-1, target_q.shape[1], -1)
-        query_features = torch.cat([repeated, target_q, posterior, entropy, query_evidence], dim=-1)
+        target_q_features = coordinate_scalar(target_q)
+        query_features = torch.cat([repeated, target_q_features, posterior, entropy, query_evidence], dim=-1)
         key = safe_module_name(primitive_name)
         global_raw = self.global_heads[key](global_features).expand(-1, target_q.shape[1], -1)
         query_raw = self.query_heads[key](query_features)

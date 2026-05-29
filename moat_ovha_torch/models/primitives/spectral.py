@@ -5,6 +5,7 @@ import math
 import torch
 from torch import nn
 
+from moat_ovha_torch.models.coordinate_features import coordinate_scalar
 from moat_ovha_torch.models.primitives.base import PrimitiveParams, apply_film, expand_grid
 
 
@@ -25,8 +26,8 @@ class SpectralIntegralPrimitive(nn.Module):
         memory: torch.Tensor | None = None,
     ) -> torch.Tensor:
         grid = expand_grid(support_grid, target_u.shape[0])
-        q = target_q.unsqueeze(-2)
-        s = grid.unsqueeze(1)
+        q = coordinate_scalar(target_q).unsqueeze(-2)
+        s = coordinate_scalar(grid).unsqueeze(1)
         outputs = []
         for index in range(1, self.modes + 1):
             frequency = index

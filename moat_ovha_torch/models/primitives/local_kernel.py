@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from moat_ovha_torch.models.coordinate_features import squared_coordinate_distance
 from moat_ovha_torch.models.primitives.base import PrimitiveParams, apply_film, expand_grid
 
 
@@ -32,7 +33,8 @@ class LocalKernelPrimitive(nn.Module):
             shift = params.local_shift.unsqueeze(-2)
         elif params is not None and params.kernel_params and "shift" in params.kernel_params:
             shift = params.kernel_params["shift"].unsqueeze(-2)
-        kernel = torch.exp(-((target_q.unsqueeze(-2) - grid.unsqueeze(1) - shift) ** 2) / (2.0 * lengthscale**2))
+        distance = squared_coordinate_distance(target_q, grid, shift)
+        kernel = torch.exp(-distance / (2.0 * lengthscale**2))
         kernel = kernel / kernel.sum(dim=-2, keepdim=True).clamp_min(1e-6)
         value = (kernel * target_u.unsqueeze(1)).sum(dim=-2)
         return apply_film(value, params)

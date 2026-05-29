@@ -6,6 +6,7 @@ import math
 import torch
 from torch import nn
 
+from moat_ovha_torch.models.coordinate_features import coordinate_scalar
 from moat_ovha_torch.models.memory import primitive_memory
 
 
@@ -47,7 +48,8 @@ class PrimitiveRouter(nn.Module):
         context_prior_logits = self.context_prior(primitive_features).squeeze(-1)
         if self.query_conditioned:
             repeated_features = primitive_features[:, None, :, :].expand(-1, target_q.shape[1], -1, -1)
-            repeated_q = target_q[:, :, None, :].expand(-1, -1, len(self.primitive_names), -1)
+            target_q_features = coordinate_scalar(target_q)
+            repeated_q = target_q_features[:, :, None, :].expand(-1, -1, len(self.primitive_names), -1)
             query_features = torch.cat([repeated_features, repeated_q], dim=-1)
             raw_query_residual_logits = self.query_residual(query_features).squeeze(-1)
             gate = _context_uncertainty_gate(context_prior_logits).view(target_q.shape[0], 1, 1)

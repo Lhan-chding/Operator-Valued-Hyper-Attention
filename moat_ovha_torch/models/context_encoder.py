@@ -4,6 +4,7 @@ import torch
 from torch import nn
 
 from moat_ovha_torch.data.episodes import MetaOperatorBatch
+from moat_ovha_torch.models.coordinate_features import coordinate_scalar
 from moat_ovha_torch.models.evidence import EvidenceBank, PrimitiveEvidenceEncoder, primitive_candidate_outputs
 
 
@@ -33,7 +34,8 @@ class ContextTokenEncoder(nn.Module):
         support_grid = batch.support_grid
         if support_grid.shape[0] == 1:
             support_grid = support_grid.expand(context_u.shape[0], -1, -1)
-        grid = support_grid[:, None, :, :]
+        grid = coordinate_scalar(support_grid)[:, None, :, :]
+        context_q_features = coordinate_scalar(context_q)
         u_mean = context_u.mean(dim=2, keepdim=True)
         u_std = context_u.std(dim=2, keepdim=True, unbiased=False)
         u_energy = (context_u**2).mean(dim=2, keepdim=True)
@@ -50,7 +52,7 @@ class ContextTokenEncoder(nn.Module):
             dim=-1,
         )
         residuals = context_y - candidates
-        features = torch.cat([summary, context_q, context_y, candidates, residuals, evidence.point_features], dim=-1)
+        features = torch.cat([summary, context_q_features, context_y, candidates, residuals, evidence.point_features], dim=-1)
         return self.net(features), evidence
 
 
