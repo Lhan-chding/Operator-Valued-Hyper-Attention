@@ -47,6 +47,44 @@ The adapter may sample uniformly, stratified, boundary-focused or randomly. Eval
 
 Dataset labels, PDE parameters, boundary IDs and hidden latents are forbidden as metadata-free model inputs. They may appear only in oracle diagnostics or offline reports.
 
+## Public Cache Format
+
+Public benchmark training/eval reads local cache files only. It does not download raw benchmark archives and it must not silently fall back to synthetic data when a public cache is configured.
+
+Set either `public_data_root` in the config or `OVHA_PUBLIC_BENCHMARK_ROOT` in the shell. The reader looks for per-family split files under one of:
+
+```text
+<public_data_root>/<family>/<split>.npz
+<public_data_root>/<dataset>/<family>/<split>.npz
+<public_data_root>/<dataset>/<split>.npz
+```
+
+Supported suffixes are `.npz`, `.npy`, `.h5` and `.hdf5`. The preferred cache schema is:
+
+| Key | Shape | Meaning |
+|---|---|---|
+| `input_field` | `[samples, points, channels]` or flattenable grid | input/operator condition field |
+| `output_field` | `[samples, points, channels]` or flattenable grid | target solution/response field |
+| `coordinates` | `[points, coord_dim]` | query coordinates for the flattened field |
+| `operator_group_id` | `[samples]`, optional | groups samples that share an operator for few-shot demos |
+
+Accepted aliases include `u`/`input`/`inputs` for `input_field`, `y`/`output`/`solution` for `output_field`, and `coords`/`grid` for `coordinates`.
+
+For the first public pilot, prepare at least:
+
+```text
+data/public_benchmark_cache/pdebench_burgers_1d/train.npz
+data/public_benchmark_cache/pdebench_burgers_1d/iid.npz
+data/public_benchmark_cache/pdebench_advection_1d/train.npz
+data/public_benchmark_cache/pdebench_advection_1d/iid.npz
+data/public_benchmark_cache/pdebench_darcy_2d/train.npz
+data/public_benchmark_cache/pdebench_darcy_2d/iid.npz
+data/public_benchmark_cache/pdebench_shallow_water_2d/train.npz
+data/public_benchmark_cache/pdebench_shallow_water_2d/iid.npz
+```
+
+Additional split files such as `parameter_holdout.npz`, `resolution_transfer.npz`, `sparse_context.npz` and `confusable_context.npz` should be added before treating those rows as scientific evidence. If a split is aliased to `test`/`val`/`iid`, report that source split explicitly.
+
 The same episode contract should later cover non-PDE modalities:
 
 - image-to-field or image-to-density prediction: `u` is an image or latent field, `q` is a pixel/point/query coordinate, `y` is dense output

@@ -336,8 +336,9 @@ class Phase16BenchmarkProtocolTorchTests(unittest.TestCase):
 
             train_rows = [json.loads(line) for line in (config.output_dir / "train_metrics" / "ovha_full" / "seed_19.jsonl").read_text().splitlines()]
             eval_rows = [json.loads(line) for line in metrics_path.read_text().splitlines()]
+            checkpoint_exists = checkpoint.exists()
 
-        self.assertTrue(checkpoint.exists())
+        self.assertTrue(checkpoint_exists)
         self.assertEqual(train_rows[0]["family"], "pdebench_burgers_1d")
         self.assertEqual(train_rows[0]["dataset"], "pdebench_burgers_1d")
         self.assertEqual(eval_rows[0]["family"], "pdebench_burgers_1d")

@@ -74,6 +74,8 @@ class Phase15Config:
     freeze_router: bool = False
     seeds: tuple[int, ...] = ()
     datasets: tuple[str, ...] = ()
+    public_data_root: Optional[Path] = None
+    public_context_sampling: str = "stratified"
     top_k: Optional[int] = None
     allow_metadata_inputs: bool = False
 
@@ -87,6 +89,8 @@ class Phase15Config:
         values = dict(raw)
         if "output_dir" in values:
             values["output_dir"] = Path(values["output_dir"])
+        if values.get("public_data_root") is not None:
+            values["public_data_root"] = Path(values["public_data_root"])
         for key in ("eval_splits", "families", "models", "train_models", "seeds", "datasets"):
             if key in values:
                 values[key] = tuple(values[key])
@@ -110,6 +114,8 @@ class Phase15Config:
     def to_jsonable(self) -> dict[str, Any]:
         values = asdict(self)
         values["output_dir"] = str(self.output_dir)
+        if self.public_data_root is not None:
+            values["public_data_root"] = str(self.public_data_root)
         return values
 
     def config_hash(self) -> str:

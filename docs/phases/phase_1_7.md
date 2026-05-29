@@ -136,7 +136,19 @@ Do not start PDEBench-mini, Mechanical-MNIST-mini, OpenFWI-mini or any larger pu
 - `ovha_full` wins on `hyper_parameter_family` over `ovha_no_hyper_adapter`.
 - `same_target_counterfactual` fails for target-only/no-memory and succeeds for full.
 
-At this stage no public dataset download and no external pretrained model download is required. Public data remains blocked until G0/G1/G2/G3 and the iid-only controlled sanity gate are interpretable.
+The 2026-05-29 `controlled_v2_sanity_context_gated_gpu4` run cleared this protocol gate with all single-primitive collapse rows passing and both compositional rows retaining positive component signal. The next step is a local-cache public pilot, not more controlled-v2 tuning. Public raw archives still need to be downloaded/converted on the server into the cache format in `docs/benchmark_protocol.md`; the training/eval path now fails clearly if the configured public cache is missing.
+
+Start with the smallest real-data smoke config before the multi-family public mini:
+
+```bash
+CUDA_VISIBLE_DEVICES=4 \
+OVHA_PUBLIC_BENCHMARK_ROOT=data/public_benchmark_cache \
+bash scripts/run_phase1_6_gpu_public_pilot.sh \
+  configs/phase1_7_public_pdebench_iid_smoke.json \
+  outputs/phase1_7/public_pdebench_iid_smoke_gpu4
+```
+
+Only move to `configs/phase1_7_public_pdebench_mini.json` after the smoke run proves the public cache is being read (`dataset` and `source_split` populated in train/eval JSONL).
 
 ## Next Gate
 

@@ -50,12 +50,12 @@ def save_training_checkpoint(model: Any, config: Phase15Config, model_name: str)
     return path
 
 
-def load_checkpoint_for_eval(model: Any, checkpoint: Path, strict: bool = True) -> dict[str, Any]:
+def load_checkpoint_for_eval(model: Any, checkpoint: Path, strict: bool = True, map_location: Any = "cpu") -> dict[str, Any]:
     torch = require_torch()
     checkpoint = Path(checkpoint)
     if not checkpoint.exists():
         raise FileNotFoundError(f"required evaluation checkpoint not found: {checkpoint}")
-    payload = torch.load(checkpoint, map_location="cpu")
+    payload = torch.load(checkpoint, map_location=map_location)
     state_dict = payload.get("model_state_dict", payload.get("model"))
     if state_dict is None:
         raise KeyError(f"checkpoint has no model_state_dict: {checkpoint}")

@@ -8,7 +8,7 @@ from typing import Any
 
 from moat_ovha_torch.config import Phase15Config
 from moat_ovha_torch.data.episodes import MetaOperatorBatch, hash_context, hash_model_inputs, hash_target
-from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
+from moat_ovha_torch.data.public_episode_source import build_episode_source
 from moat_ovha_torch.eval.diagnostics import primitive_load
 from moat_ovha_torch.eval.oracle_metrics import controlled_oracle_metrics
 from moat_ovha_torch.models.baselines import build_model
@@ -31,7 +31,7 @@ def run_evaluation(config: Phase15Config) -> Path:
     output_dir = config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     write_environment(output_dir, config.device, config.config_hash())
-    zoo = MetadataFreeOperatorZoo(seed=eval_seed)
+    episode_source = build_episode_source(config, eval_seed)
     metrics_path = output_dir / "eval_metrics.jsonl"
     legacy_diagnostics_path = output_dir / "diagnostics.jsonl"
     rows = []
@@ -47,18 +47,18 @@ def run_evaluation(config: Phase15Config) -> Path:
             top_k=config.top_k,
             controlled_generator_variant=config.controlled_generator_variant,
         )
+        model = model.to(config.device)
         ckpt = checkpoint_path(output_dir, model_name, config.seed)
         checkpoint_payload = None
         checkpoint_loaded = False
         if ckpt.exists():
-            checkpoint_payload = load_checkpoint_for_eval(model, ckpt, strict=True)
+            checkpoint_payload = load_checkpoint_for_eval(model, ckpt, strict=True, map_location=config.device)
             if checkpoint_payload.get("model_name") not in {None, model_name}:
                 raise ValueError(f"checkpoint model_name mismatch for {ckpt}: {checkpoint_payload.get('model_name')}")
             checkpoint_loaded = True
         elif config.require_checkpoint:
             raise FileNotFoundError(f"required evaluation checkpoint not found for {model_name}: {ckpt}")
 
-        model = model.to(config.device)
         model.eval()
         params = parameter_count(model)
         model_rows: list[dict[str, object]] = []
@@ -78,7 +78,7 @@ def run_evaluation(config: Phase15Config) -> Path:
                 for episode_offset in range(config.eval_episode_count):
                     episode_id = config.eval_episode_base + episode_offset
                     with torch.no_grad():
-                        batch, hidden = zoo.sample_batch(
+                        batch, hidden = episode_source.sample_batch(
                             batch_size=config.batch_size,
                             num_demos=config.num_demos,
                             context_points=config.context_points,
@@ -92,6 +92,7 @@ def run_evaluation(config: Phase15Config) -> Path:
                             episode_id=episode_id,
                             controlled_generator_variant=config.controlled_generator_variant,
                         )
+                        hints = getattr(hidden, "oracle_hints", None) or {}
                         output = model(batch)
                         rel = relative_l2(output.y_hat, batch.target_y)
                         oracle_metrics = controlled_oracle_metrics(output, batch.target_y, hidden, primitive_names, batch=batch)
@@ -100,6 +101,9 @@ def run_evaluation(config: Phase15Config) -> Path:
                             "episode_id": episode_id,
                             "split": split,
                             "family": hidden.family,
+                            "dataset": hints.get("dataset"),
+                            "source_split": hints.get("source_split"),
+                            "public_benchmark": bool(hints.get("public_benchmark", False)),
                             "model": model_name,
                             "model_name": model_name,
                             "mse": float(((output.y_hat - batch.target_y) ** 2).mean().detach().cpu()),

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from moat_ovha_torch.config import Phase15Config
 from moat_ovha_torch.data.episodes import hash_context, hash_model_inputs, hash_target
-from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
+from moat_ovha_torch.data.public_episode_source import build_episode_source
 from moat_ovha_torch.models.baselines import build_model
 from moat_ovha_torch.runtime import require_torch, write_environment
 from moat_ovha_torch.train.checkpoints import parameter_count, save_training_checkpoint, train_metrics_path
@@ -35,7 +35,7 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
     output_dir = config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     write_environment(output_dir, config.device, config.config_hash())
-    zoo = MetadataFreeOperatorZoo(seed=config.seed)
+    episode_source = build_episode_source(config, config.seed)
     model = build_model(
         model_name,
         d_model=config.d_model,
@@ -63,7 +63,7 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
     for step in range(1, config.steps + 1):
         family = config.families[(step - 1) % len(config.families)]
         episode_id = config.train_episode_base + step - 1
-        batch, hidden = zoo.sample_batch(
+        batch, hidden = episode_source.sample_batch(
             batch_size=config.batch_size,
             num_demos=config.num_demos,
             context_points=config.context_points,
@@ -76,6 +76,7 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
             episode_id=episode_id,
             controlled_generator_variant=config.controlled_generator_variant,
         )
+        hints = getattr(hidden, "oracle_hints", None) or {}
         primitive_names = _primitive_names(model)
         route_override = _oracle_route_override(step, hidden, primitive_names, config, config.device, torch)
         active_primitive_mask = (
@@ -115,6 +116,9 @@ def run_training_for_model(config: Phase15Config, model_name: str) -> Path:
             "episode_id": episode_id,
             "split": config.train_split,
             "family": hidden.family,
+            "dataset": hints.get("dataset"),
+            "source_split": hints.get("source_split"),
+            "public_benchmark": bool(hints.get("public_benchmark", False)),
             "model": model_name,
             "loss": float(loss.detach().cpu()),
             "prediction_loss": float(pred_loss.detach().cpu()),
