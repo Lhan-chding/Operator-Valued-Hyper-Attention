@@ -51,6 +51,7 @@ class Phase17AdapterRouterStaticContractTests(unittest.TestCase):
 class Phase17AdapterRouterPatchTests(unittest.TestCase):
     def test_router_returns_logits_prior_and_query_residual(self):
         import torch
+        from torch import nn
 
         from moat_ovha_torch.models.router import PrimitiveRouter, RouterOutput
 
@@ -66,6 +67,46 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
         self.assertEqual(tuple(output.context_prior_logits.shape), (2, 3))
         self.assertEqual(tuple(output.query_residual_logits.shape), (2, 5, 3))
         self.assertTrue(torch.allclose(output.weights.sum(dim=-1), torch.ones(2, 5), atol=1e-6))
+
+    def test_router_suppresses_query_residual_when_context_prior_is_confident(self):
+        import torch
+        from torch import nn
+
+        from moat_ovha_torch.models.router import PrimitiveRouter
+
+        class FixedPrior(nn.Module):
+            def __init__(self, logits):
+                super().__init__()
+                self.register_buffer("logits", torch.tensor(logits, dtype=torch.float32))
+
+            def forward(self, features):
+                return self.logits.view(1, -1, 1).expand(features.shape[0], -1, -1)
+
+        class FixedResidual(nn.Module):
+            def __init__(self, logits):
+                super().__init__()
+                self.register_buffer("logits", torch.tensor(logits, dtype=torch.float32))
+
+            def forward(self, features):
+                return self.logits.view(1, 1, -1, 1).expand(features.shape[0], features.shape[1], -1, -1)
+
+        target_q = torch.linspace(0.0, 1.0, 5).view(1, 5, 1)
+        memory = torch.zeros(1, 3, 8)
+        router = PrimitiveRouter(("spectral", "local", "separable"), d_model=8)
+
+        router.context_prior = FixedPrior([20.0, -20.0, -20.0])
+        router.query_residual = FixedResidual([-20.0, 20.0, -20.0])
+        confident = router(memory, target_q)
+
+        self.assertLess(float(confident.query_residual_logits.abs().max()), 1e-3)
+        self.assertGreater(float(confident.weights[..., 0].min()), 0.99)
+
+        router.context_prior = FixedPrior([0.0, 0.0, 0.0])
+        router.query_residual = FixedResidual([-20.0, 20.0, -20.0])
+        uncertain = router(memory, target_q)
+
+        self.assertGreater(float(uncertain.query_residual_logits[..., 1].mean()), 10.0)
+        self.assertGreater(float(uncertain.weights[..., 1].min()), 0.99)
 
     def test_hyper_adapter_globalizes_model_aligned_operator_params(self):
         import torch
@@ -424,6 +465,8 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
             "adapter_spectral_mode_true_kl",
             "adapter_separable_rank_true_kl",
             "adapter_local_lengthscale_log_mae",
+            "adapter_local_scale_mae",
+            "adapter_local_bias_mae",
         ):
             with self.subTest(key=key):
                 self.assertIn(key, metrics)
