@@ -1,0 +1,33 @@
+{
+  "seed": 81,
+  "seeds": [81, 82, 83],
+  "output_dir": "outputs/phase1_7/public_pdebench_overnight_core",
+  "public_data_root": "data/public_benchmark_cache",
+  "public_context_sampling": "stratified",
+  "device": "cuda",
+  "steps": 10000,
+  "batch_size": 12,
+  "support_points": 128,
+  "query_points": 192,
+  "num_demos": 4,
+  "context_points": 96,
+  "d_model": 160,
+  "memory_tokens": 12,
+  "lr": 0.0007,
+  "mode": "operator_transfer",
+  "train_split": "train",
+  "eval_splits": ["iid", "resolution_transfer", "parameter_holdout"],
+  "families": ["pdebench_burgers_1d", "pdebench_advection_1d", "pdebench_darcy_2d"],
+  "datasets": ["pdebench_mini_ovha"],
+  "train_models": [
+    "ovha_full",
+    "transformer_only",
+    "simple_stack",
+    "ovha_no_query_router",
+    "ovha_no_hyper_adapter"
+  ],
+  "eval_models": "same_as_train_models",
+  "require_checkpoint": true,
+  "eval_episode_count": 256,
+  "allow_metadata_inputs": false
+}
