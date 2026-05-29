@@ -288,10 +288,12 @@ def _oracle_route_override(
     device: str,
     torch: object,
 ):
-    if config.oracle_route_warmup_steps <= 0 and config.oracle_route_probability <= 0.0:
+    single_probability = _single_primitive_oracle_probability(hidden, config)
+    if config.oracle_route_warmup_steps <= 0 and config.oracle_route_probability <= 0.0 and single_probability <= 0.0:
         return None
-    if step > config.oracle_route_warmup_steps and config.oracle_route_probability < 1.0:
-        if float(torch.rand((), device=device).detach().cpu()) >= config.oracle_route_probability:
+    probability = max(config.oracle_route_probability, single_probability)
+    if step > config.oracle_route_warmup_steps and probability < 1.0:
+        if float(torch.rand((), device=device).detach().cpu()) >= probability:
             return None
     hints = getattr(hidden, "oracle_hints", None) or {}
     true_weights = hints.get("true_component_weight_by_q")
@@ -306,6 +308,13 @@ def _oracle_route_override(
     target = true_weights.to(device) if hasattr(true_weights, "to") else torch.as_tensor(true_weights, device=device)
     target = target.index_select(-1, torch.tensor(reorder, device=target.device))
     return target / target.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+
+
+def _single_primitive_oracle_probability(hidden: object, config: Phase15Config) -> float:
+    family = str(getattr(hidden, "family", ""))
+    if not family.startswith("single_primitive_"):
+        return 0.0
+    return max(0.0, min(1.0, float(config.oracle_route_single_primitive_probability)))
 
 
 def _router_auxiliary_loss(output: object, hidden: object, primitive_names: tuple[str, ...], device: str):

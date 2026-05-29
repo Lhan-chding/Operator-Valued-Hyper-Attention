@@ -34,7 +34,22 @@ class JointRouterAdapter(nn.Module):
         self,
         memory_bank: torch.Tensor | dict[str, torch.Tensor],
         target_q: torch.Tensor,
+        route_override: torch.Tensor | None = None,
     ) -> tuple[RouterOutput, dict[str, PrimitiveParams]]:
         router_out = self.router(memory_bank, target_q)
-        params = self.hyper_adapter(memory_bank, target_q, router_out=router_out)
+        adapter_router_out = _adapter_router_output(router_out, route_override)
+        params = self.hyper_adapter(memory_bank, target_q, router_out=adapter_router_out)
         return router_out, params
+
+
+def _adapter_router_output(router_out: RouterOutput, route_override: torch.Tensor | None) -> RouterOutput:
+    if route_override is None:
+        return router_out
+    weights = route_override.to(device=router_out.weights.device, dtype=router_out.weights.dtype)
+    weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+    return RouterOutput(
+        weights=weights,
+        logits=weights.clamp_min(1e-8).log(),
+        context_prior_logits=router_out.context_prior_logits,
+        query_residual_logits=router_out.query_residual_logits,
+    )

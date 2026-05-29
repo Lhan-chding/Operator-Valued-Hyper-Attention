@@ -86,7 +86,7 @@ class OVHAMetaOperator(nn.Module):
         if not self.use_memory:
             memory = self.no_memory.unsqueeze(0).expand(tokens.shape[0], -1, -1)
         memory_bank = self.primitive_slot_memory(memory)
-        router_out, params = self.joint_router_adapter(memory_bank, batch.target_q)
+        router_out, params = self.joint_router_adapter(memory_bank, batch.target_q, route_override=route_override)
         if not self.use_hyper_adapter:
             params = {name: None for name in self.primitive_names}
         weights = _prepare_weights(router_out.weights, route_override, active_primitive_mask)

@@ -140,6 +140,7 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
 
         adapter = JointRouterAdapter(("spectral", "local", "separable"), d_model=8)
         memory_bank = {name: torch.zeros(2, 2, 8) for name in adapter.router.primitive_names}
+        memory_bank["global"] = torch.zeros(2, 2, 8)
         target_q = torch.linspace(0.0, 1.0, 5).view(1, 5, 1).repeat(2, 1, 1)
         route_override = torch.zeros(2, 5, 3)
         route_override[..., 2] = 1.0

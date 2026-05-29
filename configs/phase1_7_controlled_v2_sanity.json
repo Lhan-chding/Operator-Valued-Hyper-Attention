@@ -52,6 +52,7 @@
   "router_query_residual_loss_weight": 0.01,
   "oracle_route_warmup_steps": 500,
   "oracle_route_probability": 0.25,
+  "oracle_route_single_primitive_probability": 1.0,
   "train_active_primitive_only": false,
   "freeze_router": false,
   "freeze_adapter": false,

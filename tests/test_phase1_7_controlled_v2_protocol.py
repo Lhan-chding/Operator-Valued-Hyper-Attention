@@ -220,6 +220,53 @@ class Phase17ControlledV2ProtocolTests(unittest.TestCase):
                 reconstructed = (weights.unsqueeze(-1) * model_outputs).sum(dim=-2)
                 self.assertLess(float(relative_l2(reconstructed, batch.target_y).max()), 1e-5)
 
+    def test_single_primitive_oracle_route_override_is_stage_c_protected(self):
+        import torch
+
+        from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
+        from moat_ovha_torch.train.trainer import _oracle_route_override
+
+        zoo = MetadataFreeOperatorZoo(seed=987)
+        config = Phase15Config(
+            oracle_route_warmup_steps=0,
+            oracle_route_probability=0.0,
+            oracle_route_single_primitive_probability=1.0,
+            device="cpu",
+        )
+        primitive_names = ("spectral", "local", "separable")
+        _, single_hidden = zoo.sample_batch(
+            batch_size=2,
+            num_demos=1,
+            context_points=4,
+            support_points=12,
+            query_points=5,
+            family="single_primitive_local",
+            split="iid",
+            mode="operator_transfer",
+            device="cpu",
+            episode_id=31,
+        )
+        single_route = _oracle_route_override(10_000, single_hidden, primitive_names, config, "cpu", torch)
+
+        self.assertIsNotNone(single_route)
+        self.assertTrue(torch.equal(single_route, single_hidden.oracle_hints["true_component_weight_by_q"]))
+
+        _, mixed_hidden = zoo.sample_batch(
+            batch_size=2,
+            num_demos=1,
+            context_points=4,
+            support_points=12,
+            query_points=5,
+            family="context_identifiable_mixture",
+            split="iid",
+            mode="operator_transfer",
+            device="cpu",
+            episode_id=32,
+        )
+        mixed_route = _oracle_route_override(10_000, mixed_hidden, primitive_names, config, "cpu", torch)
+
+        self.assertIsNone(mixed_route)
+
     def test_model_aligned_iid_params_stay_inside_sanity_adapter_domain(self):
         from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
 

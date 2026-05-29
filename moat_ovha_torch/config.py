@@ -67,6 +67,7 @@ class Phase15Config:
     router_query_residual_loss_weight: float = 0.0
     oracle_route_warmup_steps: int = 0
     oracle_route_probability: float = 0.0
+    oracle_route_single_primitive_probability: float = 0.0
     train_active_primitive_only: bool = False
     freeze_adapter: bool = False
     freeze_primitives: bool = False
