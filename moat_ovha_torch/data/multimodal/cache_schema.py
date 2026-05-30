@@ -20,12 +20,20 @@ REQUIRED_DATA_CARD_KEYS = (
 REQUIRED_OPERATOR_SUPERVISION_KEYS = ("TLEO", "SPO", "LRIO", "CATO", "RCEO")
 FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "reason")
 SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "raw_ref", "license_tag")
+SENTIMENT_SAMPLE_RECORD_REQUIRED_KEYS = (
+    "utterance_id",
+    "dialogue_id",
+    "transcript_source",
+    "missing_modality_mask_ref",
+    "corruption_metadata_ref",
+)
 TOKEN_FIELD_MANIFEST_REQUIRED_KEYS = ("x", "pos", "mask")
 GROUNDING_REQUIRED_SUPERVISION_PATTERNS = (
     "alignment_pairs_{split}.parquet",
     "bbox_targets_{split}.npy",
     "region_targets_{split}.npy",
 )
+SENTIMENT_REQUIRED_SUPERVISION_PATTERNS = ("missing_modality_mask_{split}.npy",)
 RCEO_REQUIRED_SUPERVISION_PATTERNS = ("corruption_{split}.parquet",)
 FORBIDDEN_MODEL_INPUT_MODALITIES = frozenset(
     {
@@ -142,7 +150,7 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
     _validate_split_manifest_consistency(layout, splits, errors)
     _validate_feature_parity(layout, data_card, errors)
     _validate_pseudo_label_provenance(layout, splits, errors)
-    _validate_sample_record_manifests(layout, splits, errors)
+    _validate_sample_record_manifests(layout, splits, data_card, errors)
     _validate_failed_sample_manifests(layout, splits, errors)
     _validate_token_field_manifests(layout, splits, data_card, checksums, errors)
     _validate_supervision_artifacts(layout, splits, data_card, checksums, errors)
@@ -533,6 +541,7 @@ def _validate_failed_sample_manifests(
 def _validate_sample_record_manifests(
     layout: MultimodalCacheLayout,
     splits: tuple[str, ...],
+    data_card: dict[str, Any],
     errors: list[str],
 ) -> None:
     for split in splits:
@@ -558,6 +567,7 @@ def _validate_sample_record_manifests(
                 )
             if payload.get("split") != split:
                 errors.append(f"{path.name} line {line_number} split must match {split}")
+            _validate_sentiment_sample_record(layout, split, path.name, line_number, payload, data_card, errors)
             source_id = payload.get("source_id")
             if isinstance(source_id, str) and source_id:
                 if source_id in seen_source_ids:
@@ -590,6 +600,81 @@ def _read_jsonl_objects(path: Path, errors: list[str]) -> list[tuple[int, dict[s
             continue
         records.append((line_number, payload))
     return records
+
+
+def _validate_sentiment_sample_record(
+    layout: MultimodalCacheLayout,
+    split: str,
+    manifest_name: str,
+    line_number: int,
+    payload: dict[str, Any],
+    data_card: dict[str, Any],
+    errors: list[str],
+) -> None:
+    if not _data_card_requires_sentiment_metadata(data_card):
+        return
+    required_keys = list(SENTIMENT_SAMPLE_RECORD_REQUIRED_KEYS)
+    if _speaker_id_available(data_card):
+        required_keys.append("speaker_id")
+    missing = [key for key in required_keys if key not in payload]
+    if missing:
+        for key in missing:
+            errors.append(f"{manifest_name} line {line_number} missing sentiment/emotion metadata keys: {key}")
+    invalid = [
+        key
+        for key in required_keys
+        if key in payload and (not isinstance(payload.get(key), str) or not payload.get(key))
+    ]
+    if invalid:
+        errors.append(
+            f"{manifest_name} line {line_number} sentiment/emotion metadata fields must be non-empty strings: "
+            f"{', '.join(invalid)}"
+        )
+    for key in ("missing_modality_mask_ref", "corruption_metadata_ref"):
+        relative = payload.get(key)
+        if not isinstance(relative, str) or not relative:
+            continue
+        _validate_sample_record_artifact_ref(layout, split, manifest_name, line_number, key, relative, errors)
+
+
+def _data_card_requires_sentiment_metadata(data_card: dict[str, Any]) -> bool:
+    if not isinstance(data_card, dict):
+        return False
+    tasks = data_card.get("tasks", [])
+    return isinstance(tasks, list) and any(_requires_sentiment_supervision(task) for task in tasks)
+
+
+def _speaker_id_available(data_card: dict[str, Any]) -> bool:
+    availability = data_card.get("metadata_availability", {}) if isinstance(data_card, dict) else {}
+    return isinstance(availability, dict) and availability.get("speaker_id") is True
+
+
+def _validate_sample_record_artifact_ref(
+    layout: MultimodalCacheLayout,
+    split: str,
+    manifest_name: str,
+    line_number: int,
+    key: str,
+    relative: str,
+    errors: list[str],
+) -> None:
+    expected_relative = {
+        "missing_modality_mask_ref": f"supervision/missing_modality_mask_{split}.npy",
+        "corruption_metadata_ref": f"supervision/corruption_{split}.parquet",
+    }[key]
+    if relative != expected_relative:
+        errors.append(
+            f"{manifest_name} line {line_number} {key} must reference the current split artifact: {expected_relative}"
+        )
+        return
+    path = (layout.root / relative).resolve()
+    try:
+        path.relative_to(layout.root.resolve())
+    except ValueError:
+        errors.append(f"{manifest_name} line {line_number} {key} must stay within cache root: {relative}")
+        return
+    if not path.exists():
+        errors.append(f"{manifest_name} line {line_number} {key} references missing artifact: {relative}")
 
 
 def _read_source_ids(
@@ -715,6 +800,8 @@ def _required_supervision_artifact_names(data_card: dict[str, Any], split: str) 
     tasks = data_card.get("tasks", [])
     if isinstance(tasks, list) and any(_requires_grounding_supervision(task) for task in tasks):
         required.extend(pattern.format(split=split) for pattern in GROUNDING_REQUIRED_SUPERVISION_PATTERNS)
+    if isinstance(tasks, list) and any(_requires_sentiment_supervision(task) for task in tasks):
+        required.extend(pattern.format(split=split) for pattern in SENTIMENT_REQUIRED_SUPERVISION_PATTERNS)
     operator_supervision = data_card.get("operator_supervision", {})
     if isinstance(operator_supervision, dict) and operator_supervision.get("RCEO"):
         required.extend(pattern.format(split=split) for pattern in RCEO_REQUIRED_SUPERVISION_PATTERNS)
@@ -726,3 +813,10 @@ def _requires_grounding_supervision(task: Any) -> bool:
         return False
     lowered = task.lower()
     return "grounding" in lowered or "phrase_region" in lowered or "region_text" in lowered
+
+
+def _requires_sentiment_supervision(task: Any) -> bool:
+    if not isinstance(task, str):
+        return False
+    lowered = task.lower()
+    return "sentiment" in lowered or "emotion" in lowered or "mosei" in lowered or "meld" in lowered or "iemocap" in lowered

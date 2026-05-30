@@ -82,6 +82,8 @@ Every `provenance/source_ids_<split>.txt` line must already be a non-empty norma
 
 For region-text or phrase-region grounding tasks, formal cache validation requires per-split `alignment_pairs`, `bbox_targets`, and `region_targets` supervision shards. When `RCEO` is declared in `operator_supervision`, formal cache validation also requires a per-split `corruption` supervision shard, even if the shard is an explicit empty/no-corruption artifact. These required supervision artifacts must be covered by `checksums.json`.
 
+For sentiment/emotion tasks, formal cache validation requires every `sample_records_<split>.jsonl` row to preserve `utterance_id`, `dialogue_id`, `transcript_source`, `missing_modality_mask_ref`, and `corruption_metadata_ref`. If `data_card.json.metadata_availability.speaker_id` is true, every row must also preserve `speaker_id`. The referenced missing-modality and corruption artifacts must be split-local cache artifacts, and per-split `missing_modality_mask_<split>.npy` must be present and checksum-covered.
+
 `provenance/pseudo_label_versions.json` must list pseudo-label source splits in `generated_from_splits`. Sources must be auditable split names from `splits.json`, the current validation splits, or the upstream `train` split; `test` and unknown split names are invalid.
 
 Each sample-record manifest row must be a JSON object with `source_id`, `split`, `raw_ref`, and `license_tag`; the row set must match the split's source-id file.
