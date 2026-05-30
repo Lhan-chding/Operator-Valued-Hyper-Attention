@@ -100,6 +100,24 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing required same-feature baselines"):
             MultimodalExperimentConfig.from_mapping(invalid)
 
+    def test_config_parser_rejects_wrong_stage_sequence_for_task(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
+
+        invalid = {
+            "name": "bad_refcoco_stages",
+            "dataset_name": "refcoco",
+            "task_type": "phrase_region_grounding",
+            "seeds": [1, 2, 3],
+            "training_stages": ["T0", "T1", "T5"],
+            "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
+            "baseline_names": list(baseline_names_for_task("phrase_region_grounding")),
+            "eval_episode_count": 16,
+        }
+
+        with self.assertRaisesRegex(ValueError, "training_stages for phrase_region_grounding must be"):
+            MultimodalExperimentConfig.from_mapping(invalid)
+
     def test_config_parser_rejects_external_references_as_same_feature_baselines(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
         from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
