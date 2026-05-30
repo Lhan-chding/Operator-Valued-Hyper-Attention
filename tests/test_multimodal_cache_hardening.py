@@ -26,6 +26,27 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertIn("missing required cache artifact: provenance/failed_samples_train.jsonl", joined)
         self.assertIn("missing required cache artifact: provenance/failed_samples_test.jsonl", joined)
 
+    def test_cache_validator_rejects_missing_sample_provenance_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                include_sample_records=False,
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("missing required cache artifact: provenance/sample_records_train.jsonl", joined)
+        self.assertIn("missing required cache artifact: provenance/sample_records_test.jsonl", joined)
+
     def test_cache_validator_rejects_malformed_failed_sample_manifest_entry(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -365,6 +386,7 @@ def _write_minimal_cache(
     mismatched_features: bool,
     include_failed_manifests: bool = True,
     invalid_failed_manifest: bool = False,
+    include_sample_records: bool = True,
     include_token_manifests: bool = True,
     invalid_token_manifest: bool = False,
     missing_operator_supervision: tuple[str, ...] = (),
@@ -420,6 +442,9 @@ def _write_minimal_cache(
             payload = {"source_id": f"failed-{split}", "split": split} if invalid_failed_manifest and split == "train" else {}
             line = json.dumps(payload, sort_keys=True) + "\n" if payload else ""
             (root / "provenance" / f"failed_samples_{split}.jsonl").write_text(line)
+        if include_sample_records:
+            source_ids = train_ids if split == "train" else test_ids
+            _write_sample_records(root, split, source_ids)
         if include_token_manifests:
             _write_token_field_manifest(
                 root,
@@ -445,6 +470,22 @@ def _write_complete_checksums(root: Path) -> None:
         if path.is_file():
             checksums.setdefault(str(path.relative_to(root)), file_sha256(path))
     (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
+
+
+def _write_sample_records(root: Path, split: str, source_ids: list[str]) -> None:
+    lines = [
+        json.dumps(
+            {
+                "source_id": source_id,
+                "split": split,
+                "raw_ref": f"raw://{source_id}",
+                "license_tag": "test-license",
+            },
+            sort_keys=True,
+        )
+        for source_id in source_ids
+    ]
+    (root / "provenance" / f"sample_records_{split}.jsonl").write_text("\n".join(lines) + "\n")
 
 
 def _write_token_field_manifest(
