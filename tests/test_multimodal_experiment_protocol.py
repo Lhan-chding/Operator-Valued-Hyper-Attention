@@ -192,6 +192,18 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertFalse(region_report.ok)
         self.assertIn("region-text public entry requires CATO collapse", "\n".join(region_report.errors))
 
+        missing_cato_diagnostics = {
+            "go_no_go": {"controlled_multimodal_passed": True},
+            "gate_table": {
+                "Stackability": {"passed": True},
+                "CATO collapse": {"passed": True},
+            },
+        }
+        region_report = validate_public_entry_requirements("phrase_region_grounding", missing_cato_diagnostics)
+
+        self.assertFalse(region_report.ok)
+        self.assertIn("region-text public entry requires CATO alignment diagnostics", "\n".join(region_report.errors))
+
         missing_sentiment_gates = {
             "go_no_go": {"controlled_multimodal_passed": True},
             "gate_table": {
