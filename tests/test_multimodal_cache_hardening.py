@@ -112,6 +112,50 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertIn("data_card.json operator_supervision missing required operator: LRIO", joined)
         self.assertIn("data_card.json operator_supervision missing required operator: RCEO", joined)
 
+    def test_cache_validator_rejects_data_card_dataset_name_mismatch(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                data_card_overrides={"dataset_name": "wrong_dataset"},
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "data_card.json dataset_name must match cache layout: expected refcoco",
+            "\n".join(report.errors),
+        )
+
+    def test_cache_validator_rejects_data_card_cache_version_mismatch(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                data_card_overrides={"cache_version": "v9"},
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "data_card.json cache_version must match cache layout: expected v0.1",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_source_ids_that_disagree_with_splits_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -258,6 +302,7 @@ def _write_minimal_cache(
     include_token_manifests: bool = True,
     invalid_token_manifest: bool = False,
     missing_operator_supervision: tuple[str, ...] = (),
+    data_card_overrides: dict[str, object] | None = None,
 ) -> None:
     for folder in ("provenance", "masks", "positions", "supervision", "token_fields"):
         (root / folder).mkdir(parents=True, exist_ok=True)
@@ -283,6 +328,8 @@ def _write_minimal_cache(
     }
     for operator in missing_operator_supervision:
         data_card["operator_supervision"].pop(operator, None)
+    if data_card_overrides:
+        data_card = {**data_card, **data_card_overrides}
     (root / "data_card.json").write_text(json.dumps(data_card, sort_keys=True) + "\n")
     (root / "splits.json").write_text(json.dumps({"train": train_ids, "test": test_ids}, sort_keys=True) + "\n")
     (root / "samples.parquet").write_text("placeholder manifest\n")
