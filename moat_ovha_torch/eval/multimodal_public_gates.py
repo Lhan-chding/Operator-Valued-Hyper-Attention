@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 
@@ -40,6 +42,10 @@ def evaluate_sentiment_gate(
         "no_rceo_drops": _ablation_drop(statistics_summary, task, split, full_model, ablation_scores.get("ovha_no_rceo"), "no-RCEO"),
         "lrio_router_load_high": _router_load_high(diagnostics_rows, "LRIO", minimum=0.25),
         "spo_router_load_high": _router_load_high(diagnostics_rows, "SPO", minimum=0.20),
+        "lrio_rank_entropy_present": _candidate_diag_positive(diagnostics_rows, "LRIO", "rank_entropy"),
+        "spo_prototype_entropy_present": _candidate_diag_positive(diagnostics_rows, "SPO", "prototype_entropy"),
+        "spo_top_prototype_differentiates": _spo_top_prototype_differentiates(diagnostics_rows),
+        "rceo_reliability_calibrated": _rceo_reliability_calibrated(robustness_summary),
         "robustness_passes": _robustness_passes(robustness_summary),
     }
     return _gate_report("sentiment_emotion_public", checks)
@@ -106,6 +112,71 @@ def _router_load_high(rows: list[dict[str, Any]], candidate: str, minimum: float
         "value": value,
         "threshold": minimum,
         "reason": f"{candidate} router load is not elevated on relevant public samples" if not passed else "",
+    }
+
+
+def _candidate_diag_positive(rows: list[dict[str, Any]], candidate: str, key: str) -> dict[str, Any]:
+    values = [
+        value
+        for row in rows
+        if row.get("setting", "clean") == "clean"
+        for value in [_candidate_diag_value_from_row(row, candidate, key)]
+        if value is not None
+    ]
+    best_value = max(values) if values else None
+    passed = best_value is not None and best_value > 0.0
+    return {
+        "passed": passed,
+        "value": best_value,
+        "reason": f"{candidate} {_display_key(key)} diagnostic missing or non-positive" if not passed else "",
+    }
+
+
+def _spo_top_prototype_differentiates(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    for row in rows:
+        if row.get("setting", "clean") != "clean":
+            continue
+        diagnostics = row.get("candidate_diagnostics", {}) or {}
+        spo = diagnostics.get("SPO", {}) if isinstance(diagnostics, dict) else {}
+        if not isinstance(spo, dict):
+            continue
+        if _top_prototype_map_differentiates(spo.get("top_prototype_by_class")):
+            return {"passed": True, "value": "top_prototype_by_class", "reason": ""}
+        if _prototype_load_map_differentiates(spo.get("prototype_load_by_class")):
+            return {"passed": True, "value": "prototype_load_by_class", "reason": ""}
+    return {
+        "passed": False,
+        "reason": "SPO top prototype differentiation missing or collapsed across emotion classes",
+    }
+
+
+def _rceo_reliability_calibrated(
+    summary: dict[str, Any],
+    *,
+    max_ece: float = 0.10,
+    min_bin_count: int = 3,
+) -> dict[str, Any]:
+    calibration = summary.get("rceo_reliability_calibration")
+    if not isinstance(calibration, dict):
+        return {"passed": False, "reason": "RCEO reliability calibration missing"}
+    ece = _finite_float(calibration.get("ece", calibration.get("expected_calibration_error")))
+    if ece is None:
+        return {"passed": False, "reason": "RCEO reliability calibration missing ECE"}
+    bin_count = _safe_int(calibration.get("bin_count", calibration.get("bins")))
+    if bin_count is None or bin_count < min_bin_count:
+        return {
+            "passed": False,
+            "value": ece,
+            "threshold": max_ece,
+            "reason": f"RCEO reliability calibration requires at least {min_bin_count} bins",
+        }
+    passed = ece <= max_ece
+    return {
+        "passed": passed,
+        "value": ece,
+        "threshold": max_ece,
+        "bin_count": bin_count,
+        "reason": "RCEO reliability calibration ECE exceeds threshold" if not passed else "",
     }
 
 
@@ -187,7 +258,67 @@ def _candidate_diag_value(rows: list[dict[str, Any]], setting: str, candidate: s
     for row in rows:
         if row.get("setting") != setting:
             continue
-        diagnostics = row.get("candidate_diagnostics", {}) or {}
-        if candidate in diagnostics and key in diagnostics[candidate]:
-            return float(diagnostics[candidate][key])
+        value = _candidate_diag_value_from_row(row, candidate, key)
+        if value is not None:
+            return value
     return None
+
+
+def _candidate_diag_value_from_row(row: dict[str, Any], candidate: str, key: str) -> float | None:
+    diagnostics = row.get("candidate_diagnostics", {}) or {}
+    if not isinstance(diagnostics, dict):
+        return None
+    candidate_values = diagnostics.get(candidate)
+    if not isinstance(candidate_values, dict) or key not in candidate_values:
+        return None
+    return _finite_float(candidate_values[key])
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _top_prototype_map_differentiates(value: Any) -> bool:
+    if not isinstance(value, Mapping) or len(value) < 2:
+        return False
+    prototypes = {str(prototype) for prototype in value.values()}
+    return len(prototypes) >= 2
+
+
+def _prototype_load_map_differentiates(value: Any) -> bool:
+    if not isinstance(value, Mapping) or len(value) < 2:
+        return False
+    dominant = {_dominant_prototype(loads) for loads in value.values()}
+    dominant.discard(None)
+    return len(dominant) >= 2
+
+
+def _dominant_prototype(loads: Any) -> str | None:
+    if isinstance(loads, Mapping) and loads:
+        scored = [(str(name), _finite_float(score)) for name, score in loads.items()]
+        valid = [(name, score) for name, score in scored if score is not None]
+        if not valid:
+            return None
+        return max(valid, key=lambda item: item[1])[0]
+    if isinstance(loads, Sequence) and not isinstance(loads, (str, bytes)) and loads:
+        scored = [(str(index), _finite_float(score)) for index, score in enumerate(loads)]
+        valid = [(name, score) for name, score in scored if score is not None]
+        if not valid:
+            return None
+        return max(valid, key=lambda item: item[1])[0]
+    return None
+
+
+def _display_key(key: str) -> str:
+    return key.replace("_", " ")
