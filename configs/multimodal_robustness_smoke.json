@@ -1,0 +1,31 @@
+{
+  "name": "multimodal_robustness_smoke",
+  "dataset_name": "refcoco",
+  "task_type": "phrase_region_grounding",
+  "cache_version": "v0.1",
+  "cache_root": "data/multimodal_cache",
+  "output_dir": "outputs/multimodal/robustness_smoke",
+  "seeds": [401, 402, 403],
+  "training_stages": ["T0", "T6"],
+  "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
+  "baseline_names": [
+    "concat_fusion",
+    "cross_attention_transformer",
+    "modality_expert_moe",
+    "quality_aware_fusion",
+    "ovha_no_rceo",
+    "ovha_no_evidence_router"
+  ],
+  "eval_splits": ["val", "test"],
+  "eval_episode_count": 128,
+  "enforce_same_features_for_baselines": true,
+  "fail_on_missing_cache_artifact": true,
+  "allow_hidden_losses": false,
+  "robustness_corruptions": [
+    "missing_text",
+    "missing_vision",
+    "image_blur",
+    "text_token_mask",
+    "hard_negative_mismatch"
+  ]
+}

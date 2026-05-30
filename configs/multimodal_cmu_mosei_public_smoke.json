@@ -1,0 +1,28 @@
+{
+  "name": "multimodal_cmu_mosei_public_smoke",
+  "dataset_name": "cmu_mosei",
+  "task_type": "sentiment_emotion",
+  "cache_version": "v0.1",
+  "cache_root": "data/multimodal_cache",
+  "output_dir": "outputs/multimodal/cmu_mosei_public_smoke",
+  "seeds": [301, 302, 303],
+  "training_stages": ["T0", "T5"],
+  "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
+  "baseline_names": [
+    "concat_fusion",
+    "tfn_lmf",
+    "mult_style_crossmodal_transformer",
+    "misa_shared_private",
+    "modality_expert_moe",
+    "quality_aware_fusion",
+    "ovha_no_lrio",
+    "ovha_no_spo",
+    "ovha_no_rceo",
+    "ovha_no_evidence_router"
+  ],
+  "eval_splits": ["val", "test"],
+  "eval_episode_count": 128,
+  "enforce_same_features_for_baselines": true,
+  "fail_on_missing_cache_artifact": true,
+  "allow_hidden_losses": false
+}

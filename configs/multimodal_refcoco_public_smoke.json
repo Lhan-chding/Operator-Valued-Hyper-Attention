@@ -1,0 +1,29 @@
+{
+  "name": "multimodal_refcoco_public_smoke",
+  "dataset_name": "refcoco",
+  "task_type": "phrase_region_grounding",
+  "cache_version": "v0.1",
+  "cache_root": "data/multimodal_cache",
+  "output_dir": "outputs/multimodal/refcoco_public_smoke",
+  "seeds": [201, 202, 203],
+  "training_stages": ["T0", "T5"],
+  "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
+  "baseline_names": [
+    "text_only",
+    "region_only",
+    "concat_fusion",
+    "cross_attention_transformer",
+    "modality_expert_moe",
+    "clip_style_region_text_retrieval",
+    "cato_only",
+    "ovha_no_cato",
+    "ovha_no_rceo",
+    "ovha_no_evidence_router"
+  ],
+  "eval_splits": ["val", "test"],
+  "eval_episode_count": 128,
+  "enforce_same_features_for_baselines": true,
+  "fail_on_missing_cache_artifact": true,
+  "allow_hidden_losses": false,
+  "require_public_alignment_labels": true
+}

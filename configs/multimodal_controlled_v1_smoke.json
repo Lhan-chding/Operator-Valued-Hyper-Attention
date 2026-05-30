@@ -1,0 +1,28 @@
+{
+  "name": "multimodal_controlled_v1_smoke",
+  "dataset_name": "controlled_multimodal",
+  "task_type": "controlled_multimodal",
+  "cache_version": "v0.1",
+  "cache_root": "data/multimodal_cache",
+  "output_dir": "outputs/multimodal/controlled_v1_smoke",
+  "seeds": [101, 102, 103],
+  "training_stages": ["T0", "T1", "T2", "T3", "T4"],
+  "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
+  "baseline_names": [
+    "tleo_only",
+    "spo_only",
+    "lrio_only",
+    "cato_only",
+    "no_rceo",
+    "no_evidence_router",
+    "no_operator_memory",
+    "no_hyper_adapter",
+    "modality_expert_moe",
+    "concat_transformer"
+  ],
+  "eval_splits": ["iid"],
+  "eval_episode_count": 128,
+  "enforce_same_features_for_baselines": true,
+  "fail_on_missing_cache_artifact": true,
+  "allow_hidden_losses": true
+}
