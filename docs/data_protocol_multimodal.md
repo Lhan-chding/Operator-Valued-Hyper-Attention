@@ -66,6 +66,8 @@ Every `provenance/source_ids_<split>.txt` line must already be a non-empty norma
 
 `checksums.json` must be a non-empty object whose keys are existing relative file artifact paths that remain inside the cache root.
 
+For region-text or phrase-region grounding tasks, formal cache validation requires per-split `alignment_pairs`, `bbox_targets`, and `region_targets` supervision shards. When `RCEO` is declared in `operator_supervision`, formal cache validation also requires a per-split `corruption` supervision shard, even if the shard is an explicit empty/no-corruption artifact. These required supervision artifacts must be covered by `checksums.json`.
+
 `provenance/pseudo_label_versions.json` must list pseudo-label source splits in `generated_from_splits`. Sources must be auditable split names from `splits.json`, the current validation splits, or the upstream `train` split; `test` and unknown split names are invalid.
 
 Each sample-record manifest row must be a JSON object with `source_id`, `split`, `raw_ref`, and `license_tag`; the row set must match the split's source-id file.

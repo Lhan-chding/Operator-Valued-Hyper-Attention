@@ -302,6 +302,10 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
         )
         (root / "provenance" / f"failed_samples_{split}.jsonl").write_text("")
         (root / "supervision" / f"task_labels_{split}.npy").write_text("placeholder labels\n")
+        (root / "supervision" / f"alignment_pairs_{split}.parquet").write_text("placeholder alignment pairs\n")
+        (root / "supervision" / f"bbox_targets_{split}.npy").write_text("placeholder boxes\n")
+        (root / "supervision" / f"region_targets_{split}.npy").write_text("placeholder regions\n")
+        (root / "supervision" / f"corruption_{split}.parquet").write_text("placeholder corruption metadata\n")
         manifest = {}
         for modality in ("text", "region"):
             x_path = root / "token_fields" / f"{modality}_{split}.npy"

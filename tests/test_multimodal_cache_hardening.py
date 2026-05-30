@@ -881,7 +881,12 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
-            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+            )
             _write_complete_checksums(layout.root)
 
             report = validate_cache_layout(layout, splits=("train", "test"))
@@ -894,7 +899,13 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
-            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                include_required_supervision_shards=False,
+            )
             _write_complete_checksums(layout.root)
 
             report = validate_cache_layout(layout, splits=("train", "test"))
@@ -1029,6 +1040,7 @@ def _write_minimal_cache(
     missing_operator_supervision: tuple[str, ...] = (),
     data_card_overrides: dict[str, object] | None = None,
     extra_token_manifest_modality: str | None = None,
+    include_required_supervision_shards: bool = True,
 ) -> None:
     for folder in ("provenance", "masks", "positions", "supervision", "token_fields"):
         (root / folder).mkdir(parents=True, exist_ok=True)
@@ -1093,6 +1105,8 @@ def _write_minimal_cache(
                 invalid_token_manifest=invalid_token_manifest and split == "train",
                 extra_modality=extra_token_manifest_modality if split == "train" else None,
             )
+    if include_required_supervision_shards:
+        _write_required_grounding_supervision_shards(root)
 
 
 def _write_required_grounding_supervision_shards(root: Path) -> None:

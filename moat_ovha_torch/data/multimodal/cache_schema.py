@@ -21,6 +21,12 @@ REQUIRED_OPERATOR_SUPERVISION_KEYS = ("TLEO", "SPO", "LRIO", "CATO", "RCEO")
 FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "reason")
 SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "raw_ref", "license_tag")
 TOKEN_FIELD_MANIFEST_REQUIRED_KEYS = ("x", "pos", "mask")
+GROUNDING_REQUIRED_SUPERVISION_PATTERNS = (
+    "alignment_pairs_{split}.parquet",
+    "bbox_targets_{split}.npy",
+    "region_targets_{split}.npy",
+)
+RCEO_REQUIRED_SUPERVISION_PATTERNS = ("corruption_{split}.parquet",)
 FORBIDDEN_MODEL_INPUT_MODALITIES = frozenset(
     {
         "corruption_strength",
@@ -139,6 +145,7 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
     _validate_sample_record_manifests(layout, splits, errors)
     _validate_failed_sample_manifests(layout, splits, errors)
     _validate_token_field_manifests(layout, splits, data_card, checksums, errors)
+    _validate_supervision_artifacts(layout, splits, data_card, checksums, errors)
 
     return CacheValidationReport(ok=not errors, errors=errors, warnings=warnings)
 
@@ -681,3 +688,41 @@ def _validate_manifest_shard_path(
     checksum_key = str(normalized_relative)
     if checksums and checksum_key not in checksums:
         errors.append(f"checksums.json missing hash for token field shard: {checksum_key}")
+
+
+def _validate_supervision_artifacts(
+    layout: MultimodalCacheLayout,
+    splits: tuple[str, ...],
+    data_card: dict[str, Any],
+    checksums: dict[str, Any] | None,
+    errors: list[str],
+) -> None:
+    if not isinstance(data_card, dict) or not data_card:
+        return
+    for split in splits:
+        for relative in _required_supervision_artifact_names(data_card, split):
+            path = layout.root / "supervision" / relative
+            normalized = str(path.relative_to(layout.root))
+            if not path.exists():
+                errors.append(f"missing required cache artifact: {normalized}")
+                continue
+            if checksums and normalized not in checksums:
+                errors.append(f"checksums.json missing hash for required supervision artifact: {normalized}")
+
+
+def _required_supervision_artifact_names(data_card: dict[str, Any], split: str) -> tuple[str, ...]:
+    required: list[str] = []
+    tasks = data_card.get("tasks", [])
+    if isinstance(tasks, list) and any(_requires_grounding_supervision(task) for task in tasks):
+        required.extend(pattern.format(split=split) for pattern in GROUNDING_REQUIRED_SUPERVISION_PATTERNS)
+    operator_supervision = data_card.get("operator_supervision", {})
+    if isinstance(operator_supervision, dict) and operator_supervision.get("RCEO"):
+        required.extend(pattern.format(split=split) for pattern in RCEO_REQUIRED_SUPERVISION_PATTERNS)
+    return tuple(required)
+
+
+def _requires_grounding_supervision(task: Any) -> bool:
+    if not isinstance(task, str):
+        return False
+    lowered = task.lower()
+    return "grounding" in lowered or "phrase_region" in lowered or "region_text" in lowered
