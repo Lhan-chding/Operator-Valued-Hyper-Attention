@@ -158,6 +158,38 @@ class MultimodalControlledReportingTests(unittest.TestCase):
                 "rceo_reliability": 0.0,
                 "router_load_by_candidate": {},
             },
+            {
+                "model": "ovha_no_rceo",
+                "corruption_type": "image_blur",
+                "corruption_strength": 0.0,
+                "score": 0.79,
+                "rceo_reliability": 0.0,
+                "router_load_by_candidate": {},
+            },
+            {
+                "model": "ovha_no_rceo",
+                "corruption_type": "image_blur",
+                "corruption_strength": 0.5,
+                "score": 0.60,
+                "rceo_reliability": 0.0,
+                "router_load_by_candidate": {},
+            },
+            {
+                "model": "ovha_no_evidence_router",
+                "corruption_type": "image_blur",
+                "corruption_strength": 0.0,
+                "score": 0.79,
+                "rceo_reliability": 0.0,
+                "router_load_by_candidate": {},
+            },
+            {
+                "model": "ovha_no_evidence_router",
+                "corruption_type": "image_blur",
+                "corruption_strength": 0.5,
+                "score": 0.59,
+                "rceo_reliability": 0.0,
+                "router_load_by_candidate": {},
+            },
         ]
         summary = summarize_robustness_rows(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
 
@@ -165,6 +197,7 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertTrue(summary["rceo_reliability_monotonic"])
         self.assertLess(summary["operator_load_shift"]["CATO"], 0.0)
         self.assertIn("auc_over_corruption_strength", summary)
+        self.assertTrue(summary["required_ablation_degradation"]["passed"], summary["required_ablation_degradation"]["reasons"])
 
     def test_robustness_summary_requires_no_rceo_and_no_evidence_router_degradation(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows

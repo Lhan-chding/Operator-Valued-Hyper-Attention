@@ -9,6 +9,7 @@ def summarize_robustness_rows(
     *,
     full_model: str,
     baseline_model: str,
+    required_ablation_models: tuple[str, ...] = ("ovha_no_rceo", "ovha_no_evidence_router"),
 ) -> dict[str, Any]:
     by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -18,6 +19,11 @@ def summarize_robustness_rows(
     full_rows = sorted(by_model.get(full_model, []), key=lambda row: float(row["corruption_strength"]))
     reliability_monotonic = _non_increasing([float(row.get("rceo_reliability", 0.0)) for row in full_rows])
     load_shift = _operator_load_shift(full_rows)
+    required_ablation_degradation = _required_ablation_degradation(
+        relative_drop,
+        full_model,
+        required_ablation_models,
+    )
     return {
         "full_model": full_model,
         "baseline_model": baseline_model,
@@ -25,6 +31,7 @@ def summarize_robustness_rows(
         "auc_over_corruption_strength": auc,
         "rceo_reliability_monotonic": reliability_monotonic,
         "operator_load_shift": load_shift,
+        "required_ablation_degradation": required_ablation_degradation,
         "full_drop_less_than_baseline": relative_drop.get(full_model, float("inf")) < relative_drop.get(baseline_model, float("-inf")),
     }
 
@@ -66,3 +73,30 @@ def _operator_load_shift(rows: list[dict[str, Any]]) -> dict[str, float]:
     last = rows[-1].get("router_load_by_candidate", {}) or {}
     names = sorted(set(first) | set(last))
     return {name: float(last.get(name, 0.0)) - float(first.get(name, 0.0)) for name in names}
+
+
+def _required_ablation_degradation(
+    relative_drop: dict[str, float],
+    full_model: str,
+    required_ablation_models: tuple[str, ...],
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    values: dict[str, float] = {}
+    full_drop = relative_drop.get(full_model)
+    if full_drop is None:
+        reasons.append(f"missing robustness rows for full model: {full_model}")
+        full_drop = float("inf")
+    for model in required_ablation_models:
+        if model not in relative_drop:
+            reasons.append(f"missing robustness ablation rows: {model}")
+            continue
+        delta = float(relative_drop[model]) - float(full_drop)
+        values[model] = delta
+        if delta <= 0.0:
+            reasons.append(f"robustness ablation does not degrade more than full: {model}")
+    return {
+        "passed": not reasons,
+        "value": values,
+        "condition": "required robustness ablations must show larger relative drop than ovha_full",
+        "reasons": reasons,
+    }

@@ -50,6 +50,8 @@ Oracle smoke output is report-shaped but must be labeled `oracle_smoke_only`; it
 
 Public go/no-go gates must reject full-vs-baseline claims without at least three seeds for both models, at least three paired common seeds, and paired permutation plus bootstrap interval evidence.
 
+Robustness summaries must include required ablation degradation for `ovha_no_rceo` and `ovha_no_evidence_router`; both ablations must drop more than `ovha_full` under corruption or missing-modality stress.
+
 ## Cache Requirements
 
 Every formal cache must include:

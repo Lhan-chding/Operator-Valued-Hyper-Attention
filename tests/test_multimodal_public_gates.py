@@ -46,6 +46,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
             robustness_summary={
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
+                "required_ablation_degradation": {"passed": True, "reasons": []},
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
             },
             task="sentiment_emotion",
