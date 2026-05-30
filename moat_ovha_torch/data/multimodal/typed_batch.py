@@ -299,6 +299,7 @@ def _validate_supervision_bank(
     query_count: int,
     errors: list[str],
 ) -> None:
+    _validate_alignment_supervision(supervision, batch_size, query_count, errors)
     weak_labels = supervision.weak_labels
     if weak_labels is None:
         return
@@ -335,3 +336,21 @@ def _is_string_to_non_empty_string_map(value: Any) -> bool:
     if not isinstance(value, dict):
         return False
     return all(isinstance(key, str) and key and isinstance(item, str) and item for key, item in value.items())
+
+
+def _validate_alignment_supervision(
+    supervision: SupervisionBank,
+    batch_size: int,
+    query_count: int,
+    errors: list[str],
+) -> None:
+    if supervision.alignment_pairs is not None:
+        pair_shape = _shape("supervision.alignment_pairs", supervision.alignment_pairs, errors)
+        _require_rank("supervision.alignment_pairs", pair_shape, 3, errors)
+        _require_first_dims("supervision.alignment_pairs", pair_shape, (batch_size, query_count), errors)
+        if pair_shape is not None and len(pair_shape) == 3 and pair_shape[-1] != 2:
+            errors.append("supervision.alignment_pairs last dimension must be 2")
+    if supervision.alignment_weights is not None:
+        weight_shape = _shape("supervision.alignment_weights", supervision.alignment_weights, errors)
+        _require_rank("supervision.alignment_weights", weight_shape, 2, errors)
+        _require_exact_shape("supervision.alignment_weights", weight_shape, (batch_size, query_count), errors)
