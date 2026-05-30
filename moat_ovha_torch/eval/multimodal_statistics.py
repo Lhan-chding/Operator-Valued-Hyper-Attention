@@ -83,6 +83,7 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
     for key in ("parameter_count", "training_steps", "frozen_feature_extractor_version", "hardware"):
         if key not in metadata or metadata[key] in ({}, None):
             errors.append(f"metadata missing {key}")
+    _validate_reporting_metadata(summary, metadata, errors)
     _validate_label_provenance(summary.get("per_seed_appendix", []), metadata, errors)
     if not summary.get("per_seed_appendix"):
         errors.append("per_seed_appendix missing")
@@ -154,6 +155,38 @@ def _validate_label_provenance(
         supervision_type, _ = _row_label_provenance(row)
         if supervision_type in {"weak", "pseudo"} and supervision_type not in metadata_provenance:
             errors.append(f"metadata.label_provenance missing {supervision_type} supervision summary")
+
+
+def _validate_reporting_metadata(summary: dict[str, Any], metadata: dict[str, Any], errors: list[str]) -> None:
+    parameter_count = metadata.get("parameter_count", {}) if isinstance(metadata, dict) else {}
+    for model in _models_in_main_table(summary.get("main_table", {})):
+        if not isinstance(parameter_count, dict) or model not in parameter_count:
+            errors.append(f"parameter_count missing for model: {model}")
+
+    hardware = metadata.get("hardware", {}) if isinstance(metadata, dict) else {}
+    if not isinstance(hardware, dict) or hardware.get("wall_clock_hours") is None:
+        errors.append("metadata.hardware missing wall_clock_hours")
+
+    raw_metric_paths = metadata.get("raw_metric_paths", []) if isinstance(metadata, dict) else []
+    if not raw_metric_paths:
+        errors.append("metadata.raw_metric_paths missing; cannot report only final summary without raw metrics")
+    for row in summary.get("per_seed_appendix", []):
+        row_name = f"{row.get('task', '?')}/{row.get('split', '?')}/{row.get('model', '?')}/seed={row.get('seed', '?')}"
+        if not row.get("raw_metric_path"):
+            errors.append(f"{row_name}: raw_metric_path missing")
+
+
+def _models_in_main_table(main_table: dict[str, Any]) -> set[str]:
+    models: set[str] = set()
+    if not isinstance(main_table, dict):
+        return models
+    for splits in main_table.values():
+        if not isinstance(splits, dict):
+            continue
+        for split_models in splits.values():
+            if isinstance(split_models, dict):
+                models.update(str(model) for model in split_models)
+    return models
 
 
 def _row_label_provenance(row: dict[str, Any]) -> tuple[str | None, str | None]:
