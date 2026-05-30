@@ -54,6 +54,50 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             self.assertFalse(report.ok)
             self.assertIn("data_card.json", "\n".join(report.errors))
 
+    def test_typed_batch_shape_contract_rejects_bad_rank_and_shared_dimension_mismatch(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import (
+            MultimodalEpisodeBatch,
+            ProvenanceBank,
+            QueryField,
+            SupervisionBank,
+            TokenField,
+            validate_multimodal_batch_contract,
+        )
+
+        batch = _static_batch(
+            fields={
+                "text": TokenField(
+                    modality="text",
+                    x=_Shape((2, 6, 4)),
+                    pos=_Shape((2, 5, 2)),
+                    mask=_Shape((2, 6)),
+                    quality=_Shape((2, 6, 1)),
+                )
+            },
+            query=QueryField(x=_Shape((2, 4)), pos=_Shape((2, 5, 2)), query_type=_Shape((2, 5)), mask=_Shape((2, 5))),
+            target_y=_Shape((2, 5)),
+            target_mask=_Shape((2, 4)),
+        )
+
+        report = validate_multimodal_batch_contract(batch)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("query.x must have rank 3", joined)
+        self.assertIn("target_y must have rank 3", joined)
+        self.assertIn("target_mask shape must be [B,Q]", joined)
+        self.assertIn("fields.text.pos first two dims must match fields.text.x", joined)
+
+    def test_model_inputs_runs_shape_contract_before_returning_public_inputs(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import QueryField
+
+        batch = _static_batch(
+            query=QueryField(x=_Shape((2, 5, 4)), pos=_Shape((2, 5, 2)), query_type=_Shape((2, 4)), mask=_Shape((2, 5)))
+        )
+
+        with self.assertRaisesRegex(ValueError, "query.query_type shape must be"):
+            batch.model_inputs()
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; multimodal tensor contract tests skipped.")
 class MultimodalMainlineTorchContractTests(unittest.TestCase):
@@ -237,6 +281,64 @@ def _field(torch, offset):
         quality=torch.ones(2, 6, 1),
         attrs=None,
     )
+
+
+class _Shape:
+    def __init__(self, shape):
+        self.shape = shape
+
+
+def _static_batch(**overrides):
+    from moat_ovha_torch.data.multimodal.typed_batch import (
+        MultimodalEpisodeBatch,
+        ProvenanceBank,
+        QueryField,
+        SupervisionBank,
+        TokenField,
+    )
+
+    values = {
+        "fields": {
+            "text": TokenField(
+                modality="text",
+                x=_Shape((2, 6, 4)),
+                pos=_Shape((2, 6, 2)),
+                mask=_Shape((2, 6)),
+                quality=_Shape((2, 6, 1)),
+            )
+        },
+        "query": QueryField(x=_Shape((2, 5, 4)), pos=_Shape((2, 5, 2)), query_type=_Shape((2, 5)), mask=_Shape((2, 5))),
+        "target_y": _Shape((2, 5, 3)),
+        "target_mask": _Shape((2, 5)),
+        "task_type": "phrase_region_grounding",
+        "split": "train",
+        "source_dataset": "shape-test",
+        "supervision": SupervisionBank(
+            task_label=None,
+            alignment_pairs=None,
+            alignment_weights=None,
+            bbox_targets=None,
+            region_targets=None,
+            timestamp_targets=None,
+            modality_missing_mask=None,
+            corruption_metadata=None,
+            weak_labels=None,
+            weak_label_confidence=None,
+            pseudo_label_source=None,
+        ),
+        "provenance": ProvenanceBank(
+            source_id=["sample-0", "sample-1"],
+            original_split=["train", "train"],
+            raw_ref=["shape", "shape"],
+            license_tag=["test", "test"],
+            preprocessing_version="test",
+            feature_extractor_version={"text": "test"},
+            pseudo_label_version={},
+        ),
+        "hidden": None,
+    }
+    values.update(overrides)
+    return MultimodalEpisodeBatch(**values)
 
 
 if __name__ == "__main__":
