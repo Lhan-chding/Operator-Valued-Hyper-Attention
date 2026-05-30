@@ -83,6 +83,7 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
     for key in ("parameter_count", "training_steps", "frozen_feature_extractor_version", "hardware"):
         if key not in metadata or metadata[key] in ({}, None):
             errors.append(f"metadata missing {key}")
+    _validate_label_provenance(summary.get("per_seed_appendix", []), metadata, errors)
     if not summary.get("per_seed_appendix"):
         errors.append("per_seed_appendix missing")
     return PublicSummaryValidationReport(ok=not errors, errors=errors, warnings=warnings)
@@ -111,8 +112,79 @@ def _metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "training_steps": training_steps,
         "frozen_feature_extractor_version": feature_versions,
         "hardware": hardware,
+        "label_provenance": _label_provenance(rows),
         "raw_metric_paths": sorted(set(raw_metric_paths)),
     }
+
+
+def _label_provenance(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    provenance: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        supervision_type, source = _row_label_provenance(row)
+        if supervision_type is None:
+            continue
+        entry = provenance.setdefault(supervision_type, {"count": 0, "sources": []})
+        entry["count"] += 1
+        if source:
+            entry["sources"].append(source)
+    for entry in provenance.values():
+        entry["sources"] = sorted(set(entry["sources"]))
+    return provenance
+
+
+def _validate_label_provenance(
+    appendix_rows: list[dict[str, Any]],
+    metadata: dict[str, Any],
+    errors: list[str],
+) -> None:
+    metadata_provenance = metadata.get("label_provenance", {}) if isinstance(metadata, dict) else {}
+    for row in appendix_rows:
+        explicit = row.get("label_provenance", {})
+        explicit_type = _normalized_supervision_type(explicit.get("supervision_type")) if isinstance(explicit, dict) else None
+        must_report_as = _normalized_supervision_type(explicit.get("must_report_as")) if isinstance(explicit, dict) else None
+        pseudo_source = row.get("pseudo_label_source")
+        weak_source = row.get("weak_label_source") or row.get("weak_labels_source")
+        row_name = f"{row.get('task', '?')}/{row.get('split', '?')}/{row.get('model', '?')}/seed={row.get('seed', '?')}"
+        if pseudo_source and explicit_type not in (None, "pseudo"):
+            errors.append(f"{row_name}: pseudo labels must be reported as pseudo, not {explicit_type}")
+        if weak_source and explicit_type not in (None, "weak"):
+            errors.append(f"{row_name}: weak labels must be reported as weak, not {explicit_type}")
+        if must_report_as and explicit_type and must_report_as != explicit_type:
+            errors.append(f"{row_name}: label_provenance.must_report_as={must_report_as} conflicts with {explicit_type}")
+        supervision_type, _ = _row_label_provenance(row)
+        if supervision_type in {"weak", "pseudo"} and supervision_type not in metadata_provenance:
+            errors.append(f"metadata.label_provenance missing {supervision_type} supervision summary")
+
+
+def _row_label_provenance(row: dict[str, Any]) -> tuple[str | None, str | None]:
+    explicit = row.get("label_provenance", {})
+    if isinstance(explicit, dict):
+        supervision_type = _normalized_supervision_type(explicit.get("supervision_type"))
+        source = explicit.get("source")
+        if supervision_type:
+            return supervision_type, str(source) if source else None
+    if row.get("pseudo_label_source"):
+        return "pseudo", str(row["pseudo_label_source"])
+    weak_source = row.get("weak_label_source") or row.get("weak_labels_source")
+    if weak_source:
+        return "weak", str(weak_source)
+    return None, None
+
+
+def _normalized_supervision_type(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower().replace("-", "_")
+    aliases = {
+        "gt": "ground_truth",
+        "gold": "ground_truth",
+        "public_ground_truth": "ground_truth",
+        "weak_label": "weak",
+        "weak_labels": "weak",
+        "pseudo_label": "pseudo",
+        "pseudo_labels": "pseudo",
+    }
+    return aliases.get(text, text)
 
 
 def _scores_by_seed(rows: list[dict[str, Any]], task: str, split: str, model: str) -> dict[int, float]:
