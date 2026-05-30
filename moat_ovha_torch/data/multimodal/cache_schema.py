@@ -289,11 +289,15 @@ def _validate_split_manifest_consistency(layout: MultimodalCacheLayout, splits: 
         if not isinstance(expected, list):
             errors.append(f"splits.json missing source_id list for split: {split}")
             continue
+        expected_source_ids = [str(source_id) for source_id in expected]
+        duplicate_source_ids = sorted({source_id for source_id in expected_source_ids if expected_source_ids.count(source_id) > 1})
+        for source_id in duplicate_source_ids:
+            errors.append(f"splits.json {split} contains duplicate source_id: {source_id}")
         source_path = layout.root / "provenance" / f"source_ids_{split}.txt"
         if not source_path.exists():
             continue
         actual = [line.strip() for line in source_path.read_text().splitlines() if line.strip()]
-        if set(str(source_id) for source_id in expected) != set(actual):
+        if set(expected_source_ids) != set(actual):
             errors.append(f"provenance/source_ids_{split}.txt must match splits.json {split} entries")
 
 
