@@ -4,6 +4,8 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
+
 
 def evaluate_region_text_gate(
     *,
@@ -329,7 +331,14 @@ def _statistical_evidence_reasons(
         reasons.append("full and baseline comparison requires at least 3 seeds")
     reasons.extend(_main_table_reporting_reasons(main_models, full_model, full_seed_count))
     reasons.extend(_main_table_reporting_reasons(main_models, baseline_model, baseline_seed_count))
-    reasons.extend(_summary_reporting_metadata_reasons(summary, (full_model, baseline_model)))
+    required_baselines = _required_baselines_for_summary(task)
+    for required_baseline in required_baselines:
+        if required_baseline not in main_models:
+            reasons.append(f"statistics summary missing required same-feature baseline: {required_baseline}")
+            continue
+        reasons.extend(_main_table_reporting_reasons(main_models, required_baseline, _seed_count(main_models.get(required_baseline, {}))))
+    reporting_models = tuple(dict.fromkeys((full_model, baseline_model, *required_baselines)))
+    reasons.extend(_summary_reporting_metadata_reasons(summary, reporting_models))
     paired = (((summary.get("paired_tests", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
     if not isinstance(paired, dict) or not paired:
         reasons.append("paired comparison missing")
@@ -359,7 +368,7 @@ def _main_table_reporting_reasons(main_models: dict[str, Any], model: str, seed_
     return reasons
 
 
-def _summary_reporting_metadata_reasons(summary: dict[str, Any], models: tuple[str, str]) -> list[str]:
+def _summary_reporting_metadata_reasons(summary: dict[str, Any], models: tuple[str, ...]) -> list[str]:
     metadata = summary.get("reporting_metadata")
     if not isinstance(metadata, dict):
         return [
@@ -389,7 +398,7 @@ def _summary_reporting_metadata_reasons(summary: dict[str, Any], models: tuple[s
 def _require_model_metadata(
     metadata: dict[str, Any],
     key: str,
-    models: tuple[str, str],
+    models: tuple[str, ...],
     reasons: list[str],
 ) -> None:
     value = metadata.get(key)
@@ -407,6 +416,13 @@ def _is_empty_reporting_value(value: Any) -> bool:
     if isinstance(value, (str, list, dict, tuple, set)):
         return len(value) == 0
     return False
+
+
+def _required_baselines_for_summary(task: str) -> tuple[str, ...]:
+    try:
+        return baseline_names_for_task(task)
+    except ValueError:
+        return ()
 
 
 def _seed_count(values: Any) -> int:

@@ -52,6 +52,8 @@ Public go/no-go gates must reject full-vs-baseline claims without at least three
 
 Public statistics summaries must also include top-conference reporting metadata, not only means: per-model `std`, `ci95`, raw per-seed scores, parameter counts, training steps, frozen feature versions, hardware, wall-clock summary, and a per-seed table. Reports with only best seed, single run, or mean-only aggregate evidence must fail public gates.
 
+Public statistics summaries must include every same-feature baseline from the Step 16 defense table for the task, not just the single comparison baseline used in the main delta. Region-text reports must include text-only, region-only, concat fusion, cross-attention transformer, modality expert MoE, CLIP-style retrieval, CATO-only, `ovha_no_cato`, `ovha_no_rceo`, and `ovha_no_evidence_router`. Sentiment/emotion reports must include concat fusion, TFN/LMF, MulT-style transformer, MISA-style shared/private, modality expert MoE, quality-aware fusion, `ovha_no_lrio`, `ovha_no_spo`, `ovha_no_rceo`, and `ovha_no_evidence_router`.
+
 Robustness summaries must include required ablation degradation for `ovha_no_rceo` and `ovha_no_evidence_router`; both ablations must drop more than `ovha_full` under corruption or missing-modality stress.
 
 Robustness summaries must prove Step 6 stress-family coverage: missing text, missing vision, missing audio, image quality corruption, audio quality corruption, text noise, and hard-negative mismatch. Temporal-shift coverage is required only when the dataset has temporal alignment. These stress descriptors must come from reporting metadata such as `corruption_type`, `missing_modalities`, `mismatch_source_id`, or `temporal_shift_sec`, never from model-input fields.
