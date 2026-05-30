@@ -77,6 +77,36 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         joined = "\n".join(validation.errors)
         self.assertIn("pseudo labels must be reported as pseudo, not ground_truth", joined)
 
+    def test_public_summary_rejects_final_summary_without_raw_metric_paths(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        rows = _metric_rows()
+        for row in rows:
+            row.pop("raw_metric_path")
+        summary = summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        joined = "\n".join(validation.errors)
+        self.assertIn("raw_metric_path", joined)
+        self.assertIn("only final summary without raw metrics", joined)
+
+    def test_public_summary_requires_wall_clock_and_parameter_count_per_model(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        rows = _metric_rows()
+        for row in rows:
+            row["hardware"] = {"accelerator": "A800"}
+            if row["model"] == "cross_attention_transformer":
+                row.pop("parameter_count")
+        summary = summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        joined = "\n".join(validation.errors)
+        self.assertIn("metadata.hardware missing wall_clock_hours", joined)
+        self.assertIn("parameter_count missing for model: cross_attention_transformer", joined)
+
     def test_public_summary_cli_emits_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             metrics_path = Path(tmp) / "metrics.jsonl"
