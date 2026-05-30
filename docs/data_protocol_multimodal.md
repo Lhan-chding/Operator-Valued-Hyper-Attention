@@ -54,7 +54,7 @@ The cache must preserve `source_id`, split provenance, license tag, feature extr
 
 Each sample-record manifest row must be a JSON object with `source_id`, `split`, `raw_ref`, and `license_tag`; the row set must match the split's source-id file.
 
-Each non-empty failed-sample manifest row must be a JSON object with `source_id`, `split`, and `reason`. Empty files are valid only when the split has no failed download, decode, feature, or validation sample.
+Each non-empty failed-sample manifest row must be a JSON object with `source_id`, `split`, and `reason`. Failed sample source IDs must not also appear in the retained split source-id file. Empty files are valid only when the split has no failed download, decode, feature, or validation sample.
 
 ## Leakage Controls
 

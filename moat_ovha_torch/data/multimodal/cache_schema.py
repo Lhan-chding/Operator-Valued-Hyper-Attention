@@ -363,6 +363,7 @@ def _validate_failed_sample_manifests(
         path = layout.root / "provenance" / f"failed_samples_{split}.jsonl"
         if not path.exists():
             continue
+        retained_source_ids = set(_read_source_ids(layout, split) or [])
         for line_number, line in enumerate(path.read_text().splitlines(), start=1):
             stripped = line.strip()
             if not stripped:
@@ -380,6 +381,12 @@ def _validate_failed_sample_manifests(
                 errors.append(f"{path.name} line {line_number} missing required keys: {', '.join(missing)}")
             if payload.get("split") != split:
                 errors.append(f"{path.name} line {line_number} split must match {split}")
+            source_id = payload.get("source_id")
+            if source_id and str(source_id) in retained_source_ids:
+                errors.append(
+                    f"{path.name} source_id must not also appear in retained "
+                    f"split source ids: {source_id}"
+                )
 
 
 def _validate_sample_record_manifests(
