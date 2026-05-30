@@ -894,6 +894,53 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertTrue(report.ok, report.errors)
         self.assertEqual(report.warnings, [])
 
+    def test_sentiment_cache_requires_public_utterance_and_corruption_provenance(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "cmu_mosei", "v0.1")
+            _write_minimal_sentiment_cache(
+                layout.root,
+                train_ids=["train-utterance"],
+                test_ids=["test-utterance"],
+                include_sentiment_record_fields=False,
+                include_missing_modality_mask=False,
+                speaker_id_available=True,
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("sample_records_train.jsonl line 1 missing sentiment/emotion metadata keys: utterance_id", joined)
+        self.assertIn("sample_records_train.jsonl line 1 missing sentiment/emotion metadata keys: speaker_id", joined)
+        self.assertIn("sample_records_train.jsonl line 1 missing sentiment/emotion metadata keys: dialogue_id", joined)
+        self.assertIn("sample_records_train.jsonl line 1 missing sentiment/emotion metadata keys: transcript_source", joined)
+        self.assertIn("sample_records_train.jsonl line 1 missing sentiment/emotion metadata keys: missing_modality_mask_ref", joined)
+        self.assertIn("sample_records_train.jsonl line 1 missing sentiment/emotion metadata keys: corruption_metadata_ref", joined)
+        self.assertIn("missing required cache artifact: supervision/missing_modality_mask_train.npy", joined)
+
+    def test_sentiment_cache_accepts_complete_public_metadata_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "cmu_mosei", "v0.1")
+            _write_minimal_sentiment_cache(
+                layout.root,
+                train_ids=["train-utterance"],
+                test_ids=["test-utterance"],
+                include_sentiment_record_fields=True,
+                include_missing_modality_mask=True,
+                speaker_id_available=True,
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertTrue(report.ok, report.errors)
+        self.assertEqual(report.warnings, [])
+
     def test_cache_validator_rejects_missing_grounding_and_rceo_supervision_shards(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -1120,6 +1167,96 @@ def _write_required_grounding_supervision_shards(root: Path) -> None:
             (root / relative).write_text(f"placeholder {relative}\n")
 
 
+def _write_minimal_sentiment_cache(
+    root: Path,
+    *,
+    train_ids: list[str],
+    test_ids: list[str],
+    include_sentiment_record_fields: bool,
+    include_missing_modality_mask: bool,
+    speaker_id_available: bool,
+) -> None:
+    for folder in ("provenance", "masks", "positions", "supervision", "token_fields"):
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
+    data_card = {
+        "dataset_name": "cmu_mosei",
+        "cache_version": "v0.1",
+        "modalities": ["text", "audio", "vision"],
+        "tasks": ["sentiment_emotion"],
+        "metadata_availability": {"speaker_id": speaker_id_available},
+        "operator_supervision": {
+            "TLEO": "local utterance/token structure",
+            "SPO": "emotion prototype label",
+            "LRIO": "paired modality interaction",
+            "CATO": "cross-modal utterance alignment",
+            "RCEO": "quality/corruption/missing metadata",
+        },
+        "leakage_controls": {
+            "split_by_source_id": True,
+            "deduplicate_by_source_id": True,
+            "pseudo_labels_generated_without_test_labels": True,
+            "same_features_for_baselines": True,
+        },
+    }
+    (root / "data_card.json").write_text(json.dumps(data_card, sort_keys=True) + "\n")
+    (root / "splits.json").write_text(json.dumps({"train": train_ids, "test": test_ids}, sort_keys=True) + "\n")
+    (root / "samples.parquet").write_text("placeholder sentiment manifest\n")
+    (root / "checksums.json").write_text(json.dumps({"data_card.json": "placeholder"}) + "\n")
+    (root / "provenance" / "source_ids_train.txt").write_text("\n".join(train_ids) + "\n")
+    (root / "provenance" / "source_ids_test.txt").write_text("\n".join(test_ids) + "\n")
+    feature_versions = {
+        "text": "frozen-text-v1",
+        "audio": "frozen-audio-v1",
+        "vision": "frozen-visual-v1",
+        "baselines": {
+            "cross_attention_transformer": {
+                "text": "frozen-text-v1",
+                "audio": "frozen-audio-v1",
+                "vision": "frozen-visual-v1",
+            },
+            "ovha_full": {
+                "text": "frozen-text-v1",
+                "audio": "frozen-audio-v1",
+                "vision": "frozen-visual-v1",
+            },
+        },
+    }
+    (root / "provenance" / "feature_versions.json").write_text(json.dumps(feature_versions, sort_keys=True) + "\n")
+    (root / "provenance" / "pseudo_label_versions.json").write_text(json.dumps({"generated_from_splits": ["train"], "version": "ok"}) + "\n")
+    for split, source_ids in (("train", train_ids), ("test", test_ids)):
+        (root / "masks" / f"text_mask_{split}.npy").write_text("placeholder text mask\n")
+        (root / "supervision" / f"task_labels_{split}.npy").write_text("placeholder sentiment labels\n")
+        (root / "supervision" / f"corruption_{split}.parquet").write_text("placeholder corruption metadata\n")
+        if include_missing_modality_mask:
+            (root / "supervision" / f"missing_modality_mask_{split}.npy").write_text("placeholder missing modality mask\n")
+        (root / "provenance" / f"failed_samples_{split}.jsonl").write_text("")
+        records = []
+        for source_id in source_ids:
+            record = {
+                "source_id": source_id,
+                "split": split,
+                "raw_ref": f"raw://{source_id}",
+                "license_tag": "test-license",
+            }
+            if include_sentiment_record_fields:
+                record.update(
+                    {
+                        "utterance_id": source_id,
+                        "speaker_id": f"speaker-{source_id}",
+                        "dialogue_id": f"dialogue-{split}",
+                        "transcript_source": "official_transcript",
+                        "missing_modality_mask_ref": f"supervision/missing_modality_mask_{split}.npy",
+                        "corruption_metadata_ref": f"supervision/corruption_{split}.parquet",
+                    }
+                )
+            records.append(record)
+        (root / "provenance" / f"sample_records_{split}.jsonl").write_text(
+            "\n".join(json.dumps(record, sort_keys=True) for record in records) + "\n"
+        )
+        _write_token_field_manifest_for_modalities(root, split, ("text", "audio", "vision"))
+
+
 def _write_complete_checksums(root: Path) -> None:
     from moat_ovha_torch.data.multimodal.cache_schema import file_sha256, required_cache_files
 
@@ -1155,6 +1292,23 @@ def _write_sample_records(root: Path, split: str, source_ids: list[str], *, mode
             records.append({**record})
     lines = [json.dumps(record, sort_keys=True) for record in records]
     (root / "provenance" / f"sample_records_{split}.jsonl").write_text("\n".join(lines) + "\n")
+
+
+def _write_token_field_manifest_for_modalities(root: Path, split: str, modalities: tuple[str, ...]) -> None:
+    manifest = {}
+    for modality in modalities:
+        x_path = root / "token_fields" / f"{modality}_{split}.npy"
+        pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
+        mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
+        x_path.write_text("placeholder token field\n")
+        pos_path.write_text("placeholder positions\n")
+        mask_path.write_text("placeholder mask\n")
+        manifest[modality] = {
+            "x": str(x_path.relative_to(root)),
+            "pos": str(pos_path.relative_to(root)),
+            "mask": str(mask_path.relative_to(root)),
+        }
+    (root / "token_fields" / f"manifest_{split}.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
 
 
 def _write_token_field_manifest(
