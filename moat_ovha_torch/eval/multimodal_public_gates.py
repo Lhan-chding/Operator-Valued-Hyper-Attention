@@ -61,11 +61,14 @@ def _full_beats_baseline(
     baseline = _model_mean(summary, task, split, baseline_model)
     if full is None or baseline is None:
         return {"passed": False, "reason": "full or same-feature baseline score missing"}
-    passed = full > baseline
+    reasons = _statistical_evidence_reasons(summary, task, split, full_model, baseline_model)
+    if full <= baseline:
+        reasons.append("full model does not beat same-feature baseline")
+    passed = not reasons
     return {
         "passed": passed,
         "value": full - baseline,
-        "reason": "full model does not beat same-feature baseline" if not passed else "",
+        "reason": "; ".join(reasons),
     }
 
 
@@ -132,6 +135,40 @@ def _model_mean(summary: dict[str, Any], task: str, split: str, model: str) -> f
         return float(summary["main_table"][task][split][model]["mean"])
     except KeyError:
         return None
+
+
+def _statistical_evidence_reasons(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    full_model: str,
+    baseline_model: str,
+) -> list[str]:
+    reasons: list[str] = []
+    main_models = (((summary.get("main_table", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
+    full_seed_count = _seed_count(main_models.get(full_model, {}))
+    baseline_seed_count = _seed_count(main_models.get(baseline_model, {}))
+    if full_seed_count < 3 or baseline_seed_count < 3:
+        reasons.append("full and baseline comparison requires at least 3 seeds")
+    paired = (((summary.get("paired_tests", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
+    if not isinstance(paired, dict) or not paired:
+        reasons.append("paired comparison missing")
+        return reasons
+    if int(paired.get("common_seed_count", 0)) < 3:
+        reasons.append("paired comparison requires at least 3 common seeds")
+    for key in ("paired_permutation_p", "paired_bootstrap_ci95"):
+        if key not in paired:
+            reasons.append(f"paired comparison missing {key}")
+    return reasons
+
+
+def _seed_count(values: Any) -> int:
+    if not isinstance(values, dict):
+        return 0
+    try:
+        return int(values.get("seed_count", 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _candidate_diag_value(rows: list[dict[str, Any]], setting: str, candidate: str, key: str) -> float | None:

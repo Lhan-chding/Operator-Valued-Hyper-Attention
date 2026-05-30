@@ -48,6 +48,8 @@ Controlled reports must include the full learned/true router-adapter oracle matr
 
 Oracle smoke output is report-shaped but must be labeled `oracle_smoke_only`; it is a schema and expressivity sanity check, not a substitute for trained controlled go/no-go rows with memory, adapter, router, and reliability ablation deltas.
 
+Public go/no-go gates must reject full-vs-baseline claims without at least three seeds for both models, at least three paired common seeds, and paired permutation plus bootstrap interval evidence.
+
 ## Cache Requirements
 
 Every formal cache must include:
