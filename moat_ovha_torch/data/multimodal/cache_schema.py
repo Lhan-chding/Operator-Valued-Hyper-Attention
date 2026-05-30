@@ -332,23 +332,37 @@ def _validate_feature_parity(layout: MultimodalCacheLayout, data_card: dict[str,
         errors.append("feature_versions.json baselines must include ovha_full reference")
         return
     modalities = data_card.get("modalities", [])
+    modality_names = [str(modality) for modality in modalities] if isinstance(modalities, list) else []
     if isinstance(modalities, list):
-        for modality in modalities:
-            if str(modality) not in feature_versions:
-                errors.append(f"feature_versions.json missing feature extractor version for modality: {modality}")
+        for modality_name in modality_names:
+            if modality_name not in feature_versions:
+                errors.append(f"feature_versions.json missing feature extractor version for modality: {modality_name}")
+                continue
+            _validate_feature_version_value(
+                "feature_versions.json",
+                modality_name,
+                feature_versions.get(modality_name),
+                errors,
+            )
     ovha_reference = baselines["ovha_full"]
     if not isinstance(ovha_reference, dict):
         errors.append("feature_versions.json baselines.ovha_full must be an object")
         return
     reference = dict(ovha_reference)
     if isinstance(modalities, list):
-        for modality in modalities:
-            modality_name = str(modality)
-            if not reference.get(modality_name):
+        for modality_name in modality_names:
+            if modality_name not in reference:
                 errors.append(
                     "feature_versions.json baselines.ovha_full missing "
                     f"feature extractor version for modality: {modality_name}"
                 )
+                continue
+            if not _validate_feature_version_value(
+                "feature_versions.json baselines.ovha_full",
+                modality_name,
+                reference[modality_name],
+                errors,
+            ):
                 continue
             if feature_versions.get(modality_name) != reference[modality_name]:
                 errors.append(
@@ -361,11 +375,34 @@ def _validate_feature_parity(layout: MultimodalCacheLayout, data_card: dict[str,
         if not isinstance(versions, dict):
             errors.append(f"feature_versions.json baselines.{model_name} must be an object")
             continue
+        for modality_name in modality_names:
+            if modality_name in versions:
+                _validate_feature_version_value(
+                    f"feature_versions.json baselines.{model_name}",
+                    modality_name,
+                    versions[modality_name],
+                    errors,
+                )
         if versions != reference:
             errors.append(
                 "same_features_for_baselines is true but "
                 f"{model_name} differs from ovha_full"
             )
+
+
+def _validate_feature_version_value(
+    context: str,
+    modality_name: str,
+    value: Any,
+    errors: list[str],
+) -> bool:
+    if not isinstance(value, str) or not value:
+        errors.append(
+            f"{context} feature extractor version for modality {modality_name} "
+            "must be a non-empty string"
+        )
+        return False
+    return True
 
 
 def _validate_pseudo_label_provenance(layout: MultimodalCacheLayout, errors: list[str]) -> None:
