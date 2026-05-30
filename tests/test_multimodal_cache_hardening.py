@@ -91,6 +91,28 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_undeclared_token_field_manifest_modality(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                extra_token_manifest_modality="hidden_metadata",
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "token_fields/manifest_train.json contains undeclared modality: hidden_metadata",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_incomplete_operator_supervision_data_card(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -347,6 +369,7 @@ def _write_minimal_cache(
     invalid_token_manifest: bool = False,
     missing_operator_supervision: tuple[str, ...] = (),
     data_card_overrides: dict[str, object] | None = None,
+    extra_token_manifest_modality: str | None = None,
 ) -> None:
     for folder in ("provenance", "masks", "positions", "supervision", "token_fields"):
         (root / folder).mkdir(parents=True, exist_ok=True)
@@ -398,7 +421,12 @@ def _write_minimal_cache(
             line = json.dumps(payload, sort_keys=True) + "\n" if payload else ""
             (root / "provenance" / f"failed_samples_{split}.jsonl").write_text(line)
         if include_token_manifests:
-            _write_token_field_manifest(root, split, invalid_token_manifest=invalid_token_manifest and split == "train")
+            _write_token_field_manifest(
+                root,
+                split,
+                invalid_token_manifest=invalid_token_manifest and split == "train",
+                extra_modality=extra_token_manifest_modality if split == "train" else None,
+            )
 
 
 def _write_complete_checksums(root: Path) -> None:
@@ -419,9 +447,17 @@ def _write_complete_checksums(root: Path) -> None:
     (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
 
 
-def _write_token_field_manifest(root: Path, split: str, *, invalid_token_manifest: bool) -> None:
+def _write_token_field_manifest(
+    root: Path,
+    split: str,
+    *,
+    invalid_token_manifest: bool,
+    extra_modality: str | None = None,
+) -> None:
     manifest = {}
-    for modality in ("text", "region"):
+    modalities = ("text", "region", extra_modality) if extra_modality else ("text", "region")
+    for modality in modalities:
+        assert modality is not None
         x_path = root / "token_fields" / f"{modality}_{split}.npy"
         pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
         mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
