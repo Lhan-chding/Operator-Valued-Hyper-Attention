@@ -89,22 +89,18 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
         except json.JSONDecodeError as exc:
             errors.append(f"invalid data_card.json: {exc}")
         else:
-            for key in REQUIRED_DATA_CARD_KEYS:
-                if key not in data_card:
-                    errors.append(f"data_card.json missing required key: {key}")
-            _validate_data_card_identity(layout, data_card, errors)
-            _validate_data_card_string_list(data_card, "modalities", errors)
-            _validate_data_card_string_list(data_card, "tasks", errors)
-            _validate_operator_supervision(data_card.get("operator_supervision"), errors)
-            controls = data_card.get("leakage_controls", {})
-            for key in (
-                "split_by_source_id",
-                "deduplicate_by_source_id",
-                "pseudo_labels_generated_without_test_labels",
-                "same_features_for_baselines",
-            ):
-                if controls.get(key) is not True:
-                    errors.append(f"data_card.json leakage_controls.{key} must be true")
+            if not isinstance(data_card, dict):
+                errors.append("data_card.json must be a JSON object")
+                data_card = {}
+            else:
+                for key in REQUIRED_DATA_CARD_KEYS:
+                    if key not in data_card:
+                        errors.append(f"data_card.json missing required key: {key}")
+                _validate_data_card_identity(layout, data_card, errors)
+                _validate_data_card_string_list(data_card, "modalities", errors)
+                _validate_data_card_string_list(data_card, "tasks", errors)
+                _validate_operator_supervision(data_card.get("operator_supervision"), errors)
+                _validate_leakage_controls(data_card.get("leakage_controls"), errors)
 
     checksums_path = layout.root / "checksums.json"
     if checksums_path.exists():
@@ -228,6 +224,20 @@ def _validate_data_card_string_list(data_card: dict[str, Any], key: str, errors:
         errors.append(f"data_card.json {key} must not contain duplicate entries")
 
 
+def _validate_leakage_controls(controls: Any, errors: list[str]) -> None:
+    if not isinstance(controls, dict):
+        errors.append("data_card.json leakage_controls must be an object")
+        return
+    for key in (
+        "split_by_source_id",
+        "deduplicate_by_source_id",
+        "pseudo_labels_generated_without_test_labels",
+        "same_features_for_baselines",
+    ):
+        if controls.get(key) is not True:
+            errors.append(f"data_card.json leakage_controls.{key} must be true")
+
+
 def _validate_source_split_controls(layout: MultimodalCacheLayout, splits: tuple[str, ...], errors: list[str]) -> None:
     seen: dict[str, str] = {}
     for split in splits:
@@ -271,7 +281,7 @@ def _validate_split_manifest_consistency(layout: MultimodalCacheLayout, splits: 
 
 def _validate_feature_parity(layout: MultimodalCacheLayout, data_card: dict[str, Any], errors: list[str]) -> None:
     controls = data_card.get("leakage_controls", {}) if isinstance(data_card, dict) else {}
-    if controls.get("same_features_for_baselines") is not True:
+    if not isinstance(controls, dict) or controls.get("same_features_for_baselines") is not True:
         return
     path = layout.root / "provenance" / "feature_versions.json"
     if not path.exists():
