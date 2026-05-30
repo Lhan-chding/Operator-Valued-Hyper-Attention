@@ -610,6 +610,22 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("feature_versions.json baselines must include ovha_full reference", "\n".join(report.errors))
 
+    def test_cache_validator_rejects_non_object_feature_versions_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            (layout.root / "provenance" / "feature_versions.json").write_text(
+                json.dumps(["clip-text-v1", "clip-region-v1"], sort_keys=True) + "\n"
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn("feature_versions.json must be a JSON object", "\n".join(report.errors))
+
     def test_cache_validator_rejects_ovha_reference_missing_modality_feature_version(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
