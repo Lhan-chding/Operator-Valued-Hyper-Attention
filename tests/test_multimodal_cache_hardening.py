@@ -48,6 +48,49 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_missing_token_field_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                include_token_manifests=False,
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("missing required cache artifact: token_fields/manifest_train.json", joined)
+        self.assertIn("missing required cache artifact: token_fields/manifest_test.json", joined)
+
+    def test_cache_validator_rejects_incomplete_token_field_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                invalid_token_manifest=True,
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "token_fields/manifest_train.json entry for region missing required keys: pos",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_detects_source_overlap_checksum_gap_and_feature_mismatch(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -101,8 +144,10 @@ def _write_minimal_cache(
     mismatched_features: bool,
     include_failed_manifests: bool = True,
     invalid_failed_manifest: bool = False,
+    include_token_manifests: bool = True,
+    invalid_token_manifest: bool = False,
 ) -> None:
-    for folder in ("provenance", "masks", "supervision"):
+    for folder in ("provenance", "masks", "positions", "supervision", "token_fields"):
         (root / folder).mkdir(parents=True, exist_ok=True)
     root.mkdir(parents=True, exist_ok=True)
     data_card = {
@@ -147,6 +192,8 @@ def _write_minimal_cache(
             payload = {"source_id": f"failed-{split}", "split": split} if invalid_failed_manifest and split == "train" else {}
             line = json.dumps(payload, sort_keys=True) + "\n" if payload else ""
             (root / "provenance" / f"failed_samples_{split}.jsonl").write_text(line)
+        if include_token_manifests:
+            _write_token_field_manifest(root, split, invalid_token_manifest=invalid_token_manifest and split == "train")
 
 
 def _write_complete_checksums(root: Path) -> None:
@@ -160,7 +207,30 @@ def _write_complete_checksums(root: Path) -> None:
     checksums = {}
     for path in required_cache_files(layout, splits=("train", "test")):
         checksums[str(path.relative_to(root))] = "placeholder"
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            checksums.setdefault(str(path.relative_to(root)), "placeholder")
     (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
+
+
+def _write_token_field_manifest(root: Path, split: str, *, invalid_token_manifest: bool) -> None:
+    manifest = {}
+    for modality in ("text", "region"):
+        x_path = root / "token_fields" / f"{modality}_{split}.npy"
+        pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
+        mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
+        x_path.write_text("placeholder token field\n")
+        pos_path.write_text("placeholder positions\n")
+        mask_path.write_text("placeholder mask\n")
+        entry = {
+            "x": str(x_path.relative_to(root)),
+            "pos": str(pos_path.relative_to(root)),
+            "mask": str(mask_path.relative_to(root)),
+        }
+        if invalid_token_manifest and modality == "region":
+            entry.pop("pos")
+        manifest[modality] = entry
+    (root / "token_fields" / f"manifest_{split}.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":
