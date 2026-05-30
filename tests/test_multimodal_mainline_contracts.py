@@ -206,6 +206,42 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("supervision.alignment_pairs last dimension must be 2", joined)
         self.assertIn("supervision.alignment_weights shape must be [B,Q]", joined)
 
+    def test_typed_batch_rejects_hidden_token_field_metadata(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import TokenField, validate_multimodal_batch_contract
+
+        batch = _static_batch(
+            fields={
+                "text": TokenField(
+                    modality="text",
+                    x=_Shape((2, 6, 4)),
+                    pos=_Shape((2, 6, 2)),
+                    mask=_Shape((2, 6)),
+                    attrs={"true_active_operator": _Shape((2, 6, 1)), "": _Shape((2, 6, 1))},
+                ),
+                "corruption_strength": TokenField(
+                    modality="corruption_strength",
+                    x=_Shape((2, 6, 4)),
+                    pos=_Shape((2, 6, 2)),
+                    mask=_Shape((2, 6)),
+                ),
+            }
+        )
+
+        report = validate_multimodal_batch_contract(batch)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "fields.corruption_strength must not expose controlled or hidden metadata as model input",
+            joined,
+        )
+        self.assertIn("fields.text.attrs keys must be non-empty strings", joined)
+        self.assertIn(
+            "fields.text.attrs must not expose controlled or hidden metadata as model input: "
+            "true_active_operator",
+            joined,
+        )
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; multimodal tensor contract tests skipped.")
 class MultimodalMainlineTorchContractTests(unittest.TestCase):
