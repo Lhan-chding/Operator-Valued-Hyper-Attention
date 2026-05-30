@@ -69,6 +69,69 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_malformed_sample_provenance_manifest_entry(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                sample_record_mode="missing_required_keys",
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "sample_records_train.jsonl line 1 missing required keys: raw_ref, license_tag",
+            "\n".join(report.errors),
+        )
+
+    def test_cache_validator_rejects_sample_provenance_split_mismatch(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                sample_record_mode="split_mismatch",
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn("sample_records_train.jsonl line 1 split must match train", "\n".join(report.errors))
+
+    def test_cache_validator_rejects_sample_provenance_source_id_mismatch(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                sample_record_mode="source_id_mismatch",
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "provenance/sample_records_train.jsonl source_id set must match provenance/source_ids_train.txt",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_missing_token_field_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -387,6 +450,7 @@ def _write_minimal_cache(
     include_failed_manifests: bool = True,
     invalid_failed_manifest: bool = False,
     include_sample_records: bool = True,
+    sample_record_mode: str = "valid",
     include_token_manifests: bool = True,
     invalid_token_manifest: bool = False,
     missing_operator_supervision: tuple[str, ...] = (),
@@ -444,7 +508,7 @@ def _write_minimal_cache(
             (root / "provenance" / f"failed_samples_{split}.jsonl").write_text(line)
         if include_sample_records:
             source_ids = train_ids if split == "train" else test_ids
-            _write_sample_records(root, split, source_ids)
+            _write_sample_records(root, split, source_ids, mode=sample_record_mode if split == "train" else "valid")
         if include_token_manifests:
             _write_token_field_manifest(
                 root,
@@ -472,19 +536,20 @@ def _write_complete_checksums(root: Path) -> None:
     (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
 
 
-def _write_sample_records(root: Path, split: str, source_ids: list[str]) -> None:
-    lines = [
-        json.dumps(
-            {
-                "source_id": source_id,
-                "split": split,
-                "raw_ref": f"raw://{source_id}",
-                "license_tag": "test-license",
-            },
-            sort_keys=True,
-        )
-        for source_id in source_ids
-    ]
+def _write_sample_records(root: Path, split: str, source_ids: list[str], *, mode: str = "valid") -> None:
+    records = []
+    for source_id in source_ids:
+        record = {
+            "source_id": "unlisted-source" if mode == "source_id_mismatch" else source_id,
+            "split": "val" if mode == "split_mismatch" else split,
+            "raw_ref": f"raw://{source_id}",
+            "license_tag": "test-license",
+        }
+        if mode == "missing_required_keys":
+            record.pop("raw_ref")
+            record.pop("license_tag")
+        records.append(record)
+    lines = [json.dumps(record, sort_keys=True) for record in records]
     (root / "provenance" / f"sample_records_{split}.jsonl").write_text("\n".join(lines) + "\n")
 
 
