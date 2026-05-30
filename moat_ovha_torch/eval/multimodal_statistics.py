@@ -84,6 +84,7 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
         if key not in metadata or metadata[key] in ({}, None):
             errors.append(f"metadata missing {key}")
     _validate_reporting_metadata(summary, metadata, errors)
+    _validate_baseline_strength(summary.get("paired_tests", {}), metadata, errors)
     _validate_label_provenance(summary.get("per_seed_appendix", []), metadata, errors)
     if not summary.get("per_seed_appendix"):
         errors.append("per_seed_appendix missing")
@@ -92,6 +93,7 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
 
 def _metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
     parameter_count = {}
+    baseline_strength = {}
     feature_versions = {}
     hardware = {}
     training_steps = None
@@ -100,6 +102,8 @@ def _metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
         model = str(row["model"])
         if "parameter_count" in row:
             parameter_count[model] = int(row["parameter_count"])
+        if "baseline_strength" in row:
+            baseline_strength[model] = str(row["baseline_strength"])
         if "frozen_feature_extractor_version" in row:
             feature_versions.update(dict(row["frozen_feature_extractor_version"]))
         if "hardware" in row:
@@ -110,6 +114,7 @@ def _metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
             raw_metric_paths.append(str(row["raw_metric_path"]))
     return {
         "parameter_count": parameter_count,
+        "baseline_strength": baseline_strength,
         "training_steps": training_steps,
         "frozen_feature_extractor_version": feature_versions,
         "hardware": hardware,
@@ -187,6 +192,36 @@ def _models_in_main_table(main_table: dict[str, Any]) -> set[str]:
             if isinstance(split_models, dict):
                 models.update(str(model) for model in split_models)
     return models
+
+
+def _validate_baseline_strength(paired_tests: dict[str, Any], metadata: dict[str, Any], errors: list[str]) -> None:
+    baseline_strength = metadata.get("baseline_strength", {}) if isinstance(metadata, dict) else {}
+    if not isinstance(baseline_strength, dict):
+        return
+    for splits in paired_tests.values() if isinstance(paired_tests, dict) else ():
+        if not isinstance(splits, dict):
+            continue
+        for values in splits.values():
+            if not isinstance(values, dict):
+                continue
+            baseline_model = _baseline_model_from_delta(values.get("model_delta"))
+            if baseline_model is None:
+                continue
+            strength = str(baseline_strength.get(baseline_model, "")).strip().lower().replace("-", "_")
+            if strength in {"weak", "weak_baseline", "toy", "sanity", "ablation_only"}:
+                errors.append(
+                    "cannot report only improvement over weak baseline: "
+                    f"{baseline_model} is marked {strength}"
+                )
+
+
+def _baseline_model_from_delta(model_delta: Any) -> str | None:
+    if not model_delta:
+        return None
+    text = str(model_delta)
+    if "_minus_" not in text:
+        return None
+    return text.rsplit("_minus_", 1)[1]
 
 
 def _row_label_provenance(row: dict[str, Any]) -> tuple[str | None, str | None]:
