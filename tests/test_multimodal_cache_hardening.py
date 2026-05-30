@@ -397,6 +397,22 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_duplicate_source_ids_in_splits_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            (layout.root / "splits.json").write_text(
+                json.dumps({"train": ["train-source", "train-source"], "test": ["test-source"]}, sort_keys=True) + "\n"
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn("splits.json train contains duplicate source_id: train-source", "\n".join(report.errors))
+
     def test_cache_validator_rejects_checksum_mismatch(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
