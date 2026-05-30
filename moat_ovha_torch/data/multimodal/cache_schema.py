@@ -21,6 +21,23 @@ REQUIRED_OPERATOR_SUPERVISION_KEYS = ("TLEO", "SPO", "LRIO", "CATO", "RCEO")
 FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "reason")
 SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "raw_ref", "license_tag")
 TOKEN_FIELD_MANIFEST_REQUIRED_KEYS = ("x", "pos", "mask")
+FORBIDDEN_MODEL_INPUT_MODALITIES = frozenset(
+    {
+        "corruption_strength",
+        "dataset_hidden_metadata",
+        "hidden_metadata",
+        "mismatch_source_id",
+        "true_active_operator",
+        "true_adapter_params",
+        "true_alignment_pairs",
+        "true_corruption_level",
+        "true_lengthscale",
+        "true_prototype_logits",
+        "true_rank_logits",
+        "true_reliability",
+        "true_router_weights",
+    }
+)
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 CHECKSUM_MANIFEST_NAME = "checksums.json"
 
@@ -97,7 +114,7 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
                     if key not in data_card:
                         errors.append(f"data_card.json missing required key: {key}")
                 _validate_data_card_identity(layout, data_card, errors)
-                _validate_data_card_string_list(data_card, "modalities", errors)
+                _validate_data_card_modalities(data_card, errors)
                 _validate_data_card_string_list(data_card, "tasks", errors)
                 _validate_operator_supervision(data_card.get("operator_supervision"), errors)
                 _validate_leakage_controls(data_card.get("leakage_controls"), errors)
@@ -243,6 +260,19 @@ def _validate_data_card_string_list(data_card: dict[str, Any], key: str, errors:
         return
     if len(values) != len(set(values)):
         errors.append(f"data_card.json {key} must not contain duplicate entries")
+
+
+def _validate_data_card_modalities(data_card: dict[str, Any], errors: list[str]) -> None:
+    _validate_data_card_string_list(data_card, "modalities", errors)
+    values = data_card.get("modalities")
+    if not isinstance(values, list):
+        return
+    for modality in values:
+        if isinstance(modality, str) and modality in FORBIDDEN_MODEL_INPUT_MODALITIES:
+            errors.append(
+                "data_card.json modalities must not expose controlled or hidden metadata as model input: "
+                f"{modality}"
+            )
 
 
 def _validate_leakage_controls(controls: Any, errors: list[str]) -> None:
