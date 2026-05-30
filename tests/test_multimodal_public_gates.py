@@ -269,6 +269,54 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("reporting metadata missing parameter_count", joined)
         self.assertIn("reporting metadata missing per_seed_table", joined)
 
+    def test_region_text_gate_requires_complete_same_feature_baseline_defense_table(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        report = evaluate_region_text_gate(
+            statistics_summary=_summary(
+                "phrase_region_grounding",
+                "test",
+                full=0.80,
+                baseline=0.72,
+                include_required_baselines=False,
+            ),
+            diagnostics_rows=[
+                _diagnostic(
+                    "clean",
+                    {"CATO": 0.55, "TLEO": 0.2, "SPO": 0.15, "LRIO": 0.1},
+                    cato_entropy=0.30,
+                    grounding_accuracy=0.74,
+                    top_alignment_accuracy=0.72,
+                    rceo_reliability=0.90,
+                ),
+                _diagnostic(
+                    "no_cato",
+                    {"CATO": 0.0, "TLEO": 0.4, "SPO": 0.4, "LRIO": 0.2},
+                    cato_entropy=0.90,
+                    grounding_accuracy=0.52,
+                    top_alignment_accuracy=0.20,
+                ),
+                _diagnostic(
+                    "corrupted_visual",
+                    {"CATO": 0.28, "TLEO": 0.30, "SPO": 0.32, "LRIO": 0.10},
+                    cato_entropy=0.58,
+                    grounding_accuracy=0.61,
+                    top_alignment_accuracy=0.56,
+                    rceo_reliability=0.55,
+                    rceo_corruption_response=0.35,
+                ),
+            ],
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("statistics summary missing required same-feature baseline: text_only", joined)
+        self.assertIn("statistics summary missing required same-feature baseline: region_only", joined)
+        self.assertIn("statistics summary missing required same-feature baseline: ovha_no_evidence_router", joined)
+
     def test_public_gate_cli_emits_go_no_go_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -345,49 +393,89 @@ def _summary(
     common_seed_count: int = 3,
     include_bootstrap: bool = True,
     include_reporting_metadata: bool = True,
+    include_required_baselines: bool = True,
 ) -> dict[str, object]:
     paired = {"common_seed_count": common_seed_count, "paired_permutation_p": 0.25}
     if include_bootstrap:
         paired["paired_bootstrap_ci95"] = [0.01, 0.12]
-    full_row: dict[str, object] = {"mean": full, "seed_count": seed_count, "higher_is_better": True}
-    baseline_row: dict[str, object] = {"mean": baseline, "seed_count": seed_count, "higher_is_better": True}
-    if include_reporting_metadata:
-        full_row.update({"std": 0.01, "ci95": [full - 0.01, full + 0.01], "per_seed_scores": [full - 0.01, full, full + 0.01]})
-        baseline_row.update(
-            {
-                "std": 0.01,
-                "ci95": [baseline - 0.01, baseline + 0.01],
-                "per_seed_scores": [baseline - 0.01, baseline, baseline + 0.01],
-            }
-        )
+    models = ["ovha_full", "cross_attention_transformer"]
+    if include_required_baselines:
+        for model in _required_baselines_for_task(task):
+            if model not in models:
+                models.append(model)
+    model_scores = {
+        model: (full if model == "ovha_full" else baseline - 0.01 * index)
+        for index, model in enumerate(models)
+    }
+    model_rows = {
+        model: _model_summary_row(score, seed_count, include_reporting_metadata)
+        for model, score in model_scores.items()
+    }
     summary: dict[str, object] = {
         "main_table": {
             task: {
-                split: {
-                    "ovha_full": full_row,
-                    "cross_attention_transformer": baseline_row,
-                }
+                split: model_rows
             }
         },
         "paired_tests": {task: {split: paired}},
     }
     if include_reporting_metadata:
         summary["reporting_metadata"] = {
-            "parameter_count": {"ovha_full": 123456, "cross_attention_transformer": 120000},
-            "training_steps": {"ovha_full": 1000, "cross_attention_transformer": 1000},
+            "parameter_count": {model: 120000 + index for index, model in enumerate(models)},
+            "training_steps": {model: 1000 for model in models},
             "frozen_feature_versions": {"text": "frozen-text-v1", "region": "frozen-region-v1"},
             "hardware": "unit-test-cpu",
-            "wall_clock_summary": {"ovha_full": "10m", "cross_attention_transformer": "9m"},
+            "wall_clock_summary": {model: "10m" for model in models},
             "per_seed_table": [
-                {"model": "ovha_full", "seed": 1, "score": full - 0.01},
-                {"model": "ovha_full", "seed": 2, "score": full},
-                {"model": "ovha_full", "seed": 3, "score": full + 0.01},
-                {"model": "cross_attention_transformer", "seed": 1, "score": baseline - 0.01},
-                {"model": "cross_attention_transformer", "seed": 2, "score": baseline},
-                {"model": "cross_attention_transformer", "seed": 3, "score": baseline + 0.01},
+                {"model": model, "seed": seed, "score": score + (seed - 2) * 0.01}
+                for model, score in model_scores.items()
+                for seed in range(1, seed_count + 1)
             ],
         }
     return summary
+
+
+def _model_summary_row(score: float, seed_count: int, include_reporting_metadata: bool) -> dict[str, object]:
+    row: dict[str, object] = {"mean": score, "seed_count": seed_count, "higher_is_better": True}
+    if include_reporting_metadata:
+        row.update(
+            {
+                "std": 0.01,
+                "ci95": [score - 0.01, score + 0.01],
+                "per_seed_scores": [score + (seed - 2) * 0.01 for seed in range(1, seed_count + 1)],
+            }
+        )
+    return row
+
+
+def _required_baselines_for_task(task: str) -> tuple[str, ...]:
+    if task == "phrase_region_grounding":
+        return (
+            "text_only",
+            "region_only",
+            "concat_fusion",
+            "cross_attention_transformer",
+            "modality_expert_moe",
+            "clip_style_region_text_retrieval",
+            "cato_only",
+            "ovha_no_cato",
+            "ovha_no_rceo",
+            "ovha_no_evidence_router",
+        )
+    if task == "sentiment_emotion":
+        return (
+            "concat_fusion",
+            "tfn_lmf",
+            "mult_style_crossmodal_transformer",
+            "misa_shared_private",
+            "modality_expert_moe",
+            "quality_aware_fusion",
+            "ovha_no_lrio",
+            "ovha_no_spo",
+            "ovha_no_rceo",
+            "ovha_no_evidence_router",
+        )
+    return ()
 
 
 def _diagnostic(
