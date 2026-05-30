@@ -39,7 +39,45 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 {
                     "setting": "clean",
                     "router_load_by_candidate": {"TLEO": 0.1, "SPO": 0.35, "LRIO": 0.40, "CATO": 0.15},
-                    "adapter_params": {"LRIO_rank_entropy": 0.6, "SPO_prototype_entropy": 0.5},
+                    "adapter_params": {"LRIO_rank_entropy": 0.6, "SPO_temperature": 1.0},
+                    "candidate_diagnostics": {
+                        "LRIO": {"rank_entropy": 0.6, "rank_top_k": [0, 1], "pair_interaction_strength": 0.4},
+                        "SPO": {
+                            "prototype_entropy": 0.5,
+                            "top_prototype_by_class": {"negative": 1, "positive": 4},
+                        },
+                    },
+                }
+            ],
+            ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
+            robustness_summary={
+                "full_drop_less_than_baseline": True,
+                "rceo_reliability_monotonic": True,
+                "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+                "required_ablation_degradation": {"passed": True, "reasons": []},
+                "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
+            },
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertTrue(report["passed"], report["reasons"])
+        self.assertTrue(report["checks"]["no_lrio_drops"]["passed"])
+        self.assertTrue(report["checks"]["no_rceo_drops"]["passed"])
+        self.assertTrue(report["checks"]["robustness_passes"]["passed"])
+        self.assertTrue(report["checks"]["lrio_rank_entropy_present"]["passed"])
+        self.assertTrue(report["checks"]["spo_top_prototype_differentiates"]["passed"])
+        self.assertTrue(report["checks"]["rceo_reliability_calibrated"]["passed"])
+
+    def test_sentiment_gate_rejects_missing_plan_diagnostics_and_calibration(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=_summary("sentiment_emotion", "test", full=0.76, baseline=0.74),
+            diagnostics_rows=[
+                {
+                    "setting": "clean",
+                    "router_load_by_candidate": {"TLEO": 0.1, "SPO": 0.35, "LRIO": 0.40, "CATO": 0.15},
                 }
             ],
             ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
@@ -53,10 +91,12 @@ class MultimodalPublicGateTests(unittest.TestCase):
             split="test",
         )
 
-        self.assertTrue(report["passed"], report["reasons"])
-        self.assertTrue(report["checks"]["no_lrio_drops"]["passed"])
-        self.assertTrue(report["checks"]["no_rceo_drops"]["passed"])
-        self.assertTrue(report["checks"]["robustness_passes"]["passed"])
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("LRIO rank entropy diagnostic missing", joined)
+        self.assertIn("SPO prototype entropy diagnostic missing", joined)
+        self.assertIn("SPO top prototype differentiation missing", joined)
+        self.assertIn("RCEO reliability calibration missing", joined)
 
     def test_public_gate_blocks_when_delta_or_ablation_missing(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
