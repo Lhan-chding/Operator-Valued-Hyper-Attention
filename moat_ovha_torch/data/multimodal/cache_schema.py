@@ -292,7 +292,11 @@ def _validate_split_manifest_consistency(layout: MultimodalCacheLayout, splits: 
         if not isinstance(expected, list):
             errors.append(f"splits.json missing source_id list for split: {split}")
             continue
-        expected_source_ids = [str(source_id) for source_id in expected]
+        invalid_source_ids = [source_id for source_id in expected if not isinstance(source_id, str) or not source_id]
+        if invalid_source_ids:
+            errors.append(f"splits.json {split} source_id entries must be non-empty strings")
+            continue
+        expected_source_ids = list(expected)
         duplicate_source_ids = sorted({source_id for source_id in expected_source_ids if expected_source_ids.count(source_id) > 1})
         for source_id in duplicate_source_ids:
             errors.append(f"splits.json {split} contains duplicate source_id: {source_id}")
