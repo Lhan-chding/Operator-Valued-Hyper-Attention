@@ -84,6 +84,7 @@ class MultimodalOVHA(nn.Module):
             },
             "candidate_loss": candidate_losses,
             "adapter_params": _adapter_param_diagnostics(params),
+            "adapter_params_detail": _adapter_param_details(params),
             "memory_slot_norm": {name: memory_bank[name].norm(dim=-1).mean() for name in self.candidate_names},
             "candidate_diagnostics": _candidate_diagnostics(candidate_outputs, candidate_losses, reliability),
             "stackability_passed": True,
@@ -115,13 +116,25 @@ def _candidate_losses(
     }
 
 
-def _adapter_param_diagnostics(params: dict[str, dict[str, torch.Tensor]]) -> dict[str, dict[str, torch.Tensor]]:
-    diagnostics: dict[str, dict[str, torch.Tensor]] = {}
-    for name, values in params.items():
-        diagnostics[name] = {}
-        for key, tensor in values.items():
-            diagnostics[name][f"{key}_mean"] = tensor.mean()
-    return diagnostics
+def _adapter_param_diagnostics(params: dict[str, dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+    return {
+        "TLEO_lengthscale": params["TLEO"]["lengthscale"].mean(),
+        "SPO_temperature": params["SPO"]["prototype_temperature"].mean(),
+        "LRIO_rank_entropy": _entropy(params["LRIO"]["rank_logits"]),
+        "CATO_alignment_temperature": params["CATO"]["alignment_temperature"].mean(),
+    }
+
+
+def _adapter_param_details(params: dict[str, dict[str, torch.Tensor]]) -> dict[str, dict[str, torch.Tensor]]:
+    return {
+        name: {f"{key}_mean": tensor.mean() for key, tensor in values.items()}
+        for name, values in params.items()
+    }
+
+
+def _entropy(logits: torch.Tensor) -> torch.Tensor:
+    probs = torch.softmax(logits, dim=-1)
+    return -(probs * probs.clamp_min(1e-12).log()).sum(dim=-1).mean()
 
 
 def _candidate_diagnostics(
