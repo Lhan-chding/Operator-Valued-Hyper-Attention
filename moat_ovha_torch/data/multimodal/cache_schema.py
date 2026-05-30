@@ -357,6 +357,7 @@ def _validate_sample_record_manifests(
             continue
         records = _read_jsonl_objects(path, errors)
         observed_source_ids: list[str] = []
+        seen_source_ids: set[str] = set()
         for line_number, payload in records:
             missing = [key for key in SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS if not payload.get(key)]
             if missing:
@@ -365,7 +366,11 @@ def _validate_sample_record_manifests(
                 errors.append(f"{path.name} line {line_number} split must match {split}")
             source_id = payload.get("source_id")
             if source_id:
-                observed_source_ids.append(str(source_id))
+                normalized_source_id = str(source_id)
+                if normalized_source_id in seen_source_ids:
+                    errors.append(f"duplicate source_id within {path.name}: {normalized_source_id}")
+                seen_source_ids.add(normalized_source_id)
+                observed_source_ids.append(normalized_source_id)
         expected_source_ids = _read_source_ids(layout, split)
         if expected_source_ids is None:
             continue
