@@ -257,16 +257,24 @@ def _validate_feature_parity(layout: MultimodalCacheLayout, data_card: dict[str,
         return
     baselines = feature_versions.get("baselines", {})
     if not isinstance(baselines, dict) or not baselines:
+        errors.append("feature_versions.json baselines must be a non-empty object when same_features_for_baselines is true")
         return
-    reference = None
+    if "ovha_full" not in baselines:
+        errors.append("feature_versions.json baselines must include ovha_full reference")
+        return
+    modalities = data_card.get("modalities", [])
+    if isinstance(modalities, list):
+        for modality in modalities:
+            if str(modality) not in feature_versions:
+                errors.append(f"feature_versions.json missing feature extractor version for modality: {modality}")
+    reference = dict(baselines["ovha_full"])
     for model_name, versions in sorted(baselines.items()):
-        if reference is None:
-            reference = dict(versions)
+        if model_name == "ovha_full":
             continue
         if dict(versions) != reference:
             errors.append(
-                "same_features_for_baselines is true but baseline feature versions differ: "
-                f"{model_name}"
+                "same_features_for_baselines is true but "
+                f"{model_name} differs from ovha_full"
             )
 
 

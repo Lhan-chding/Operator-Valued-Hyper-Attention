@@ -215,7 +215,7 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         joined = "\n".join(report.errors)
         self.assertIn("source_id appears in multiple splits", joined)
         self.assertIn("checksums.json missing hash for required artifact", joined)
-        self.assertIn("same_features_for_baselines is true but baseline feature versions differ", joined)
+        self.assertIn("same_features_for_baselines is true but cross_attention_transformer differs from ovha_full", joined)
 
     def test_cache_validator_accepts_complete_minimal_cache(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
