@@ -42,6 +42,41 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         self.assertIn("at least 3 seeds", "\n".join(validation.errors))
         self.assertIn("paired_tests", "\n".join(validation.errors))
 
+    def test_public_summary_marks_weak_and_pseudo_labels_not_ground_truth(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        rows = _metric_rows()
+        for row in rows:
+            row["label_provenance"] = {
+                "supervision_type": "pseudo",
+                "source": "cross_modal_disagreement_v0",
+                "must_report_as": "pseudo",
+            }
+        summary = summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        validation = validate_public_summary(summary)
+
+        self.assertTrue(validation.ok, validation.errors)
+        self.assertEqual(summary["metadata"]["label_provenance"]["pseudo"]["count"], len(rows))
+        self.assertIn("cross_modal_disagreement_v0", summary["metadata"]["label_provenance"]["pseudo"]["sources"])
+
+    def test_public_summary_rejects_pseudo_labels_reported_as_ground_truth(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        rows = _metric_rows()
+        for row in rows:
+            row["pseudo_label_source"] = "cross_modal_disagreement_v0"
+            row["label_provenance"] = {
+                "supervision_type": "ground_truth",
+                "source": "cross_modal_disagreement_v0",
+                "must_report_as": "ground_truth",
+            }
+        summary = summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        joined = "\n".join(validation.errors)
+        self.assertIn("pseudo labels must be reported as pseudo, not ground_truth", joined)
+
     def test_public_summary_cli_emits_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             metrics_path = Path(tmp) / "metrics.jsonl"
