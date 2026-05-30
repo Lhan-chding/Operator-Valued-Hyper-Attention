@@ -152,6 +152,43 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("data_card.json", "\n".join(payload["errors"]))
         self.assertIn("fail-fast", payload["policy"])
 
+    def test_public_entry_requires_controlled_go_no_go_report(self):
+        from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+
+        failed_controlled = {
+            "go_no_go": {"controlled_multimodal_passed": False},
+            "gate_table": {},
+        }
+        region_report = validate_public_entry_requirements("phrase_region_grounding", failed_controlled)
+
+        self.assertFalse(region_report.ok)
+        self.assertIn("controlled_multimodal_passed", "\n".join(region_report.errors))
+
+        missing_cato = {
+            "go_no_go": {"controlled_multimodal_passed": True},
+            "gate_table": {
+                "Stackability": {"passed": True},
+                "CATO collapse": {"passed": False},
+            },
+        }
+        region_report = validate_public_entry_requirements("phrase_region_grounding", missing_cato)
+
+        self.assertFalse(region_report.ok)
+        self.assertIn("region-text public entry requires CATO collapse", "\n".join(region_report.errors))
+
+        missing_sentiment_gates = {
+            "go_no_go": {"controlled_multimodal_passed": True},
+            "gate_table": {
+                "LRIO collapse": {"passed": True},
+                "SPO collapse": {"passed": False},
+                "RCEO gate": {"passed": True},
+            },
+        }
+        sentiment_report = validate_public_entry_requirements("sentiment_emotion", missing_sentiment_gates)
+
+        self.assertFalse(sentiment_report.ok)
+        self.assertIn("sentiment/emotion public entry requires SPO collapse", "\n".join(sentiment_report.errors))
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
