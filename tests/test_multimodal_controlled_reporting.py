@@ -108,6 +108,25 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertTrue(report["gate_table"]["no-RCEO ablation"]["passed"])
         self.assertTrue(entry.ok, entry.errors)
 
+    def test_controlled_report_emits_region_text_alignment_entry_gate(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+        from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+
+        rows = [
+            _row("tleo_local_evidence", "TLEO", 0.010, 0.010),
+            _row("spo_global_prototype", "SPO", 0.020, 0.020),
+            _row("lrio_low_rank_interaction", "LRIO", 0.030, 0.030),
+            _row("cato_alignment_transport", "CATO", 0.040, 0.040),
+            _row("rceo_reliability_corruption", "LRIO", 0.050, 0.050, rceo=True),
+            _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy=0.85),
+        ]
+
+        report = build_controlled_report(rows)
+        entry = validate_public_entry_requirements("phrase_region_grounding", report)
+
+        self.assertTrue(report["gate_table"]["CATO alignment diagnostics"]["passed"])
+        self.assertTrue(entry.ok, entry.errors)
+
     def test_oracle_report_conversion_produces_gate_ready_row_without_torch(self):
         from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
         from moat_ovha_torch.eval.multimodal_oracle import controlled_row_from_oracle_report

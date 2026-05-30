@@ -23,6 +23,9 @@ CONTROLLED_REQUIRED_GATES = (
     "Memory gate",
     "Adapter gate",
 )
+REGION_TEXT_ENTRY_GATES = (
+    "CATO alignment diagnostics",
+)
 SENTIMENT_ENTRY_GATES = (
     "no-LRIO ablation",
     "no-RCEO ablation",
@@ -54,6 +57,11 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "SPO collapse": _collapse_gate(family_rows, "SPO"),
         "LRIO collapse": _collapse_gate(family_rows, "LRIO"),
         "CATO collapse": _collapse_gate(family_rows, "CATO"),
+        REGION_TEXT_ENTRY_GATES[0]: _operator_diagnostic_gate(
+            family_rows,
+            "CATO",
+            REGION_TEXT_ENTRY_GATES[0],
+        ),
         "Router gate": _router_gate(family_rows),
         "RCEO gate": _rceo_gate(family_rows),
         "Memory gate": _delta_gate(rows, "no_operator_memory_delta", "Memory gate"),
@@ -208,6 +216,23 @@ def _targeted_delta_gate(
         "required_families": required_families,
         "reasons": reasons,
         "condition": f"{name} is worse than full model on targeted sentiment-entry controlled families",
+    }
+
+
+def _operator_diagnostic_gate(
+    family_rows: dict[str, dict[str, Any]],
+    operator: str,
+    name: str,
+) -> dict[str, Any]:
+    family = OPERATOR_TO_FAMILY[operator]
+    row = family_rows.get(family)
+    reasons = [f"missing {operator} controlled family"] if row is None else _operator_diagnostic_reasons(row, operator)
+    return {
+        "passed": not reasons,
+        "operator": operator,
+        "required_diagnostics": OPERATOR_DIAGNOSTIC_REQUIREMENTS.get(operator, ()),
+        "reasons": reasons,
+        "condition": f"{name} are present and improve on the {operator} controlled family",
     }
 
 

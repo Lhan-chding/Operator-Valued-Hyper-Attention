@@ -33,6 +33,12 @@ def validate_public_entry_requirements(task_type: str, controlled_report: dict[s
     if task_type in REGION_TEXT_TASK_TYPES:
         _require_gate(gates, "Stackability", "region-text public entry requires stackability", errors)
         _require_gate(gates, "CATO collapse", "region-text public entry requires CATO collapse", errors)
+        _require_gate(
+            gates,
+            "CATO alignment diagnostics",
+            "region-text public entry requires CATO alignment diagnostics",
+            errors,
+        )
     elif task_type in SENTIMENT_EMOTION_TASK_TYPES:
         _require_gate(gates, "LRIO collapse", "sentiment/emotion public entry requires LRIO collapse", errors)
         _require_gate(gates, "SPO collapse", "sentiment/emotion public entry requires SPO collapse", errors)
