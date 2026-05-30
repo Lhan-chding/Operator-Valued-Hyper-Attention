@@ -268,6 +268,42 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("adapter_params missing LRIO_rank_entropy", joined)
         self.assertIn("memory_slot_norm missing TLEO", joined)
 
+    def test_diagnostics_schema_rejects_missing_candidate_specific_plan_fields(self):
+        from moat_ovha_torch.eval.multimodal_diagnostics import validate_diagnostic_row
+
+        row = {
+            "router_entropy": 1.0,
+            "router_load_by_candidate": {"TLEO": 0.25, "SPO": 0.25, "LRIO": 0.25, "CATO": 0.25},
+            "router_logit_parts": {"memory": 0.1, "evidence": 0.2, "reliability": 0.3},
+            "candidate_loss": {"TLEO": 0.1, "SPO": 0.2, "LRIO": 0.3, "CATO": 0.4},
+            "adapter_params": {
+                "TLEO_lengthscale": 0.5,
+                "SPO_temperature": 1.0,
+                "LRIO_rank_entropy": 0.6,
+                "CATO_alignment_temperature": 0.7,
+            },
+            "memory_slot_norm": {"TLEO": 1.0, "SPO": 1.0, "LRIO": 1.0, "CATO": 1.0},
+            "stackability_passed": True,
+            "candidate_diagnostics": {
+                "TLEO": {"lengthscale": 0.5, "local_entropy": 0.2, "candidate_loss": 0.1},
+                "SPO": {"prototype_entropy": 0.4, "prototype_temperature": 1.0, "candidate_loss": 0.2},
+                "LRIO": {"rank_entropy": 0.6, "candidate_loss": 0.3},
+                "CATO": {"alignment_entropy": 0.3, "candidate_loss": 0.4},
+                "RCEO": {"modality_reliability": 0.9, "reliability_bias_norm": 0.1, "corruption_response": 0.2},
+            },
+        }
+
+        report = validate_diagnostic_row(row)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("candidate_diagnostics.TLEO missing local_window_size", joined)
+        self.assertIn("candidate_diagnostics.SPO missing top_prototype", joined)
+        self.assertIn("candidate_diagnostics.LRIO missing rank_top_k", joined)
+        self.assertIn("candidate_diagnostics.LRIO missing pair_interaction_strength", joined)
+        self.assertIn("candidate_diagnostics.CATO missing top_k_alignment", joined)
+        self.assertIn("candidate_diagnostics.CATO missing transport_marginal_error", joined)
+
 def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
     from moat_ovha_torch.data.multimodal.cache_schema import (
         MultimodalCacheLayout,
