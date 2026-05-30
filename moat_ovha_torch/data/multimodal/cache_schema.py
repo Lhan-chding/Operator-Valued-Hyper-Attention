@@ -366,6 +366,9 @@ def _validate_token_field_manifests(
         if not isinstance(manifest, dict):
             errors.append(f"{manifest_path.relative_to(layout.root)} must be a JSON object keyed by modality")
             continue
+        unexpected_modalities = sorted(str(modality) for modality in manifest if str(modality) not in expected_modalities)
+        for modality in unexpected_modalities:
+            errors.append(f"{manifest_path.relative_to(layout.root)} contains undeclared modality: {modality}")
         for modality in expected_modalities:
             entry = manifest.get(modality)
             if not isinstance(entry, dict):
