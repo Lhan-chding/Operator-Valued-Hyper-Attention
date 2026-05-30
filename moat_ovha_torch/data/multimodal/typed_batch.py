@@ -124,7 +124,7 @@ def validate_multimodal_batch_contract(batch: MultimodalEpisodeBatch) -> BatchCo
         _require_exact_shape("query.mask", query_mask, (batch_size, query_count), errors)
         _require_first_dims("target_y", target_y, (batch_size, query_count), errors)
         _require_exact_shape("target_mask", target_mask, (batch_size, query_count), errors)
-        _validate_provenance_lengths(batch.provenance, batch_size, errors)
+        _validate_provenance_bank(batch.provenance, batch_size, errors)
     else:
         errors.append("cannot infer shared [B,Q] from query.x, target_y, or query.mask")
 
@@ -250,8 +250,43 @@ def _validate_quality_shape(name: str, quality: Any | None, field_shape: tuple[i
     )
 
 
-def _validate_provenance_lengths(provenance: ProvenanceBank, batch_size: int, errors: list[str]) -> None:
+def _validate_provenance_bank(provenance: ProvenanceBank, batch_size: int, errors: list[str]) -> None:
     for key in ("source_id", "original_split", "raw_ref", "license_tag"):
         values = getattr(provenance, key)
+        if not isinstance(values, list):
+            errors.append(f"provenance.{key} must be a list of strings")
+            continue
         if len(values) != batch_size:
             errors.append(f"provenance.{key} length must match batch size {batch_size}, got {len(values)}")
+        if any(not isinstance(value, str) or not value for value in values):
+            errors.append(f"provenance.{key} entries must be non-empty strings")
+    if not isinstance(provenance.preprocessing_version, str) or not provenance.preprocessing_version:
+        errors.append("provenance.preprocessing_version must be a non-empty string")
+    _validate_string_version_map(
+        "provenance.feature_extractor_version",
+        provenance.feature_extractor_version,
+        errors,
+        require_non_empty=True,
+    )
+    _validate_string_version_map(
+        "provenance.pseudo_label_version",
+        provenance.pseudo_label_version,
+        errors,
+        require_non_empty=False,
+    )
+
+
+def _validate_string_version_map(
+    name: str,
+    value: Any,
+    errors: list[str],
+    *,
+    require_non_empty: bool,
+) -> None:
+    if not isinstance(value, dict) or (require_non_empty and not value):
+        errors.append(f"{name} must map strings to non-empty strings")
+        return
+    for key, version in value.items():
+        if not isinstance(key, str) or not key or not isinstance(version, str) or not version:
+            errors.append(f"{name} must map strings to non-empty strings")
+            return
