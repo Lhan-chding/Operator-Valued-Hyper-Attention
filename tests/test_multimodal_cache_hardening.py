@@ -412,6 +412,63 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_hidden_metadata_declared_as_modality(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                data_card_overrides={"modalities": ["text", "region", "true_active_operator", "corruption_strength"]},
+            )
+            _write_hidden_metadata_token_shards(layout.root, "true_active_operator")
+            _write_hidden_metadata_token_shards(layout.root, "corruption_strength")
+            (layout.root / "provenance" / "feature_versions.json").write_text(
+                json.dumps(
+                    {
+                        "text": "clip-text-v1",
+                        "region": "clip-region-v1",
+                        "true_active_operator": "controlled-hidden-v1",
+                        "corruption_strength": "controlled-hidden-v1",
+                        "baselines": {
+                            "cross_attention_transformer": {
+                                "text": "clip-text-v1",
+                                "region": "clip-region-v1",
+                                "true_active_operator": "controlled-hidden-v1",
+                                "corruption_strength": "controlled-hidden-v1",
+                            },
+                            "ovha_full": {
+                                "text": "clip-text-v1",
+                                "region": "clip-region-v1",
+                                "true_active_operator": "controlled-hidden-v1",
+                                "corruption_strength": "controlled-hidden-v1",
+                            },
+                        },
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "data_card.json modalities must not expose controlled or hidden metadata as model input: "
+            "true_active_operator",
+            joined,
+        )
+        self.assertIn(
+            "data_card.json modalities must not expose controlled or hidden metadata as model input: "
+            "corruption_strength",
+            joined,
+        )
+
     def test_cache_validator_rejects_duplicate_data_card_tasks(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -1043,6 +1100,24 @@ def _write_token_field_manifest(
             entry.pop("pos")
         manifest[modality] = entry
     (root / "token_fields" / f"manifest_{split}.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
+
+
+def _write_hidden_metadata_token_shards(root: Path, modality: str) -> None:
+    for split in ("train", "test"):
+        manifest_path = root / "token_fields" / f"manifest_{split}.json"
+        manifest = json.loads(manifest_path.read_text())
+        x_path = root / "token_fields" / f"{modality}_{split}.npy"
+        pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
+        mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
+        x_path.write_text("hidden metadata token field\n")
+        pos_path.write_text("hidden metadata positions\n")
+        mask_path.write_text("hidden metadata mask\n")
+        manifest[modality] = {
+            "x": str(x_path.relative_to(root)),
+            "pos": str(pos_path.relative_to(root)),
+            "mask": str(mask_path.relative_to(root)),
+        }
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":
