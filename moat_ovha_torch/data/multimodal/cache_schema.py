@@ -90,6 +90,7 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
             for key in REQUIRED_DATA_CARD_KEYS:
                 if key not in data_card:
                     errors.append(f"data_card.json missing required key: {key}")
+            _validate_data_card_identity(layout, data_card, errors)
             _validate_operator_supervision(data_card.get("operator_supervision"), errors)
             controls = data_card.get("leakage_controls", {})
             for key in (
@@ -200,6 +201,17 @@ def _validate_operator_supervision(operator_supervision: Any, errors: list[str])
     for operator in REQUIRED_OPERATOR_SUPERVISION_KEYS:
         if not operator_supervision.get(operator):
             errors.append(f"data_card.json operator_supervision missing required operator: {operator}")
+
+
+def _validate_data_card_identity(
+    layout: MultimodalCacheLayout,
+    data_card: dict[str, Any],
+    errors: list[str],
+) -> None:
+    if "dataset_name" in data_card and data_card.get("dataset_name") != layout.dataset_name:
+        errors.append(f"data_card.json dataset_name must match cache layout: expected {layout.dataset_name}")
+    if "cache_version" in data_card and data_card.get("cache_version") != layout.version:
+        errors.append(f"data_card.json cache_version must match cache layout: expected {layout.version}")
 
 
 def _validate_source_split_controls(layout: MultimodalCacheLayout, splits: tuple[str, ...], errors: list[str]) -> None:
