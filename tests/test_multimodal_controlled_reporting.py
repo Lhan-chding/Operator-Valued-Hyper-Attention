@@ -80,6 +80,48 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("tleo_local_evidence missing oracle gap evidence: TLEO_oracle_gap", joined)
         self.assertIn("rceo_reliability_corruption missing RCEO prior effect", joined)
 
+    def test_oracle_report_conversion_produces_gate_ready_row_without_torch(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+        from moat_ovha_torch.eval.multimodal_oracle import controlled_row_from_oracle_report
+
+        oracle_report = {
+            "learned_learned": {"mse": 0.05},
+            "true_learned": {"mse": 0.05},
+            "learned_true": {"mse": 0.05},
+            "true_true": {"mse": 0.0},
+            "TLEO_oracle_gap": 0.2,
+            "SPO_oracle_gap": 0.2,
+            "LRIO_oracle_gap": 0.2,
+            "CATO_oracle_gap": 0.2,
+            "rceo_prior_effect": 0.3,
+        }
+        rceo_row = controlled_row_from_oracle_report(
+            "rceo_reliability_corruption",
+            "LRIO",
+            oracle_report,
+            no_operator_memory_delta=0.1,
+            no_hyper_adapter_delta=0.1,
+            diagnostics={
+                "rank_logits_kl_delta": 0.1,
+                "rceo_reliability_monotonic": True,
+                "rceo_router_load_shift": 0.1,
+            },
+        )
+        rows = [
+            _row("tleo_local_evidence", "TLEO", 0.010, 0.010),
+            _row("spo_global_prototype", "SPO", 0.020, 0.020),
+            _row("lrio_low_rank_interaction", "LRIO", 0.030, 0.030),
+            _row("cato_alignment_transport", "CATO", 0.040, 0.040),
+            rceo_row,
+            _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy=0.85),
+        ]
+        report = build_controlled_report(rows)
+
+        self.assertEqual(rceo_row["oracle_matrix"]["true_true"]["loss"], 0.0)
+        self.assertEqual(rceo_row["LRIO_oracle_gap"], 0.2)
+        self.assertEqual(rceo_row["rceo_prior_effect"], 0.3)
+        self.assertTrue(report["go_no_go"]["controlled_multimodal_passed"], report["go_no_go"]["reasons"])
+
     def test_robustness_summary_requires_auc_reliability_and_load_shift(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 
