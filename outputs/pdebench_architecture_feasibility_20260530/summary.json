@@ -1,0 +1,26 @@
+{
+  "purpose": "architecture feasibility evidence only",
+  "not_main_top_conference_claim": true,
+  "main_claim_track": "multimodal typed-token relation-operator tasks",
+  "metric": "mean relative L2, lower is better",
+  "seeds": [81, 82, 83],
+  "eval_episodes_per_split_family_seed": 256,
+  "positive_signal": {
+    "pdebench_advection_1d": {
+      "iid_delta_vs_best_baseline": 0.004247,
+      "parameter_holdout_delta_vs_best_baseline": 0.037922,
+      "resolution_transfer_delta_vs_best_baseline": 0.003913
+    },
+    "pdebench_darcy_2d": {
+      "iid_delta_vs_best_baseline": 0.068588,
+      "parameter_holdout_delta_vs_best_baseline": 0.007483,
+      "resolution_transfer_delta_vs_best_baseline": 0.055188
+    }
+  },
+  "limitations": [
+    "selected Advection/Darcy public slice only",
+    "not a canonical full neural-operator benchmark table",
+    "does not prove multimodal typed-token relation operators",
+    "raw phase-1.7 metric files are not present in this checkout"
+  ]
+}

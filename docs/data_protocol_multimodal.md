@@ -1,0 +1,69 @@
+# Multimodal OVHA Data Protocol
+
+This protocol defines the top-conference mainline for OVHA after PDEBench is frozen as architecture feasibility evidence.
+
+## Scientific Boundary
+
+PDEBench is not the main paper claim. The main claim must be validated on multimodal typed-token relation-operator tasks with controlled truth, public data, robustness stress, diagnostics, and multi-seed statistics.
+
+## Batch Contract
+
+Every sample is represented as:
+
+- typed token fields: text, vision, audio, video, region, or dataset-specific public fields
+- query field
+- task-space target `target_y: [B,Q,Dy]`
+- supervision bank
+- provenance bank
+- optional controlled `hidden` truth, never model input
+
+The model input path may consume public token fields, query, masks, and explicit public task controls. It must not consume `true_active_operator`, `true_router_weights`, `true_adapter_params`, corruption strength used only for reporting, or dataset-specific hidden metadata.
+
+## Candidate Bank
+
+Version 1 has exactly four candidate operators:
+
+- `TLEO`: typed local evidence
+- `SPO`: semantic prototype
+- `LRIO`: low-rank interaction
+- `CATO`: cross-modal alignment transport
+
+Every candidate returns `CandidateOutput.value: [B,Q,Dy]`. Only these four outputs may enter `torch.stack(candidate_values, dim=-2)`.
+
+`RCEO` is a support module only. It may produce router prior bias, adapter conditioning features, and diagnostics. It must not appear in the candidate stack.
+
+## Cache Requirements
+
+Every formal cache must include:
+
+- `data_card.json`
+- `splits.json`
+- `checksums.json`
+- `samples.parquet` or an equivalent indexed manifest
+- per-split token field shards
+- per-split masks and positions
+- supervision shards
+- provenance/source id files
+- frozen feature extractor versions
+- pseudo label versions when weak labels exist
+
+The cache must preserve `source_id`, split provenance, license tag, feature extractor version, pseudo-label provenance, failed sample manifests, and checksum records.
+
+## Leakage Controls
+
+- No dataset hidden metadata as model input.
+- No test split labels for training pseudo-label generation.
+- Same frozen features for OVHA and baselines.
+- No formal run without `data_card.json`, provenance, and checksums.
+- No silent drop of failed downloads or invalid samples.
+- Weak or pseudo labels must be reported as weak or pseudo labels.
+- Controlled metadata such as `corruption_strength` and `true_active_operator` is diagnostics/reporting only.
+
+## Execution Gates
+
+1. Stackability and candidate-name contract tests pass.
+2. Controlled-Multimodal single-family candidate gates pass.
+3. Controlled oracle matrix isolates router, adapter, candidate, memory, and reliability failures.
+4. Region-text public validates CATO/TLEO with same-feature baselines.
+5. Sentiment/emotion public validates LRIO/SPO/RCEO with same-feature baselines.
+6. Missing, low-quality, and mismatch robustness shows lower degradation and coherent reliability/router shifts.

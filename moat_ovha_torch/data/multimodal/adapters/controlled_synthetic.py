@@ -1,0 +1,200 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from moat_ovha_torch.data.multimodal.adapters.base import RawDatasetManifest, SupervisionShard, TokenFieldShard, ValidationReport
+from moat_ovha_torch.data.multimodal.typed_batch import (
+    MultimodalEpisodeBatch,
+    ProvenanceBank,
+    QueryField,
+    SupervisionBank,
+    TokenField,
+)
+
+
+CONTROLLED_MULTIMODAL_FAMILIES = (
+    "tleo_local_evidence",
+    "spo_global_prototype",
+    "lrio_low_rank_interaction",
+    "cato_alignment_transport",
+    "rceo_reliability_corruption",
+    "mixed_relation_operator",
+)
+
+CONTROLLED_OPERATOR_ORDER = ("TLEO", "SPO", "LRIO", "CATO")
+
+
+@dataclass(frozen=True)
+class ControlledSyntheticMultimodalAdapter:
+    name: str = "controlled_multimodal"
+    version: str = "v0.1"
+    seed: int = 0
+    output_dim: int = 2
+    field_dim: int = 4
+    token_count: int = 8
+
+    def discover_raw(self, raw_root: Path) -> RawDatasetManifest:
+        return RawDatasetManifest(dataset_name=self.name, raw_root=raw_root, files={})
+
+    def build_index(self, manifest: RawDatasetManifest) -> list[dict[str, str]]:
+        return [{"dataset": manifest.dataset_name, "split": "synthetic"}]
+
+    def extract_token_fields(self, rows, split: str) -> dict[str, TokenFieldShard]:
+        raise NotImplementedError("controlled synthetic adapter generates tensors directly via sample_batch")
+
+    def extract_supervision(self, rows, split: str) -> SupervisionShard:
+        raise NotImplementedError("controlled synthetic adapter generates tensors directly via sample_batch")
+
+    def write_cache(self, cache_root: Path, split: str) -> None:
+        raise NotImplementedError("controlled synthetic cache writing is intentionally explicit in build_cache.py")
+
+    def validate_cache(self, cache_root: Path) -> ValidationReport:
+        return ValidationReport(ok=True, errors=[], warnings=["controlled synthetic cache is generated, not discovered"])
+
+    def sample_batch(
+        self,
+        family: str,
+        batch_size: int = 4,
+        query_count: int = 16,
+        token_count: int | None = None,
+        device: str = "cpu",
+    ) -> MultimodalEpisodeBatch:
+        if family not in CONTROLLED_MULTIMODAL_FAMILIES:
+            raise ValueError(f"unknown controlled multimodal family: {family}")
+        import torch
+
+        token_count = token_count or self.token_count
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + CONTROLLED_MULTIMODAL_FAMILIES.index(family) * 997)
+        text_x = torch.randn(batch_size, token_count, self.field_dim, generator=generator).to(device)
+        region_x = torch.randn(batch_size, token_count, self.field_dim, generator=generator).to(device)
+        audio_x = torch.randn(batch_size, token_count, self.field_dim, generator=generator).to(device)
+        text_pos = torch.linspace(0.0, 1.0, token_count).view(1, token_count, 1).repeat(batch_size, 1, 2).to(device)
+        region_pos = torch.flip(text_pos, dims=(1,))
+        audio_pos = text_pos.clone()
+        query_x = torch.randn(batch_size, query_count, self.field_dim, generator=generator).to(device)
+        query_pos = torch.linspace(0.0, 1.0, query_count).view(1, query_count, 1).repeat(batch_size, 1, 2).to(device)
+
+        fields = {
+            "text": TokenField("text", text_x, text_pos, torch.ones(batch_size, token_count, dtype=torch.bool, device=device)),
+            "region": TokenField(
+                "region",
+                region_x,
+                region_pos,
+                torch.ones(batch_size, token_count, dtype=torch.bool, device=device),
+                quality=torch.ones(batch_size, token_count, 1, device=device),
+            ),
+            "audio": TokenField(
+                "audio",
+                audio_x,
+                audio_pos,
+                torch.ones(batch_size, token_count, dtype=torch.bool, device=device),
+                quality=_quality_for_family(torch, family, batch_size, token_count, device),
+            ),
+        }
+        candidate_values = _candidate_values(torch, text_x, region_x, audio_x, query_x, self.output_dim)
+        router_weights, active = _router_truth(torch, family, batch_size, query_count, device)
+        target_y = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
+        hidden = {
+            "true_active_operator": active,
+            "true_router_weights": router_weights,
+            "true_candidate_values": candidate_values,
+            "true_adapter_params": _true_adapter_params(torch, family, batch_size, query_count, device),
+            "true_alignment_pairs": _alignment_pairs(torch, batch_size, query_count, token_count, device),
+            "true_rank_logits": torch.zeros(batch_size, query_count, 4, device=device),
+            "true_prototype_logits": torch.zeros(batch_size, query_count, 4, device=device),
+            "true_lengthscale": torch.full((batch_size, query_count, 1), 0.16, device=device),
+            "true_reliability": fields["audio"].quality.mean(dim=1),
+            "true_corruption_level": torch.full((batch_size, 1), 0.7 if family == "rceo_reliability_corruption" else 0.0, device=device),
+        }
+        return MultimodalEpisodeBatch(
+            fields=fields,
+            query=QueryField(
+                x=query_x,
+                pos=query_pos,
+                query_type=torch.full((batch_size, query_count), -1, dtype=torch.long, device=device),
+                mask=torch.ones(batch_size, query_count, dtype=torch.bool, device=device),
+            ),
+            target_y=target_y,
+            target_mask=torch.ones(batch_size, query_count, dtype=torch.bool, device=device),
+            task_type=family,
+            split="train",
+            source_dataset=self.name,
+            supervision=SupervisionBank(
+                task_label=None,
+                alignment_pairs=hidden["true_alignment_pairs"] if family == "cato_alignment_transport" else None,
+                alignment_weights=None,
+                bbox_targets=None,
+                region_targets=None,
+                timestamp_targets=None,
+                modality_missing_mask=None,
+                corruption_metadata={"synthetic_corruption": hidden["true_corruption_level"]},
+                weak_labels=None,
+                weak_label_confidence=None,
+                pseudo_label_source=None,
+            ),
+            provenance=ProvenanceBank(
+                source_id=[f"controlled-{family}-{idx}" for idx in range(batch_size)],
+                original_split=["train"] * batch_size,
+                raw_ref=["generated"] * batch_size,
+                license_tag=["synthetic"] * batch_size,
+                preprocessing_version=self.version,
+                feature_extractor_version={"text": "synthetic", "region": "synthetic", "audio": "synthetic"},
+                pseudo_label_version={},
+            ),
+            hidden=hidden,
+        )
+
+
+def _candidate_values(torch, text_x, region_x, audio_x, query_x, output_dim: int):
+    batch_size, query_count, _ = query_x.shape
+    text_local = text_x[:, :query_count].mean(dim=-1, keepdim=True)
+    if text_local.shape[1] < query_count:
+        text_local = text_x.mean(dim=1, keepdim=True).expand(-1, query_count, -1).mean(dim=-1, keepdim=True)
+    spo = text_x.mean(dim=1, keepdim=True).mean(dim=-1, keepdim=True).expand(batch_size, query_count, 1)
+    lrio = (text_x.mean(dim=1) * audio_x.mean(dim=1)).mean(dim=-1, keepdim=True).unsqueeze(1).expand(batch_size, query_count, 1)
+    alignment = torch.matmul(query_x, region_x.transpose(1, 2)).softmax(dim=-1)
+    cato = torch.matmul(alignment, region_x).mean(dim=-1, keepdim=True)
+    base = torch.cat([text_local, spo, lrio, cato], dim=-1).unsqueeze(-1)
+    scales = torch.linspace(0.5, 1.5, output_dim, device=query_x.device).view(1, 1, 1, output_dim)
+    return base * scales
+
+
+def _router_truth(torch, family: str, batch_size: int, query_count: int, device: str):
+    active_by_family = {
+        "tleo_local_evidence": 0,
+        "spo_global_prototype": 1,
+        "lrio_low_rank_interaction": 2,
+        "cato_alignment_transport": 3,
+        "rceo_reliability_corruption": 2,
+    }
+    if family == "mixed_relation_operator":
+        active = torch.arange(query_count, device=device).view(1, query_count).repeat(batch_size, 1) % len(CONTROLLED_OPERATOR_ORDER)
+    else:
+        active = torch.full((batch_size, query_count), active_by_family[family], dtype=torch.long, device=device)
+    weights = torch.nn.functional.one_hot(active, num_classes=len(CONTROLLED_OPERATOR_ORDER)).float()
+    if family == "rceo_reliability_corruption":
+        weights = 0.85 * weights + 0.15 / len(CONTROLLED_OPERATOR_ORDER)
+        weights = weights / weights.sum(dim=-1, keepdim=True)
+    return weights, active
+
+
+def _quality_for_family(torch, family: str, batch_size: int, token_count: int, device: str):
+    value = 0.3 if family == "rceo_reliability_corruption" else 1.0
+    return torch.full((batch_size, token_count, 1), value, device=device)
+
+
+def _true_adapter_params(torch, family: str, batch_size: int, query_count: int, device: str):
+    return {
+        "family": family,
+        "scale": torch.ones(batch_size, query_count, 1, device=device),
+        "bias": torch.zeros(batch_size, query_count, 1, device=device),
+    }
+
+
+def _alignment_pairs(torch, batch_size: int, query_count: int, token_count: int, device: str):
+    pairs = torch.zeros(batch_size, query_count, 2, dtype=torch.long, device=device)
+    pairs[..., 0] = torch.arange(query_count, device=device).view(1, query_count) % token_count
+    pairs[..., 1] = pairs[..., 0]
+    return pairs

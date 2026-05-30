@@ -1,0 +1,3 @@
+branch: phase1_5_metadata_free_torch
+commit: 954fd8b9dd1d1a678943719d64f951d7cc4040e6
+remote: https://github.com/Lhan-chding/Operator-Valued-Hyper-Attention.git

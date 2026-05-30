@@ -1,0 +1,11 @@
+{
+  "archive_date": "2026-05-30",
+  "source_environment_available": false,
+  "reported_device": "cuda",
+  "reported_public_data_root": "data/public_benchmark_cache",
+  "current_checkout": {
+    "branch": "phase1_5_metadata_free_torch",
+    "head": "954fd8b9dd1d1a678943719d64f951d7cc4040e6"
+  },
+  "note": "The source reports include benchmark protocol and result tables, but the raw phase-1.7 output tree is not present in this checkout."
+}

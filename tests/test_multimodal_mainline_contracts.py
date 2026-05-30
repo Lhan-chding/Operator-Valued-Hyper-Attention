@@ -1,0 +1,243 @@
+import importlib.util
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
+
+
+class MultimodalMainlineStaticContractTests(unittest.TestCase):
+    def test_required_protocol_docs_and_pde_feasibility_note_exist(self):
+        expected = [
+            ROOT / "reports" / "pdebench_architecture_feasibility_note.md",
+            ROOT / "docs" / "data_protocol_multimodal.md",
+            ROOT / "moat_ovha_torch" / "data" / "multimodal" / "typed_batch.py",
+            ROOT / "moat_ovha_torch" / "data" / "multimodal" / "cache_schema.py",
+            ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "base.py",
+            ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "controlled_synthetic.py",
+            ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "refcoco.py",
+            ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "cmu_mosei.py",
+            ROOT / "moat_ovha_torch" / "models" / "multimodal" / "ovha_multimodal.py",
+            ROOT / "scripts" / "multimodal" / "validate_cache.py",
+        ]
+        for path in expected:
+            with self.subTest(path=path):
+                self.assertTrue(path.exists(), path)
+
+    def test_pde_feasibility_note_uses_non_main_claim_framing(self):
+        note = (ROOT / "reports" / "pdebench_architecture_feasibility_note.md").read_text()
+
+        self.assertIn("architecture feasibility evidence", note)
+        self.assertIn("not used as the main top-conference benchmark claim", note)
+        self.assertIn("multimodal typed-token relation-operator tasks", note)
+
+    def test_cache_schema_requires_data_card_checksums_and_provenance(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import (
+            MultimodalCacheLayout,
+            required_cache_files,
+            validate_cache_layout,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            layout = MultimodalCacheLayout(root, "refcoco", "v0.1")
+            expected = required_cache_files(layout)
+
+            self.assertIn(layout.root / "data_card.json", expected)
+            self.assertIn(layout.root / "checksums.json", expected)
+            self.assertIn(layout.root / "provenance" / "source_ids_train.txt", expected)
+            self.assertIn(layout.root / "provenance" / "feature_versions.json", expected)
+
+            report = validate_cache_layout(layout, splits=("train",))
+            self.assertFalse(report.ok)
+            self.assertIn("data_card.json", "\n".join(report.errors))
+
+
+@unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; multimodal tensor contract tests skipped.")
+class MultimodalMainlineTorchContractTests(unittest.TestCase):
+    def test_typed_batch_hides_controlled_truth_from_model_inputs(self):
+        import torch
+
+        from moat_ovha_torch.data.multimodal.typed_batch import (
+            MultimodalEpisodeBatch,
+            ProvenanceBank,
+            QueryField,
+            SupervisionBank,
+            TokenField,
+        )
+
+        batch = _batch(torch)
+        model_inputs = batch.model_inputs()
+
+        self.assertIsInstance(batch.fields["text"], TokenField)
+        self.assertIsInstance(batch.query, QueryField)
+        self.assertIsInstance(batch.supervision, SupervisionBank)
+        self.assertIsInstance(batch.provenance, ProvenanceBank)
+        self.assertIn("fields", model_inputs)
+        self.assertNotIn("hidden", model_inputs)
+        self.assertNotIn("true_active_operator", str(model_inputs))
+
+    def test_multimodal_ovha_stack_contract_and_diagnostics(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import (
+            MULTIMODAL_CANDIDATE_NAMES,
+            MultimodalOVHA,
+        )
+
+        model = MultimodalOVHA(
+            field_dims={"text": 4, "region": 4},
+            query_dim=4,
+            output_dim=3,
+            d_model=8,
+        )
+        output = model(_batch(torch))
+
+        self.assertEqual(MULTIMODAL_CANDIDATE_NAMES, ("TLEO", "SPO", "LRIO", "CATO"))
+        self.assertEqual(tuple(output.y_hat.shape), (2, 5, 3))
+        self.assertEqual(tuple(output.candidate_values.shape), (2, 5, 4, 3))
+        self.assertEqual(tuple(output.router_weights.shape), (2, 5, 4))
+        self.assertEqual(set(output.candidate_outputs), set(MULTIMODAL_CANDIDATE_NAMES))
+        self.assertNotIn("RCEO", output.candidate_outputs)
+        self.assertTrue(torch.allclose(output.router_weights.sum(dim=-1), torch.ones(2, 5), atol=1e-6))
+        self.assertTrue(
+            torch.allclose(
+                output.router_logits,
+                output.router_logit_parts["memory"]
+                + output.router_logit_parts["evidence"]
+                + output.router_logit_parts["reliability"],
+                atol=1e-6,
+            )
+        )
+        self.assertIn("router_logit_parts", output.diagnostics)
+        self.assertIn("candidate_loss", output.diagnostics)
+        self.assertIn("stackability_passed", output.diagnostics)
+        self.assertTrue(output.diagnostics["stackability_passed"])
+
+    def test_stackability_guard_rejects_non_candidate_and_bad_shape(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.operator_bank import assert_stackable
+        from moat_ovha_torch.models.multimodal.primitives.base import CandidateOutput
+
+        good = CandidateOutput(torch.zeros(2, 5, 3), torch.zeros(2, 5, 4), {})
+        bad_shape = CandidateOutput(torch.zeros(2, 5, 1), torch.zeros(2, 5, 4), {})
+
+        with self.assertRaisesRegex(ValueError, "Only TLEO / SPO / LRIO / CATO"):
+            assert_stackable({"TLEO": good, "SPO": good, "LRIO": good, "RCEO": good}, 2, 5, 3)
+
+        with self.assertRaisesRegex(ValueError, "expected"):
+            assert_stackable({"TLEO": good, "SPO": good, "LRIO": good, "CATO": bad_shape}, 2, 5, 3)
+
+    def test_controlled_synthetic_families_have_hidden_truth_but_no_input_leakage(self):
+        import torch
+
+        from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
+            CONTROLLED_MULTIMODAL_FAMILIES,
+            ControlledSyntheticMultimodalAdapter,
+        )
+
+        adapter = ControlledSyntheticMultimodalAdapter(seed=123, output_dim=3)
+        for family in CONTROLLED_MULTIMODAL_FAMILIES:
+            with self.subTest(family=family):
+                batch = adapter.sample_batch(family=family, batch_size=2, query_count=4, device="cpu")
+                self.assertIn("true_active_operator", batch.hidden)
+                self.assertIn("true_router_weights", batch.hidden)
+                self.assertIn("true_adapter_params", batch.hidden)
+                self.assertEqual(tuple(batch.target_y.shape), (2, 4, 3))
+                self.assertFalse(torch.equal(batch.query.query_type, batch.hidden["true_active_operator"]))
+                self.assertNotIn("hidden", batch.model_inputs())
+                self.assertNotIn("true_active_operator", str(batch.model_inputs()))
+                self.assertTrue(torch.allclose(batch.hidden["true_router_weights"].sum(dim=-1), torch.ones(2, 4)))
+
+    def test_oracle_matrix_true_true_reconstructs_controlled_targets(self):
+        import torch
+
+        from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import ControlledSyntheticMultimodalAdapter
+        from moat_ovha_torch.eval.multimodal_oracle import evaluate_oracle_matrix
+
+        batch = ControlledSyntheticMultimodalAdapter(seed=77, output_dim=2).sample_batch(
+            family="mixed_relation_operator",
+            batch_size=2,
+            query_count=5,
+            device="cpu",
+        )
+        report = evaluate_oracle_matrix(batch)
+
+        self.assertLess(float(report["true_true"]["mse"]), 1e-8)
+        self.assertIn("TLEO_oracle_gap", report)
+        self.assertIn("CATO_oracle_gap", report)
+
+
+def _batch(torch):
+    fields = {
+        "text": _field(torch, offset=0.0),
+        "region": _field(torch, offset=1.0),
+    }
+    query = torch.linspace(0.0, 1.0, 5).view(1, 5, 1).repeat(2, 1, 4)
+    target = torch.zeros(2, 5, 3)
+    from moat_ovha_torch.data.multimodal.typed_batch import (
+        MultimodalEpisodeBatch,
+        ProvenanceBank,
+        QueryField,
+        SupervisionBank,
+    )
+
+    return MultimodalEpisodeBatch(
+        fields=fields,
+        query=QueryField(
+            x=query,
+            pos=query[..., :2],
+            query_type=torch.zeros(2, 5, dtype=torch.long),
+            mask=torch.ones(2, 5, dtype=torch.bool),
+        ),
+        target_y=target,
+        target_mask=torch.ones(2, 5, dtype=torch.bool),
+        task_type="phrase_region_grounding",
+        split="train",
+        source_dataset="controlled_multimodal",
+        supervision=SupervisionBank(
+            task_label=None,
+            alignment_pairs=None,
+            alignment_weights=None,
+            bbox_targets=None,
+            region_targets=None,
+            timestamp_targets=None,
+            modality_missing_mask=None,
+            corruption_metadata=None,
+            weak_labels=None,
+            weak_label_confidence=None,
+            pseudo_label_source=None,
+        ),
+        provenance=ProvenanceBank(
+            source_id=["sample-0", "sample-1"],
+            original_split=["train", "train"],
+            raw_ref=["synthetic", "synthetic"],
+            license_tag=["synthetic", "synthetic"],
+            preprocessing_version="test",
+            feature_extractor_version={"text": "frozen-test", "region": "frozen-test"},
+            pseudo_label_version={},
+        ),
+        hidden={"true_active_operator": torch.zeros(2, 5, dtype=torch.long)},
+    )
+
+
+def _field(torch, offset):
+    from moat_ovha_torch.data.multimodal.typed_batch import TokenField
+
+    x = torch.arange(2 * 6 * 4, dtype=torch.float32).view(2, 6, 4) / 100.0 + offset
+    pos = torch.linspace(0.0, 1.0, 6).view(1, 6, 1).repeat(2, 1, 2)
+    return TokenField(
+        modality="text" if offset == 0.0 else "region",
+        x=x,
+        pos=pos,
+        mask=torch.ones(2, 6, dtype=torch.bool),
+        quality=torch.ones(2, 6, 1),
+        attrs=None,
+    )
+
+
+if __name__ == "__main__":
+    unittest.main()
