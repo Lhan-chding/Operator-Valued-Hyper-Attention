@@ -166,6 +166,23 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertLess(summary["operator_load_shift"]["CATO"], 0.0)
         self.assertIn("auc_over_corruption_strength", summary)
 
+    def test_robustness_summary_requires_no_rceo_and_no_evidence_router_degradation(self):
+        from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+        rows = [
+            _robustness_row("ovha_full", 0.0, 0.80, reliability=0.90),
+            _robustness_row("ovha_full", 0.5, 0.70, reliability=0.65),
+            _robustness_row("cross_attention_transformer", 0.0, 0.78),
+            _robustness_row("cross_attention_transformer", 0.5, 0.60),
+        ]
+
+        summary = summarize_robustness_rows(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+
+        self.assertFalse(summary["required_ablation_degradation"]["passed"])
+        joined = "\n".join(summary["required_ablation_degradation"]["reasons"])
+        self.assertIn("missing robustness ablation rows: ovha_no_rceo", joined)
+        self.assertIn("missing robustness ablation rows: ovha_no_evidence_router", joined)
+
     def test_controlled_and_robustness_summary_scripts_emit_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -263,6 +280,17 @@ def _row(
             row["alignment_entropy_delta"] = 0.1
             row["alignment_topk_delta"] = 0.1
     return row
+
+
+def _robustness_row(model: str, strength: float, score: float, *, reliability: float = 0.0) -> dict[str, object]:
+    return {
+        "model": model,
+        "corruption_type": "image_blur",
+        "corruption_strength": strength,
+        "score": score,
+        "rceo_reliability": reliability,
+        "router_load_by_candidate": {"CATO": 0.60 - strength * 0.40, "SPO": 0.10 + strength * 0.30},
+    }
 
 
 if __name__ == "__main__":
