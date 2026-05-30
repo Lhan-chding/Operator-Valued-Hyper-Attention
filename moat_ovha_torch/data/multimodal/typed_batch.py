@@ -102,6 +102,7 @@ class MultimodalEpisodeBatch:
 
 def validate_multimodal_batch_contract(batch: MultimodalEpisodeBatch) -> BatchContractReport:
     errors: list[str] = []
+    _validate_episode_identity(batch, errors)
     query_x = _shape("query.x", batch.query.x, errors)
     query_pos = _shape("query.pos", batch.query.pos, errors)
     query_type = _shape("query.query_type", batch.query.query_type, errors)
@@ -124,7 +125,7 @@ def validate_multimodal_batch_contract(batch: MultimodalEpisodeBatch) -> BatchCo
         _require_exact_shape("query.mask", query_mask, (batch_size, query_count), errors)
         _require_first_dims("target_y", target_y, (batch_size, query_count), errors)
         _require_exact_shape("target_mask", target_mask, (batch_size, query_count), errors)
-        _validate_provenance_bank(batch.provenance, batch_size, errors)
+        _validate_provenance_bank(batch.provenance, batch_size, batch.split, errors)
         _validate_supervision_bank(batch.supervision, batch_size, query_count, errors)
     else:
         errors.append("cannot infer shared [B,Q] from query.x, target_y, or query.mask")
@@ -260,6 +261,13 @@ def _validate_quality_shape(name: str, quality: Any | None, field_shape: tuple[i
     )
 
 
+def _validate_episode_identity(batch: MultimodalEpisodeBatch, errors: list[str]) -> None:
+    for key in ("task_type", "split", "source_dataset"):
+        value = getattr(batch, key)
+        if not isinstance(value, str) or not value:
+            errors.append(f"{key} must be a non-empty string")
+
+
 def _validate_field_attrs(name: str, attrs: dict[str, Any] | None, errors: list[str]) -> None:
     if attrs is None:
         return
@@ -281,7 +289,7 @@ def _contains_forbidden_metadata_key(key: str) -> bool:
     return any(forbidden in lowered for forbidden in FORBIDDEN_MULTIMODAL_INPUT_KEYS)
 
 
-def _validate_provenance_bank(provenance: ProvenanceBank, batch_size: int, errors: list[str]) -> None:
+def _validate_provenance_bank(provenance: ProvenanceBank, batch_size: int, split: str, errors: list[str]) -> None:
     for key in ("source_id", "original_split", "raw_ref", "license_tag"):
         values = getattr(provenance, key)
         if not isinstance(values, list):
@@ -291,6 +299,10 @@ def _validate_provenance_bank(provenance: ProvenanceBank, batch_size: int, error
             errors.append(f"provenance.{key} length must match batch size {batch_size}, got {len(values)}")
         if any(not isinstance(value, str) or not value for value in values):
             errors.append(f"provenance.{key} entries must be non-empty strings")
+    if isinstance(split, str) and split:
+        original_split = provenance.original_split
+        if isinstance(original_split, list) and any(value != split for value in original_split if isinstance(value, str) and value):
+            errors.append(f"provenance.original_split entries must match batch split {split}")
     if not isinstance(provenance.preprocessing_version, str) or not provenance.preprocessing_version:
         errors.append("provenance.preprocessing_version must be a non-empty string")
     _validate_string_version_map(
