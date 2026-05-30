@@ -20,6 +20,15 @@ def evaluate_region_text_gate(
         "no_cato_drops": _ablation_drop(statistics_summary, task, split, full_model, no_cato_score, "no-CATO"),
         "cato_router_load_high": _router_load_high(diagnostics_rows, "CATO", minimum=0.35),
         "alignment_entropy_improves": _entropy_improves(diagnostics_rows, "CATO", "alignment_entropy"),
+        "cato_top_alignment_accuracy_high": _candidate_diag_at_least(
+            diagnostics_rows,
+            "clean",
+            "CATO",
+            "top_alignment_accuracy",
+            minimum=0.50,
+        ),
+        "grounding_accuracy_improves_with_entropy": _grounding_accuracy_improves_with_entropy(diagnostics_rows),
+        "rceo_visual_stress_router_shift": _rceo_visual_stress_router_shift(diagnostics_rows),
     }
     return _gate_report("region_text_public", checks)
 
@@ -129,6 +138,83 @@ def _candidate_diag_positive(rows: list[dict[str, Any]], candidate: str, key: st
         "passed": passed,
         "value": best_value,
         "reason": f"{candidate} {_display_key(key)} diagnostic missing or non-positive" if not passed else "",
+    }
+
+
+def _candidate_diag_at_least(
+    rows: list[dict[str, Any]],
+    setting: str,
+    candidate: str,
+    key: str,
+    *,
+    minimum: float,
+) -> dict[str, Any]:
+    values = [
+        value
+        for row in rows
+        if row.get("setting", "clean") == setting
+        for value in [_candidate_diag_value_from_row(row, candidate, key)]
+        if value is not None
+    ]
+    best_value = max(values) if values else None
+    passed = best_value is not None and best_value >= minimum
+    return {
+        "passed": passed,
+        "value": best_value,
+        "threshold": minimum,
+        "reason": f"{candidate} {_display_key(key)} diagnostic missing or below threshold" if not passed else "",
+    }
+
+
+def _grounding_accuracy_improves_with_entropy(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    clean_entropy = _candidate_diag_value(rows, "clean", "CATO", "alignment_entropy")
+    ablated_entropy = _candidate_diag_value(rows, "no_cato", "CATO", "alignment_entropy")
+    clean_accuracy = _candidate_diag_value(rows, "clean", "CATO", "grounding_accuracy")
+    ablated_accuracy = _candidate_diag_value(rows, "no_cato", "CATO", "grounding_accuracy")
+    if None in (clean_entropy, ablated_entropy, clean_accuracy, ablated_accuracy):
+        return {
+            "passed": False,
+            "reason": "grounding accuracy must improve as CATO alignment entropy decreases",
+        }
+    entropy_delta = float(ablated_entropy) - float(clean_entropy)
+    accuracy_delta = float(clean_accuracy) - float(ablated_accuracy)
+    passed = entropy_delta > 0.0 and accuracy_delta > 0.0
+    return {
+        "passed": passed,
+        "value": {"alignment_entropy_drop": entropy_delta, "grounding_accuracy_gain": accuracy_delta},
+        "reason": "grounding accuracy must improve as CATO alignment entropy decreases" if not passed else "",
+    }
+
+
+def _rceo_visual_stress_router_shift(
+    rows: list[dict[str, Any]],
+    *,
+    min_l1_shift: float = 0.10,
+) -> dict[str, Any]:
+    clean_rows = [row for row in rows if row.get("setting", "clean") == "clean"]
+    stress_rows = [row for row in rows if str(row.get("setting", "")) in _VISUAL_STRESS_SETTINGS]
+    for clean in clean_rows:
+        for stress in stress_rows:
+            shift = _router_l1_shift(clean, stress)
+            if shift < min_l1_shift:
+                continue
+            reliability_shift = _reliability_decreases(clean, stress)
+            corruption_response = _candidate_diag_value_from_row(stress, "RCEO", "corruption_response")
+            if reliability_shift or (corruption_response is not None and corruption_response > 0.0):
+                return {
+                    "passed": True,
+                    "value": {
+                        "l1_router_shift": shift,
+                        "reliability_decreases": reliability_shift,
+                        "rceo_corruption_response": corruption_response,
+                    },
+                    "threshold": min_l1_shift,
+                    "reason": "",
+                }
+    return {
+        "passed": False,
+        "threshold": min_l1_shift,
+        "reason": "RCEO visual stress router shift missing or below threshold",
     }
 
 
@@ -272,6 +358,38 @@ def _candidate_diag_value_from_row(row: dict[str, Any], candidate: str, key: str
     if not isinstance(candidate_values, dict) or key not in candidate_values:
         return None
     return _finite_float(candidate_values[key])
+
+
+_VISUAL_STRESS_SETTINGS = {
+    "corrupted_visual",
+    "missing_visual",
+    "visual_corruption",
+    "visual_missing",
+    "corrupted_regions",
+    "missing_regions",
+}
+
+
+def _router_l1_shift(left: dict[str, Any], right: dict[str, Any]) -> float:
+    left_load = left.get("router_load_by_candidate", {}) or {}
+    right_load = right.get("router_load_by_candidate", {}) or {}
+    if not isinstance(left_load, dict) or not isinstance(right_load, dict):
+        return 0.0
+    names = set(left_load) | set(right_load)
+    total = 0.0
+    for name in names:
+        left_value = _finite_float(left_load.get(name, 0.0))
+        right_value = _finite_float(right_load.get(name, 0.0))
+        if left_value is None or right_value is None:
+            return 0.0
+        total += abs(right_value - left_value)
+    return total
+
+
+def _reliability_decreases(clean: dict[str, Any], stress: dict[str, Any]) -> bool:
+    clean_reliability = _finite_float(clean.get("rceo_reliability"))
+    stress_reliability = _finite_float(stress.get("rceo_reliability"))
+    return clean_reliability is not None and stress_reliability is not None and stress_reliability < clean_reliability
 
 
 def _finite_float(value: Any) -> float | None:

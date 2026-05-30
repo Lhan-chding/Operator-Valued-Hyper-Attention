@@ -52,6 +52,8 @@ Public go/no-go gates must reject full-vs-baseline claims without at least three
 
 Robustness summaries must include required ablation degradation for `ovha_no_rceo` and `ovha_no_evidence_router`; both ablations must drop more than `ovha_full` under corruption or missing-modality stress.
 
+Region-text public gates must include CATO top alignment accuracy, grounding accuracy improvement paired with lower CATO alignment entropy, and RCEO-supported router-load shift under corrupted or missing visual-region settings.
+
 Sentiment/emotion public gates must include clean-setting LRIO rank entropy, SPO prototype entropy, SPO top-prototype differentiation across emotion classes, and RCEO reliability calibration with expected calibration error evidence. Router-load or ablation deltas alone are not enough to claim LRIO/SPO/RCEO validity.
 
 ## Cache Requirements
