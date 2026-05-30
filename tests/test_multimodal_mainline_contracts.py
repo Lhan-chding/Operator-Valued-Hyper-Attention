@@ -48,6 +48,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             self.assertIn(layout.root / "data_card.json", expected)
             self.assertIn(layout.root / "checksums.json", expected)
             self.assertIn(layout.root / "provenance" / "source_ids_train.txt", expected)
+            self.assertIn(layout.root / "provenance" / "sample_records_train.jsonl", expected)
             self.assertIn(layout.root / "provenance" / "feature_versions.json", expected)
 
             report = validate_cache_layout(layout, splits=("train",))

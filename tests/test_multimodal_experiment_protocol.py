@@ -286,6 +286,18 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
     (root / "provenance" / "pseudo_label_versions.json").write_text(json.dumps({"generated_from_splits": ["train"]}) + "\n")
     for split in ("val", "test"):
         (root / "provenance" / f"source_ids_{split}.txt").write_text(f"{split}-source\n")
+        (root / "provenance" / f"sample_records_{split}.jsonl").write_text(
+            json.dumps(
+                {
+                    "source_id": f"{split}-source",
+                    "split": split,
+                    "raw_ref": f"raw://{split}-source",
+                    "license_tag": "test-license",
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
         (root / "provenance" / f"failed_samples_{split}.jsonl").write_text("")
         (root / "supervision" / f"task_labels_{split}.npy").write_text("placeholder labels\n")
         manifest = {}

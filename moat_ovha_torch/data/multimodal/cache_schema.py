@@ -19,6 +19,7 @@ REQUIRED_DATA_CARD_KEYS = (
 
 REQUIRED_OPERATOR_SUPERVISION_KEYS = ("TLEO", "SPO", "LRIO", "CATO", "RCEO")
 FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "reason")
+SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "raw_ref", "license_tag")
 TOKEN_FIELD_MANIFEST_REQUIRED_KEYS = ("x", "pos", "mask")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 CHECKSUM_MANIFEST_NAME = "checksums.json"
@@ -61,6 +62,7 @@ def required_cache_files(layout: MultimodalCacheLayout, splits: tuple[str, ...] 
         required.update(
             {
                 root / "provenance" / f"source_ids_{split}.txt",
+                root / "provenance" / f"sample_records_{split}.jsonl",
                 root / "provenance" / f"failed_samples_{split}.jsonl",
                 root / "token_fields" / f"manifest_{split}.json",
                 root / "masks" / f"text_mask_{split}.npy",
@@ -121,6 +123,7 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
     _validate_split_manifest_consistency(layout, splits, errors)
     _validate_feature_parity(layout, data_card, errors)
     _validate_pseudo_label_provenance(layout, errors)
+    _validate_sample_record_manifests(layout, splits, errors)
     _validate_failed_sample_manifests(layout, splits, errors)
     _validate_token_field_manifests(layout, splits, data_card, checksums, errors)
 
@@ -341,6 +344,61 @@ def _validate_failed_sample_manifests(
                 errors.append(f"{path.name} line {line_number} missing required keys: {', '.join(missing)}")
             if payload.get("split") != split:
                 errors.append(f"{path.name} line {line_number} split must match {split}")
+
+
+def _validate_sample_record_manifests(
+    layout: MultimodalCacheLayout,
+    splits: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    for split in splits:
+        path = layout.root / "provenance" / f"sample_records_{split}.jsonl"
+        if not path.exists():
+            continue
+        records = _read_jsonl_objects(path, errors)
+        observed_source_ids: list[str] = []
+        for line_number, payload in records:
+            missing = [key for key in SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS if not payload.get(key)]
+            if missing:
+                errors.append(f"{path.name} line {line_number} missing required keys: {', '.join(missing)}")
+            if payload.get("split") != split:
+                errors.append(f"{path.name} line {line_number} split must match {split}")
+            source_id = payload.get("source_id")
+            if source_id:
+                observed_source_ids.append(str(source_id))
+        expected_source_ids = _read_source_ids(layout, split)
+        if expected_source_ids is None:
+            continue
+        if set(observed_source_ids) != set(expected_source_ids):
+            errors.append(
+                f"provenance/sample_records_{split}.jsonl source_id set must match "
+                f"provenance/source_ids_{split}.txt"
+            )
+
+
+def _read_jsonl_objects(path: Path, errors: list[str]) -> list[tuple[int, dict[str, Any]]]:
+    records: list[tuple[int, dict[str, Any]]] = []
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            errors.append(f"{path.name} line {line_number} is not valid JSON: {exc}")
+            continue
+        if not isinstance(payload, dict):
+            errors.append(f"{path.name} line {line_number} must be a JSON object")
+            continue
+        records.append((line_number, payload))
+    return records
+
+
+def _read_source_ids(layout: MultimodalCacheLayout, split: str) -> list[str] | None:
+    path = layout.root / "provenance" / f"source_ids_{split}.txt"
+    if not path.exists():
+        return None
+    return [line.strip() for line in path.read_text().splitlines() if line.strip()]
 
 
 def _validate_token_field_manifests(
