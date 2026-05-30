@@ -173,7 +173,9 @@ def _validate_checksum_coverage(
             continue
         if relative == CHECKSUM_MANIFEST_NAME:
             continue
-        path = layout.root / relative
+        path = _checksum_artifact_path(layout, relative, errors)
+        if path is None:
+            continue
         if path.exists():
             _validate_checksum_value(relative, path, digest, errors)
     for path in sorted(required_files):
@@ -184,6 +186,20 @@ def _validate_checksum_coverage(
             continue
         if relative not in checksums:
             errors.append(f"checksums.json missing hash for required artifact: {relative}")
+
+
+def _checksum_artifact_path(layout: MultimodalCacheLayout, relative: str, errors: list[str]) -> Path | None:
+    artifact_relative = Path(relative)
+    if artifact_relative.is_absolute():
+        errors.append(f"checksums.json key must be relative path within cache root: {relative}")
+        return None
+    artifact_path = (layout.root / artifact_relative).resolve()
+    try:
+        artifact_path.relative_to(layout.root.resolve())
+    except ValueError:
+        errors.append(f"checksums.json key must stay within cache root: {relative}")
+        return None
+    return artifact_path
 
 
 def _validate_checksum_value(relative: str, path: Path, digest: Any, errors: list[str]) -> None:
