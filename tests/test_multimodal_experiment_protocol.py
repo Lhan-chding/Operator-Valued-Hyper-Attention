@@ -226,6 +226,32 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("router_load_by_candidate", "\n".join(report.errors))
 
+    def test_diagnostics_schema_rejects_missing_nested_plan_fields(self):
+        from moat_ovha_torch.eval.multimodal_diagnostics import validate_diagnostic_row
+
+        row = {
+            "router_entropy": 1.0,
+            "router_load_by_candidate": {"TLEO": 0.25, "SPO": 0.25, "LRIO": 0.25, "CATO": 0.25},
+            "router_logit_parts": {"memory": 0.1, "evidence": 0.2},
+            "candidate_loss": {"TLEO": 0.1, "SPO": 0.2, "LRIO": 0.3},
+            "adapter_params": {
+                "TLEO_lengthscale": 0.5,
+                "SPO_temperature": 1.0,
+                "CATO_alignment_temperature": 0.7,
+            },
+            "memory_slot_norm": {"SPO": 1.0, "LRIO": 1.0, "CATO": 1.0},
+            "stackability_passed": True,
+        }
+
+        report = validate_diagnostic_row(row)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("router_logit_parts missing reliability", joined)
+        self.assertIn("candidate_loss missing CATO", joined)
+        self.assertIn("adapter_params missing LRIO_rank_entropy", joined)
+        self.assertIn("memory_slot_norm missing TLEO", joined)
+
 def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
     from moat_ovha_torch.data.multimodal.cache_schema import (
         MultimodalCacheLayout,
