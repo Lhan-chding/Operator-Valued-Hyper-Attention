@@ -62,7 +62,7 @@ Robustness summaries must prove Step 6 stress-family coverage: missing text, mis
 
 Region-text public gates must include CATO top alignment accuracy, grounding accuracy improvement paired with lower CATO alignment entropy, and RCEO-supported router-load shift under corrupted or missing visual-region settings.
 
-Sentiment/emotion public gates must include clean-setting LRIO rank entropy, SPO prototype entropy, SPO top-prototype differentiation across emotion classes, and RCEO reliability calibration with expected calibration error evidence. Router-load or ablation deltas alone are not enough to claim LRIO/SPO/RCEO validity.
+Sentiment/emotion public entry requires passed LRIO collapse, SPO collapse, RCEO gate, no-LRIO ablation degradation, and no-RCEO ablation degradation evidence. Sentiment/emotion public gates must include clean-setting LRIO rank entropy, SPO prototype entropy, SPO top-prototype differentiation across emotion classes, and RCEO reliability calibration with expected calibration error evidence. Router-load or ablation deltas alone are not enough to claim LRIO/SPO/RCEO validity.
 
 ## Cache Requirements
 

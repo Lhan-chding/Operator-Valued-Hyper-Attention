@@ -37,6 +37,18 @@ def validate_public_entry_requirements(task_type: str, controlled_report: dict[s
         _require_gate(gates, "LRIO collapse", "sentiment/emotion public entry requires LRIO collapse", errors)
         _require_gate(gates, "SPO collapse", "sentiment/emotion public entry requires SPO collapse", errors)
         _require_gate(gates, "RCEO gate", "sentiment/emotion public entry requires RCEO gate", errors)
+        _require_gate(
+            gates,
+            "no-LRIO ablation",
+            "sentiment/emotion public entry requires no-LRIO ablation degradation",
+            errors,
+        )
+        _require_gate(
+            gates,
+            "no-RCEO ablation",
+            "sentiment/emotion public entry requires no-RCEO ablation degradation",
+            errors,
+        )
     else:
         errors.append(f"unknown public entry task_type: {task_type}")
 
