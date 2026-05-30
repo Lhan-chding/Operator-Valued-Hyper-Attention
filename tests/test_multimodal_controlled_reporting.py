@@ -62,6 +62,24 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("CATO collapse missing diagnostic: alignment_entropy_delta", joined)
         self.assertIn("CATO collapse missing diagnostic: alignment_topk_delta", joined)
 
+    def test_controlled_report_requires_oracle_gap_and_rceo_prior_effect_evidence(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+
+        rows = [
+            _row("tleo_local_evidence", "TLEO", 0.010, 0.010, include_oracle_gap_evidence=False),
+            _row("spo_global_prototype", "SPO", 0.020, 0.020),
+            _row("lrio_low_rank_interaction", "LRIO", 0.030, 0.030),
+            _row("cato_alignment_transport", "CATO", 0.040, 0.040),
+            _row("rceo_reliability_corruption", "LRIO", 0.050, 0.050, rceo=True, include_rceo_prior_effect=False),
+            _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy=0.85),
+        ]
+        report = build_controlled_report(rows)
+
+        self.assertFalse(report["go_no_go"]["controlled_multimodal_passed"])
+        joined = "\n".join(report["go_no_go"]["reasons"])
+        self.assertIn("tleo_local_evidence missing oracle gap evidence: TLEO_oracle_gap", joined)
+        self.assertIn("rceo_reliability_corruption missing RCEO prior effect", joined)
+
     def test_robustness_summary_requires_auc_reliability_and_load_shift(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 
@@ -162,6 +180,8 @@ def _row(
     router_accuracy: float = 0.9,
     rceo: bool = False,
     include_operator_diagnostics: bool = True,
+    include_oracle_gap_evidence: bool = True,
+    include_rceo_prior_effect: bool = True,
 ) -> dict[str, object]:
     row = {
         "family": family,
@@ -178,9 +198,20 @@ def _row(
         "no_operator_memory_delta": 0.1,
         "no_hyper_adapter_delta": 0.1,
     }
+    if include_oracle_gap_evidence:
+        row.update(
+            {
+                "TLEO_oracle_gap": 0.1,
+                "SPO_oracle_gap": 0.1,
+                "LRIO_oracle_gap": 0.1,
+                "CATO_oracle_gap": 0.1,
+            }
+        )
     if rceo:
         row["rceo_reliability_monotonic"] = True
         row["rceo_router_load_shift"] = 0.1
+        if include_rceo_prior_effect:
+            row["rceo_prior_effect"] = 0.1
     if include_operator_diagnostics:
         if active_operator == "SPO":
             row["prototype_kl_delta"] = 0.1
