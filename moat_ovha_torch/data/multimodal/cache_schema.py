@@ -91,6 +91,8 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
                 if key not in data_card:
                     errors.append(f"data_card.json missing required key: {key}")
             _validate_data_card_identity(layout, data_card, errors)
+            _validate_data_card_string_list(data_card, "modalities", errors)
+            _validate_data_card_string_list(data_card, "tasks", errors)
             _validate_operator_supervision(data_card.get("operator_supervision"), errors)
             controls = data_card.get("leakage_controls", {})
             for key in (
@@ -212,6 +214,15 @@ def _validate_data_card_identity(
         errors.append(f"data_card.json dataset_name must match cache layout: expected {layout.dataset_name}")
     if "cache_version" in data_card and data_card.get("cache_version") != layout.version:
         errors.append(f"data_card.json cache_version must match cache layout: expected {layout.version}")
+
+
+def _validate_data_card_string_list(data_card: dict[str, Any], key: str, errors: list[str]) -> None:
+    values = data_card.get(key)
+    if not isinstance(values, list) or not values or any(not isinstance(value, str) or not value for value in values):
+        errors.append(f"data_card.json {key} must be a non-empty list of strings")
+        return
+    if len(values) != len(set(values)):
+        errors.append(f"data_card.json {key} must not contain duplicate entries")
 
 
 def _validate_source_split_controls(layout: MultimodalCacheLayout, splits: tuple[str, ...], errors: list[str]) -> None:
