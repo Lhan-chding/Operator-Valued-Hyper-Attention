@@ -91,6 +91,27 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_incomplete_operator_supervision_data_card(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                missing_operator_supervision=("LRIO", "RCEO"),
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("data_card.json operator_supervision missing required operator: LRIO", joined)
+        self.assertIn("data_card.json operator_supervision missing required operator: RCEO", joined)
+
     def test_cache_validator_detects_source_overlap_checksum_gap_and_feature_mismatch(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -146,6 +167,7 @@ def _write_minimal_cache(
     invalid_failed_manifest: bool = False,
     include_token_manifests: bool = True,
     invalid_token_manifest: bool = False,
+    missing_operator_supervision: tuple[str, ...] = (),
 ) -> None:
     for folder in ("provenance", "masks", "positions", "supervision", "token_fields"):
         (root / folder).mkdir(parents=True, exist_ok=True)
@@ -169,6 +191,8 @@ def _write_minimal_cache(
             "same_features_for_baselines": True,
         },
     }
+    for operator in missing_operator_supervision:
+        data_card["operator_supervision"].pop(operator, None)
     (root / "data_card.json").write_text(json.dumps(data_card, sort_keys=True) + "\n")
     (root / "splits.json").write_text(json.dumps({"train": train_ids, "test": test_ids}, sort_keys=True) + "\n")
     (root / "samples.parquet").write_text("placeholder manifest\n")
