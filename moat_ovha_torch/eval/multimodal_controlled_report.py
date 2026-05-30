@@ -29,6 +29,11 @@ OPERATOR_TO_FAMILY = {
     "LRIO": "lrio_low_rank_interaction",
     "CATO": "cato_alignment_transport",
 }
+OPERATOR_DIAGNOSTIC_REQUIREMENTS = {
+    "SPO": ("prototype_kl_delta",),
+    "LRIO": ("rank_logits_kl_delta",),
+    "CATO": ("alignment_entropy_delta", "alignment_topk_delta"),
+}
 
 
 def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -55,6 +60,8 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for name, gate in gate_table.items():
         if not gate["passed"]:
             reasons.append(f"gate failed: {name}")
+        for diagnostic_reason in gate.get("diagnostic_reasons", ()):
+            reasons.append(f"{name} {diagnostic_reason}")
     return {
         "oracle_matrix_cells": ORACLE_MATRIX_CELLS,
         "families": family_rows,
@@ -85,10 +92,14 @@ def _collapse_gate(family_rows: dict[str, dict[str, Any]], operator: str) -> dic
     full_loss = _loss(row, "learned_learned")
     specialist_loss = float(row.get("specialist_loss", _loss(row, "true_learned")))
     threshold = specialist_loss * 1.05 + 1e-6
+    diagnostic_reasons = _operator_diagnostic_reasons(row, operator)
+    loss_passed = full_loss <= threshold
     return {
-        "passed": full_loss <= threshold,
+        "passed": loss_passed and not diagnostic_reasons,
         "value": full_loss,
         "threshold": threshold,
+        "loss_passed": loss_passed,
+        "diagnostic_reasons": diagnostic_reasons,
         "condition": f"{operator} learned loss <= specialist * 1.05 + eps",
     }
 
@@ -127,3 +138,14 @@ def _delta_gate(rows: list[dict[str, Any]], key: str, name: str) -> dict[str, An
 
 def _loss(row: dict[str, Any], cell: str) -> float:
     return float(row.get("oracle_matrix", {}).get(cell, {}).get("loss", float("inf")))
+
+
+def _operator_diagnostic_reasons(row: dict[str, Any], operator: str) -> list[str]:
+    reasons: list[str] = []
+    for key in OPERATOR_DIAGNOSTIC_REQUIREMENTS.get(operator, ()):
+        if key not in row:
+            reasons.append(f"missing diagnostic: {key}")
+            continue
+        if float(row[key]) <= 0.0:
+            reasons.append(f"diagnostic must improve: {key}")
+    return reasons
