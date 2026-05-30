@@ -79,6 +79,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+                "required_stress_coverage": {"passed": True, "reasons": []},
                 "required_ablation_degradation": {"passed": True, "reasons": []},
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
             },
@@ -122,6 +123,39 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("SPO prototype entropy diagnostic missing", joined)
         self.assertIn("SPO top prototype differentiation missing", joined)
         self.assertIn("RCEO reliability calibration missing", joined)
+
+    def test_sentiment_gate_rejects_robustness_without_stress_family_coverage(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=_summary("sentiment_emotion", "test", full=0.76, baseline=0.74),
+            diagnostics_rows=[
+                {
+                    "setting": "clean",
+                    "router_load_by_candidate": {"TLEO": 0.1, "SPO": 0.35, "LRIO": 0.40, "CATO": 0.15},
+                    "candidate_diagnostics": {
+                        "LRIO": {"rank_entropy": 0.6},
+                        "SPO": {
+                            "prototype_entropy": 0.5,
+                            "top_prototype_by_class": {"negative": 1, "positive": 4},
+                        },
+                    },
+                }
+            ],
+            ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
+            robustness_summary={
+                "full_drop_less_than_baseline": True,
+                "rceo_reliability_monotonic": True,
+                "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+                "required_ablation_degradation": {"passed": True, "reasons": []},
+                "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
+            },
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn("robustness stress family coverage missing", "\n".join(report["reasons"]))
 
     def test_public_gate_blocks_when_delta_or_ablation_missing(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate

@@ -216,6 +216,29 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("missing robustness ablation rows: ovha_no_rceo", joined)
         self.assertIn("missing robustness ablation rows: ovha_no_evidence_router", joined)
 
+    def test_robustness_summary_requires_plan_stress_family_coverage(self):
+        from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+        rows = [
+            _robustness_row("ovha_full", 0.0, 0.80, reliability=0.90),
+            _robustness_row("ovha_full", 0.5, 0.70, reliability=0.65),
+            _robustness_row("cross_attention_transformer", 0.0, 0.78),
+            _robustness_row("cross_attention_transformer", 0.5, 0.60),
+            _robustness_row("ovha_no_rceo", 0.0, 0.79),
+            _robustness_row("ovha_no_rceo", 0.5, 0.60),
+            _robustness_row("ovha_no_evidence_router", 0.0, 0.79),
+            _robustness_row("ovha_no_evidence_router", 0.5, 0.59),
+        ]
+
+        summary = summarize_robustness_rows(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+
+        self.assertFalse(summary["required_stress_coverage"]["passed"])
+        joined = "\n".join(summary["required_stress_coverage"]["reasons"])
+        self.assertIn("missing robustness stress family: missing_text", joined)
+        self.assertIn("missing robustness stress family: missing_vision", joined)
+        self.assertIn("missing robustness stress family: audio_quality", joined)
+        self.assertIn("missing robustness stress family: hard_negative_mismatch", joined)
+
     def test_controlled_and_robustness_summary_scripts_emit_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
