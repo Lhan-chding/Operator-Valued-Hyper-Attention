@@ -414,6 +414,34 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("checksums.json hash mismatch for artifact: data_card.json", "\n".join(report.errors))
 
+    def test_cache_validator_rejects_empty_checksum_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            _write_complete_checksums(layout.root)
+            (layout.root / "checksums.json").write_text("{}\n")
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn("checksums.json must be a non-empty object of artifact hashes", "\n".join(report.errors))
+
+    def test_cache_validator_rejects_non_object_checksum_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            _write_complete_checksums(layout.root)
+            (layout.root / "checksums.json").write_text("[]\n")
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn("checksums.json must be a non-empty object of artifact hashes", "\n".join(report.errors))
+
     def test_cache_validator_rejects_checksum_manifest_path_escape(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256, validate_cache_layout
 
