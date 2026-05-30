@@ -21,6 +21,8 @@ The model input path may consume public token fields, query, masks, and explicit
 
 If `SupervisionBank.weak_labels` is present, matching `weak_label_confidence` and `pseudo_label_source` entries are required for every weak-label key. Weak-label tensors must align to the batch/query axes `[B,Q,...]`, and each confidence tensor must match its weak-label shape. Pseudo-label sources must be non-empty strings so weak or pseudo supervision cannot be silently treated as ground truth.
 
+If public alignment supervision is present, `alignment_pairs` must align to `[B,Q,2]` and `alignment_weights` must align to `[B,Q]` so CATO public alignment losses cannot silently train on mismatched query-region labels.
+
 ## Candidate Bank
 
 Version 1 has exactly four candidate operators:
