@@ -16,8 +16,30 @@ class MultimodalPublicGateTests(unittest.TestCase):
         report = evaluate_region_text_gate(
             statistics_summary=_summary("phrase_region_grounding", "test", full=0.80, baseline=0.72),
             diagnostics_rows=[
-                _diagnostic("clean", {"CATO": 0.55, "TLEO": 0.2, "SPO": 0.15, "LRIO": 0.1}, cato_entropy=0.30),
-                _diagnostic("no_cato", {"CATO": 0.0, "TLEO": 0.4, "SPO": 0.4, "LRIO": 0.2}, cato_entropy=0.90),
+                _diagnostic(
+                    "clean",
+                    {"CATO": 0.55, "TLEO": 0.2, "SPO": 0.15, "LRIO": 0.1},
+                    cato_entropy=0.30,
+                    grounding_accuracy=0.74,
+                    top_alignment_accuracy=0.72,
+                    rceo_reliability=0.90,
+                ),
+                _diagnostic(
+                    "no_cato",
+                    {"CATO": 0.0, "TLEO": 0.4, "SPO": 0.4, "LRIO": 0.2},
+                    cato_entropy=0.90,
+                    grounding_accuracy=0.52,
+                    top_alignment_accuracy=0.20,
+                ),
+                _diagnostic(
+                    "corrupted_visual",
+                    {"CATO": 0.28, "TLEO": 0.30, "SPO": 0.32, "LRIO": 0.10},
+                    cato_entropy=0.58,
+                    grounding_accuracy=0.61,
+                    top_alignment_accuracy=0.56,
+                    rceo_reliability=0.55,
+                    rceo_corruption_response=0.35,
+                ),
             ],
             no_cato_score=0.70,
             task="phrase_region_grounding",
@@ -29,6 +51,9 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertTrue(report["checks"]["no_cato_drops"]["passed"])
         self.assertTrue(report["checks"]["cato_router_load_high"]["passed"])
         self.assertTrue(report["checks"]["alignment_entropy_improves"]["passed"])
+        self.assertTrue(report["checks"]["cato_top_alignment_accuracy_high"]["passed"])
+        self.assertTrue(report["checks"]["grounding_accuracy_improves_with_entropy"]["passed"])
+        self.assertTrue(report["checks"]["rceo_visual_stress_router_shift"]["passed"])
 
     def test_sentiment_gate_requires_lrio_spo_rceo_and_robustness(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
@@ -113,6 +138,26 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("full model does not beat same-feature baseline", "\n".join(report["reasons"]))
         self.assertIn("no-CATO ablation score missing", "\n".join(report["reasons"]))
 
+    def test_region_text_gate_rejects_missing_alignment_accuracy_and_visual_stress(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        report = evaluate_region_text_gate(
+            statistics_summary=_summary("phrase_region_grounding", "test", full=0.80, baseline=0.72),
+            diagnostics_rows=[
+                _diagnostic("clean", {"CATO": 0.55, "TLEO": 0.2, "SPO": 0.15, "LRIO": 0.1}, cato_entropy=0.30),
+                _diagnostic("no_cato", {"CATO": 0.0, "TLEO": 0.4, "SPO": 0.4, "LRIO": 0.2}, cato_entropy=0.90),
+            ],
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("CATO top alignment accuracy diagnostic missing", joined)
+        self.assertIn("grounding accuracy must improve as CATO alignment entropy decreases", joined)
+        self.assertIn("RCEO visual stress router shift missing", joined)
+
     def test_public_gate_requires_three_seed_paired_statistical_evidence(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
@@ -148,9 +193,38 @@ class MultimodalPublicGateTests(unittest.TestCase):
             diagnostics_path = root / "diagnostics.jsonl"
             stats_path.write_text(json.dumps(_summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)))
             diagnostics_path.write_text(
-                json.dumps(_diagnostic("clean", {"CATO": 0.55, "TLEO": 0.2, "SPO": 0.15, "LRIO": 0.1}, cato_entropy=0.30))
+                json.dumps(
+                    _diagnostic(
+                        "clean",
+                        {"CATO": 0.55, "TLEO": 0.2, "SPO": 0.15, "LRIO": 0.1},
+                        cato_entropy=0.30,
+                        grounding_accuracy=0.74,
+                        top_alignment_accuracy=0.72,
+                        rceo_reliability=0.90,
+                    )
+                )
                 + "\n"
-                + json.dumps(_diagnostic("no_cato", {"CATO": 0.0, "TLEO": 0.4, "SPO": 0.4, "LRIO": 0.2}, cato_entropy=0.90))
+                + json.dumps(
+                    _diagnostic(
+                        "no_cato",
+                        {"CATO": 0.0, "TLEO": 0.4, "SPO": 0.4, "LRIO": 0.2},
+                        cato_entropy=0.90,
+                        grounding_accuracy=0.52,
+                        top_alignment_accuracy=0.20,
+                    )
+                )
+                + "\n"
+                + json.dumps(
+                    _diagnostic(
+                        "corrupted_visual",
+                        {"CATO": 0.28, "TLEO": 0.30, "SPO": 0.32, "LRIO": 0.10},
+                        cato_entropy=0.58,
+                        grounding_accuracy=0.61,
+                        top_alignment_accuracy=0.56,
+                        rceo_reliability=0.55,
+                        rceo_corruption_response=0.35,
+                    )
+                )
                 + "\n"
             )
             result = subprocess.run(
@@ -204,12 +278,32 @@ def _summary(
     }
 
 
-def _diagnostic(setting: str, loads: dict[str, float], *, cato_entropy: float) -> dict[str, object]:
-    return {
+def _diagnostic(
+    setting: str,
+    loads: dict[str, float],
+    *,
+    cato_entropy: float,
+    grounding_accuracy: float | None = None,
+    top_alignment_accuracy: float | None = None,
+    rceo_reliability: float | None = None,
+    rceo_corruption_response: float | None = None,
+) -> dict[str, object]:
+    cato = {"alignment_entropy": cato_entropy}
+    if grounding_accuracy is not None:
+        cato["grounding_accuracy"] = grounding_accuracy
+    if top_alignment_accuracy is not None:
+        cato["top_alignment_accuracy"] = top_alignment_accuracy
+    candidate_diagnostics: dict[str, object] = {"CATO": cato}
+    if rceo_corruption_response is not None:
+        candidate_diagnostics["RCEO"] = {"corruption_response": rceo_corruption_response}
+    row: dict[str, object] = {
         "setting": setting,
         "router_load_by_candidate": loads,
-        "candidate_diagnostics": {"CATO": {"alignment_entropy": cato_entropy}},
+        "candidate_diagnostics": candidate_diagnostics,
     }
+    if rceo_reliability is not None:
+        row["rceo_reliability"] = rceo_reliability
+    return row
 
 
 if __name__ == "__main__":
