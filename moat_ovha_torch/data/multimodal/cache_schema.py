@@ -16,6 +16,8 @@ REQUIRED_DATA_CARD_KEYS = (
     "leakage_controls",
 )
 
+FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "reason")
+
 
 @dataclass(frozen=True)
 class MultimodalCacheLayout:
@@ -54,6 +56,7 @@ def required_cache_files(layout: MultimodalCacheLayout, splits: tuple[str, ...] 
         required.update(
             {
                 root / "provenance" / f"source_ids_{split}.txt",
+                root / "provenance" / f"failed_samples_{split}.jsonl",
                 root / "masks" / f"text_mask_{split}.npy",
                 root / "supervision" / f"task_labels_{split}.npy",
             }
@@ -105,6 +108,7 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
     _validate_source_split_controls(layout, splits, errors)
     _validate_feature_parity(layout, data_card, errors)
     _validate_pseudo_label_provenance(layout, errors)
+    _validate_failed_sample_manifests(layout, splits, errors)
 
     return CacheValidationReport(ok=not errors, errors=errors, warnings=warnings)
 
@@ -213,3 +217,31 @@ def _validate_pseudo_label_provenance(layout: MultimodalCacheLayout, errors: lis
     generated_from = payload.get("generated_from_splits", [])
     if "test" in set(generated_from):
         errors.append("pseudo labels must not be generated from test split")
+
+
+def _validate_failed_sample_manifests(
+    layout: MultimodalCacheLayout,
+    splits: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    for split in splits:
+        path = layout.root / "provenance" / f"failed_samples_{split}.jsonl"
+        if not path.exists():
+            continue
+        for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                errors.append(f"{path.name} line {line_number} is not valid JSON: {exc}")
+                continue
+            if not isinstance(payload, dict):
+                errors.append(f"{path.name} line {line_number} must be a JSON object")
+                continue
+            missing = [key for key in FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS if not payload.get(key)]
+            if missing:
+                errors.append(f"{path.name} line {line_number} missing required keys: {', '.join(missing)}")
+            if payload.get("split") != split:
+                errors.append(f"{path.name} line {line_number} split must match {split}")

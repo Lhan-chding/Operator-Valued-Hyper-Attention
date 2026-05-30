@@ -44,10 +44,13 @@ Every formal cache must include:
 - per-split masks and positions
 - supervision shards
 - provenance/source id files
+- `provenance/failed_samples_<split>.jsonl`, even when empty
 - frozen feature extractor versions
 - pseudo label versions when weak labels exist
 
 The cache must preserve `source_id`, split provenance, license tag, feature extractor version, pseudo-label provenance, failed sample manifests, and checksum records.
+
+Each non-empty failed-sample manifest row must be a JSON object with `source_id`, `split`, and `reason`. Empty files are valid only when the split has no failed download, decode, feature, or validation sample.
 
 ## Leakage Controls
 
