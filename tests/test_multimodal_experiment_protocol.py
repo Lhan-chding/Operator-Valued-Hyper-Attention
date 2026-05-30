@@ -251,6 +251,26 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
 
         self.assertTrue(allowed.ok, allowed.errors)
 
+    def test_public_entry_rejects_oracle_smoke_controlled_payload(self):
+        from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+
+        oracle_smoke_payload = {
+            "mode": "oracle_smoke_only",
+            "controlled_report": {
+                "go_no_go": {"controlled_multimodal_passed": True},
+                "gate_table": {
+                    "Stackability": {"passed": True},
+                    "CATO collapse": {"passed": True},
+                    "CATO alignment diagnostics": {"passed": True},
+                },
+            },
+        }
+
+        report = validate_public_entry_requirements("phrase_region_grounding", oracle_smoke_payload)
+
+        self.assertFalse(report.ok)
+        self.assertIn("oracle_smoke_only is not valid public-entry evidence", "\n".join(report.errors))
+
     def test_public_smoke_runner_requires_controlled_report_after_cache_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_root = Path(tmp) / "cache"
