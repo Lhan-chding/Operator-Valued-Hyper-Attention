@@ -23,6 +23,12 @@ CONTROLLED_REQUIRED_GATES = (
     "Memory gate",
     "Adapter gate",
 )
+CANDIDATE_ORACLE_GAP_KEYS = (
+    "TLEO_oracle_gap",
+    "SPO_oracle_gap",
+    "LRIO_oracle_gap",
+    "CATO_oracle_gap",
+)
 OPERATOR_TO_FAMILY = {
     "TLEO": "tleo_local_evidence",
     "SPO": "spo_global_prototype",
@@ -57,6 +63,10 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         missing_cells = _missing_oracle_cells(row)
         if missing_cells:
             reasons.append(f"{row.get('family', '<unknown>')} missing oracle matrix cells: {', '.join(missing_cells)}")
+        for oracle_reason in _oracle_gap_reasons(row):
+            reasons.append(oracle_reason)
+        for rceo_reason in _rceo_prior_effect_reasons(row):
+            reasons.append(rceo_reason)
     for name, gate in gate_table.items():
         if not gate["passed"]:
             reasons.append(f"gate failed: {name}")
@@ -77,6 +87,27 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def _missing_oracle_cells(row: dict[str, Any]) -> list[str]:
     matrix = row.get("oracle_matrix", {})
     return [cell for cell in ORACLE_MATRIX_CELLS if cell not in matrix]
+
+
+def _oracle_gap_reasons(row: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    for key in CANDIDATE_ORACLE_GAP_KEYS:
+        if key not in row:
+            reasons.append(f"{row.get('family', '<unknown>')} missing oracle gap evidence: {key}")
+            continue
+        if float(row[key]) < 0.0:
+            reasons.append(f"{row.get('family', '<unknown>')} oracle gap must be non-negative: {key}")
+    return reasons
+
+
+def _rceo_prior_effect_reasons(row: dict[str, Any]) -> list[str]:
+    if row.get("family") != "rceo_reliability_corruption":
+        return []
+    if "rceo_prior_effect" not in row:
+        return ["rceo_reliability_corruption missing RCEO prior effect"]
+    if float(row["rceo_prior_effect"]) <= 0.0:
+        return ["rceo_reliability_corruption RCEO prior effect must be positive"]
+    return []
 
 
 def _stackability_gate(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -119,10 +150,11 @@ def _rceo_gate(family_rows: dict[str, dict[str, Any]]) -> dict[str, Any]:
     row = family_rows.get("rceo_reliability_corruption")
     monotonic = bool(row.get("rceo_reliability_monotonic")) if row is not None else False
     load_shift = float(row.get("rceo_router_load_shift", 0.0)) if row is not None else 0.0
+    prior_effect = float(row.get("rceo_prior_effect", 0.0)) if row is not None else 0.0
     return {
-        "passed": monotonic and load_shift > 0.0,
-        "value": {"monotonic": monotonic, "router_load_shift": load_shift},
-        "condition": "reliability decreases with corruption and router load shifts coherently",
+        "passed": monotonic and load_shift > 0.0 and prior_effect > 0.0,
+        "value": {"monotonic": monotonic, "router_load_shift": load_shift, "prior_effect": prior_effect},
+        "condition": "reliability decreases with corruption, router load shifts coherently, and RCEO prior improves loss",
     }
 
 

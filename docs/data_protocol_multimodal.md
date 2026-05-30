@@ -44,6 +44,8 @@ Every candidate returns `CandidateOutput.value: [B,Q,Dy]`. Only these four outpu
 
 Controlled v1 experiments must include the router decomposition ablations `no_evidence_router`, `no_reliability_prior`, `memory_only_router`, and `evidence_only_router` so the reported router gain can be attributed to memory, evidence, and reliability terms rather than an undiagnosed mixture shortcut.
 
+Controlled reports must include the full learned/true router-adapter oracle matrix, per-candidate `TLEO_oracle_gap`, `SPO_oracle_gap`, `LRIO_oracle_gap`, and `CATO_oracle_gap`, plus a positive `rceo_prior_effect` for the reliability-corruption family. These fields are required before any public multimodal entry because they localize whether failures come from candidate expressivity, router choice, adapter parameters, memory, or reliability prior.
+
 ## Cache Requirements
 
 Every formal cache must include:
