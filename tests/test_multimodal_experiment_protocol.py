@@ -271,6 +271,22 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("oracle_smoke_only is not valid public-entry evidence", "\n".join(report.errors))
 
+        trained_controlled_payload = {
+            "mode": "trained_controlled_report",
+            "controlled_report": {
+                "go_no_go": {"controlled_multimodal_passed": True},
+                "gate_table": {
+                    "Stackability": {"passed": True},
+                    "CATO collapse": {"passed": True},
+                    "CATO alignment diagnostics": {"passed": True},
+                },
+            },
+        }
+
+        report = validate_public_entry_requirements("phrase_region_grounding", trained_controlled_payload)
+
+        self.assertTrue(report.ok, report.errors)
+
     def test_public_smoke_runner_requires_controlled_report_after_cache_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_root = Path(tmp) / "cache"
