@@ -283,7 +283,9 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
         )
         + "\n"
     )
-    (root / "provenance" / "pseudo_label_versions.json").write_text(json.dumps({"generated_from_splits": ["train"]}) + "\n")
+    (root / "provenance" / "pseudo_label_versions.json").write_text(
+        json.dumps({"generated_from_splits": ["train"], "version": "test-pseudo-v1"}, sort_keys=True) + "\n"
+    )
     for split in ("val", "test"):
         (root / "provenance" / f"source_ids_{split}.txt").write_text(f"{split}-source\n")
         (root / "provenance" / f"sample_records_{split}.jsonl").write_text(

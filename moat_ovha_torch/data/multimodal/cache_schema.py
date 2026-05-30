@@ -348,6 +348,8 @@ def _validate_pseudo_label_provenance(layout: MultimodalCacheLayout, errors: lis
     if not isinstance(generated_from, list) or any(not isinstance(split, str) or not split for split in generated_from):
         errors.append("pseudo_label_versions.json generated_from_splits must be a list of split names")
         return
+    if generated_from and (not isinstance(payload.get("version"), str) or not payload.get("version")):
+        errors.append("pseudo_label_versions.json version must be a non-empty string")
     if "test" in set(generated_from):
         errors.append("pseudo labels must not be generated from test split")
 
