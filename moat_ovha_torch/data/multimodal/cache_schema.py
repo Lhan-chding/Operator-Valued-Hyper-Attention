@@ -135,7 +135,7 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
     _validate_source_split_controls(layout, splits, errors)
     _validate_split_manifest_consistency(layout, splits, errors)
     _validate_feature_parity(layout, data_card, errors)
-    _validate_pseudo_label_provenance(layout, errors)
+    _validate_pseudo_label_provenance(layout, splits, errors)
     _validate_sample_record_manifests(layout, splits, errors)
     _validate_failed_sample_manifests(layout, splits, errors)
     _validate_token_field_manifests(layout, splits, data_card, checksums, errors)
@@ -435,7 +435,11 @@ def _validate_feature_version_value(
     return True
 
 
-def _validate_pseudo_label_provenance(layout: MultimodalCacheLayout, errors: list[str]) -> None:
+def _validate_pseudo_label_provenance(
+    layout: MultimodalCacheLayout,
+    splits: tuple[str, ...],
+    errors: list[str],
+) -> None:
     path = layout.root / "provenance" / "pseudo_label_versions.json"
     if not path.exists():
         return
@@ -451,10 +455,27 @@ def _validate_pseudo_label_provenance(layout: MultimodalCacheLayout, errors: lis
     if not isinstance(generated_from, list) or any(not isinstance(split, str) or not split for split in generated_from):
         errors.append("pseudo_label_versions.json generated_from_splits must be a list of split names")
         return
+    known_splits = set(splits) | _read_split_manifest_names(layout) | {"train"}
+    for split in generated_from:
+        if split not in known_splits:
+            errors.append(f"pseudo_label_versions.json generated_from_splits contains unknown split: {split}")
     if generated_from and (not isinstance(payload.get("version"), str) or not payload.get("version")):
         errors.append("pseudo_label_versions.json version must be a non-empty string")
     if "test" in set(generated_from):
         errors.append("pseudo labels must not be generated from test split")
+
+
+def _read_split_manifest_names(layout: MultimodalCacheLayout) -> set[str]:
+    path = layout.root / "splits.json"
+    if not path.exists():
+        return set()
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return set()
+    if not isinstance(payload, dict):
+        return set()
+    return {split for split in payload if isinstance(split, str) and split}
 
 
 def _validate_failed_sample_manifests(
