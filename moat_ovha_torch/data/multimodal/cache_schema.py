@@ -112,6 +112,7 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
                 _validate_checksum_coverage(layout, required_files, checksums, errors)
 
     _validate_source_split_controls(layout, splits, errors)
+    _validate_split_manifest_consistency(layout, splits, errors)
     _validate_feature_parity(layout, data_card, errors)
     _validate_pseudo_label_provenance(layout, errors)
     _validate_failed_sample_manifests(layout, splits, errors)
@@ -192,6 +193,31 @@ def _validate_source_split_controls(layout: MultimodalCacheLayout, splits: tuple
             if previous is not None and previous != split:
                 errors.append(f"source_id appears in multiple splits: {source_id} ({previous}, {split})")
             seen[source_id] = split
+
+
+def _validate_split_manifest_consistency(layout: MultimodalCacheLayout, splits: tuple[str, ...], errors: list[str]) -> None:
+    path = layout.root / "splits.json"
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        errors.append(f"invalid splits.json: {exc}")
+        return
+    if not isinstance(payload, dict):
+        errors.append("splits.json must be an object keyed by split")
+        return
+    for split in splits:
+        expected = payload.get(split)
+        if not isinstance(expected, list):
+            errors.append(f"splits.json missing source_id list for split: {split}")
+            continue
+        source_path = layout.root / "provenance" / f"source_ids_{split}.txt"
+        if not source_path.exists():
+            continue
+        actual = [line.strip() for line in source_path.read_text().splitlines() if line.strip()]
+        if set(str(source_id) for source_id in expected) != set(actual):
+            errors.append(f"provenance/source_ids_{split}.txt must match splits.json {split} entries")
 
 
 def _validate_feature_parity(layout: MultimodalCacheLayout, data_card: dict[str, Any], errors: list[str]) -> None:
