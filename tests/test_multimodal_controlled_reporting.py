@@ -42,6 +42,26 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("missing controlled family", "\n".join(report["go_no_go"]["reasons"]))
         self.assertFalse(report["gate_table"]["TLEO collapse"]["passed"])
 
+    def test_controlled_report_requires_candidate_specific_collapse_diagnostics(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+
+        rows = [
+            _row("tleo_local_evidence", "TLEO", 0.010, 0.010),
+            _row("spo_global_prototype", "SPO", 0.020, 0.020, include_operator_diagnostics=False),
+            _row("lrio_low_rank_interaction", "LRIO", 0.030, 0.030, include_operator_diagnostics=False),
+            _row("cato_alignment_transport", "CATO", 0.040, 0.040, include_operator_diagnostics=False),
+            _row("rceo_reliability_corruption", "LRIO", 0.050, 0.050, rceo=True),
+            _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy=0.85),
+        ]
+        report = build_controlled_report(rows)
+
+        self.assertFalse(report["go_no_go"]["controlled_multimodal_passed"])
+        joined = "\n".join(report["go_no_go"]["reasons"])
+        self.assertIn("SPO collapse missing diagnostic: prototype_kl_delta", joined)
+        self.assertIn("LRIO collapse missing diagnostic: rank_logits_kl_delta", joined)
+        self.assertIn("CATO collapse missing diagnostic: alignment_entropy_delta", joined)
+        self.assertIn("CATO collapse missing diagnostic: alignment_topk_delta", joined)
+
     def test_robustness_summary_requires_auc_reliability_and_load_shift(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 
@@ -141,6 +161,7 @@ def _row(
     *,
     router_accuracy: float = 0.9,
     rceo: bool = False,
+    include_operator_diagnostics: bool = True,
 ) -> dict[str, object]:
     row = {
         "family": family,
@@ -160,6 +181,14 @@ def _row(
     if rceo:
         row["rceo_reliability_monotonic"] = True
         row["rceo_router_load_shift"] = 0.1
+    if include_operator_diagnostics:
+        if active_operator == "SPO":
+            row["prototype_kl_delta"] = 0.1
+        elif active_operator == "LRIO":
+            row["rank_logits_kl_delta"] = 0.1
+        elif active_operator == "CATO":
+            row["alignment_entropy_delta"] = 0.1
+            row["alignment_topk_delta"] = 0.1
     return row
 
 
