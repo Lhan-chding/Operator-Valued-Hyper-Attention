@@ -889,6 +889,45 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertTrue(report.ok, report.errors)
         self.assertEqual(report.warnings, [])
 
+    def test_cache_validator_rejects_missing_grounding_and_rceo_supervision_shards(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("missing required cache artifact: supervision/alignment_pairs_train.parquet", joined)
+        self.assertIn("missing required cache artifact: supervision/bbox_targets_train.npy", joined)
+        self.assertIn("missing required cache artifact: supervision/region_targets_train.npy", joined)
+        self.assertIn("missing required cache artifact: supervision/corruption_train.parquet", joined)
+
+    def test_cache_validator_requires_checksums_for_required_supervision_shards(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            _write_required_grounding_supervision_shards(layout.root)
+            _write_complete_checksums(layout.root)
+            checksums_path = layout.root / "checksums.json"
+            checksums = json.loads(checksums_path.read_text())
+            checksums.pop("supervision/alignment_pairs_train.parquet")
+            checksums_path.write_text(json.dumps(checksums, sort_keys=True) + "\n")
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "checksums.json missing hash for required supervision artifact: "
+            "supervision/alignment_pairs_train.parquet",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_pseudo_label_test_leakage(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -1054,6 +1093,17 @@ def _write_minimal_cache(
                 invalid_token_manifest=invalid_token_manifest and split == "train",
                 extra_modality=extra_token_manifest_modality if split == "train" else None,
             )
+
+
+def _write_required_grounding_supervision_shards(root: Path) -> None:
+    for split in ("train", "test"):
+        for relative in (
+            f"supervision/alignment_pairs_{split}.parquet",
+            f"supervision/bbox_targets_{split}.npy",
+            f"supervision/region_targets_{split}.npy",
+            f"supervision/corruption_{split}.parquet",
+        ):
+            (root / relative).write_text(f"placeholder {relative}\n")
 
 
 def _write_complete_checksums(root: Path) -> None:
