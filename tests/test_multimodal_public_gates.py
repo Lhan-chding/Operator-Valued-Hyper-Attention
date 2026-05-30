@@ -72,6 +72,34 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("full model does not beat same-feature baseline", "\n".join(report["reasons"]))
         self.assertIn("no-CATO ablation score missing", "\n".join(report["reasons"]))
 
+    def test_public_gate_requires_three_seed_paired_statistical_evidence(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        report = evaluate_region_text_gate(
+            statistics_summary=_summary(
+                "phrase_region_grounding",
+                "test",
+                full=0.80,
+                baseline=0.72,
+                seed_count=1,
+                common_seed_count=1,
+                include_bootstrap=False,
+            ),
+            diagnostics_rows=[
+                _diagnostic("clean", {"CATO": 0.55, "TLEO": 0.2, "SPO": 0.15, "LRIO": 0.1}, cato_entropy=0.30),
+                _diagnostic("no_cato", {"CATO": 0.0, "TLEO": 0.4, "SPO": 0.4, "LRIO": 0.2}, cato_entropy=0.90),
+            ],
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("full and baseline comparison requires at least 3 seeds", joined)
+        self.assertIn("paired comparison requires at least 3 common seeds", joined)
+        self.assertIn("paired comparison missing paired_bootstrap_ci95", joined)
+
     def test_public_gate_cli_emits_go_no_go_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -109,17 +137,29 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertTrue(payload["passed"], payload["reasons"])
 
 
-def _summary(task: str, split: str, *, full: float, baseline: float) -> dict[str, object]:
+def _summary(
+    task: str,
+    split: str,
+    *,
+    full: float,
+    baseline: float,
+    seed_count: int = 3,
+    common_seed_count: int = 3,
+    include_bootstrap: bool = True,
+) -> dict[str, object]:
+    paired = {"common_seed_count": common_seed_count, "paired_permutation_p": 0.25}
+    if include_bootstrap:
+        paired["paired_bootstrap_ci95"] = [0.01, 0.12]
     return {
         "main_table": {
             task: {
                 split: {
-                    "ovha_full": {"mean": full, "seed_count": 3, "higher_is_better": True},
-                    "cross_attention_transformer": {"mean": baseline, "seed_count": 3, "higher_is_better": True},
+                    "ovha_full": {"mean": full, "seed_count": seed_count, "higher_is_better": True},
+                    "cross_attention_transformer": {"mean": baseline, "seed_count": seed_count, "higher_is_better": True},
                 }
             }
         },
-        "paired_tests": {task: {split: {"common_seed_count": 3, "paired_permutation_p": 0.25}}},
+        "paired_tests": {task: {split: paired}},
     }
 
 
