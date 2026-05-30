@@ -56,6 +56,8 @@ Every `provenance/source_ids_<split>.txt` line must already be a non-empty norma
 
 `checksums.json` must be a non-empty object whose keys are existing relative file artifact paths that remain inside the cache root.
 
+`provenance/pseudo_label_versions.json` must list pseudo-label source splits in `generated_from_splits`. Sources must be auditable split names from `splits.json`, the current validation splits, or the upstream `train` split; `test` and unknown split names are invalid.
+
 Each sample-record manifest row must be a JSON object with `source_id`, `split`, `raw_ref`, and `license_tag`; the row set must match the split's source-id file.
 
 Each non-empty failed-sample manifest row must be a JSON object with `source_id`, `split`, and `reason`. Failed sample source IDs must not also appear in the retained split source-id file. Empty files are valid only when the split has no failed download, decode, feature, or validation sample.
