@@ -239,6 +239,30 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("missing robustness stress family: audio_quality", joined)
         self.assertIn("missing robustness stress family: hard_negative_mismatch", joined)
 
+    def test_robustness_summary_accepts_plan_stress_metadata_coverage(self):
+        from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+        rows = [
+            _stress_row("missing_modality", missing_modalities=["text"]),
+            _stress_row("missing_modality", missing_modalities=["vision"]),
+            _stress_row("missing_modality", missing_modalities=["audio"]),
+            _stress_row("image_blur"),
+            _stress_row("audio_noise"),
+            _stress_row("text_token_mask"),
+            _stress_row("hard_negative_mismatch", mismatch_source_id="other-sample"),
+            _stress_row("temporal_shift", temporal_shift_sec=1.2),
+        ]
+
+        summary = summarize_robustness_rows(
+            rows,
+            full_model="ovha_full",
+            baseline_model="cross_attention_transformer",
+            temporal_data=True,
+        )
+
+        self.assertTrue(summary["required_stress_coverage"]["passed"], summary["required_stress_coverage"]["reasons"])
+        self.assertIn("temporal_shift", summary["required_stress_coverage"]["observed"])
+
     def test_controlled_and_robustness_summary_scripts_emit_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -347,6 +371,30 @@ def _robustness_row(model: str, strength: float, score: float, *, reliability: f
         "rceo_reliability": reliability,
         "router_load_by_candidate": {"CATO": 0.60 - strength * 0.40, "SPO": 0.10 + strength * 0.30},
     }
+
+
+def _stress_row(
+    corruption_type: str,
+    *,
+    missing_modalities: list[str] | None = None,
+    mismatch_source_id: str | None = None,
+    temporal_shift_sec: float | None = None,
+) -> dict[str, object]:
+    row = {
+        "model": "ovha_full",
+        "corruption_type": corruption_type,
+        "corruption_strength": 0.5,
+        "score": 0.70,
+        "rceo_reliability": 0.65,
+        "router_load_by_candidate": {"CATO": 0.40, "SPO": 0.25},
+    }
+    if missing_modalities is not None:
+        row["missing_modalities"] = missing_modalities
+    if mismatch_source_id is not None:
+        row["mismatch_source_id"] = mismatch_source_id
+    if temporal_shift_sec is not None:
+        row["temporal_shift_sec"] = temporal_shift_sec
+    return row
 
 
 if __name__ == "__main__":

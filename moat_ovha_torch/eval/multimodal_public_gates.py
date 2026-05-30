@@ -282,20 +282,28 @@ def _entropy_improves(rows: list[dict[str, Any]], candidate: str, key: str) -> d
 def _robustness_passes(summary: dict[str, Any]) -> dict[str, Any]:
     ablations = summary.get("required_ablation_degradation", {})
     ablations_pass = bool(ablations.get("passed"))
+    coverage = summary.get("required_stress_coverage", {})
+    coverage_pass = bool(coverage.get("passed"))
     passed = (
         bool(summary.get("full_drop_less_than_baseline"))
         and bool(summary.get("rceo_reliability_monotonic"))
         and ablations_pass
+        and coverage_pass
     )
     ablation_reasons = "; ".join(str(reason) for reason in ablations.get("reasons", ()) if reason)
+    coverage_reasons = "; ".join(str(reason) for reason in coverage.get("reasons", ()) if reason)
+    reason_parts = [
+        "robustness summary does not show lower drop, monotonic RCEO reliability, and required ablation degradation",
+    ]
+    if not coverage_pass:
+        reason_parts.append("robustness stress family coverage missing")
+    if ablation_reasons:
+        reason_parts.append(ablation_reasons)
+    if coverage_reasons:
+        reason_parts.append(coverage_reasons)
     return {
         "passed": passed,
-        "reason": (
-            "robustness summary does not show lower drop, monotonic RCEO reliability, "
-            f"and required ablation degradation{': ' + ablation_reasons if ablation_reasons else ''}"
-        )
-        if not passed
-        else "",
+        "reason": "; ".join(reason_parts) if not passed else "",
     }
 
 

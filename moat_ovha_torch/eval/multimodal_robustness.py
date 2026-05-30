@@ -4,12 +4,34 @@ from collections import defaultdict
 from typing import Any
 
 
+DEFAULT_REQUIRED_STRESS_FAMILIES = {
+    "missing_text": ("missing_text", "text_missing"),
+    "missing_vision": ("missing_vision", "missing_visual", "vision_missing", "visual_missing"),
+    "missing_audio": ("missing_audio", "audio_missing"),
+    "image_quality": ("image_blur", "image_crop", "image_occlusion", "visual_blur", "visual_crop", "visual_occlusion"),
+    "audio_quality": ("audio_noise", "audio_masking", "audio_mask"),
+    "text_noise": ("text_token_mask", "text_mask", "paraphrase_noise", "text_paraphrase"),
+    "hard_negative_mismatch": (
+        "hard_negative_mismatch",
+        "hard_negative_caption_mismatch",
+        "hard_negative_region_mismatch",
+        "hard_negative_audio_mismatch",
+        "caption_mismatch",
+        "region_mismatch",
+        "audio_mismatch",
+    ),
+}
+TEMPORAL_STRESS_FAMILIES = {"temporal_shift": ("temporal_shift", "temporal_shift_sec")}
+
+
 def summarize_robustness_rows(
     rows: list[dict[str, Any]],
     *,
     full_model: str,
     baseline_model: str,
     required_ablation_models: tuple[str, ...] = ("ovha_no_rceo", "ovha_no_evidence_router"),
+    required_stress_families: dict[str, tuple[str, ...]] | None = None,
+    temporal_data: bool = False,
 ) -> dict[str, Any]:
     by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -24,6 +46,11 @@ def summarize_robustness_rows(
         full_model,
         required_ablation_models,
     )
+    required_stress_coverage = _required_stress_coverage(
+        rows,
+        required_stress_families=required_stress_families,
+        temporal_data=temporal_data,
+    )
     return {
         "full_model": full_model,
         "baseline_model": baseline_model,
@@ -31,6 +58,7 @@ def summarize_robustness_rows(
         "auc_over_corruption_strength": auc,
         "rceo_reliability_monotonic": reliability_monotonic,
         "operator_load_shift": load_shift,
+        "required_stress_coverage": required_stress_coverage,
         "required_ablation_degradation": required_ablation_degradation,
         "full_drop_less_than_baseline": relative_drop.get(full_model, float("inf")) < relative_drop.get(baseline_model, float("-inf")),
     }
@@ -100,3 +128,77 @@ def _required_ablation_degradation(
         "condition": "required robustness ablations must show larger relative drop than ovha_full",
         "reasons": reasons,
     }
+
+
+def _required_stress_coverage(
+    rows: list[dict[str, Any]],
+    *,
+    required_stress_families: dict[str, tuple[str, ...]] | None,
+    temporal_data: bool,
+) -> dict[str, Any]:
+    required = dict(required_stress_families or DEFAULT_REQUIRED_STRESS_FAMILIES)
+    if temporal_data:
+        required.update(TEMPORAL_STRESS_FAMILIES)
+    observed = _observed_stress_families(rows, required)
+    missing = sorted(family for family in required if family not in observed)
+    return {
+        "passed": not missing,
+        "observed": sorted(observed),
+        "required": sorted(required),
+        "condition": "robustness rows must cover every required Step 6 stress family",
+        "reasons": [f"missing robustness stress family: {family}" for family in missing],
+    }
+
+
+def _observed_stress_families(
+    rows: list[dict[str, Any]],
+    required: dict[str, tuple[str, ...]],
+) -> set[str]:
+    observed: set[str] = set()
+    alias_to_family = {
+        _normalize_stress_name(alias): family
+        for family, aliases in required.items()
+        for alias in (family, *aliases)
+    }
+    for row in rows:
+        corruption_type = _normalize_stress_name(row.get("corruption_type", ""))
+        if corruption_type in alias_to_family:
+            observed.add(alias_to_family[corruption_type])
+        observed.update(_families_from_missing_modalities(row, alias_to_family))
+        if _has_mismatch_metadata(row):
+            observed.add("hard_negative_mismatch")
+        if _has_temporal_shift(row):
+            observed.add("temporal_shift")
+    return observed
+
+
+def _families_from_missing_modalities(row: dict[str, Any], alias_to_family: dict[str, str]) -> set[str]:
+    missing = row.get("missing_modalities", ())
+    if not isinstance(missing, (list, tuple, set)):
+        return set()
+    observed = set()
+    for modality in missing:
+        family = alias_to_family.get(f"missing_{_normalize_stress_name(modality)}")
+        if family is not None:
+            observed.add(family)
+    return observed
+
+
+def _has_mismatch_metadata(row: dict[str, Any]) -> bool:
+    mismatch = row.get("mismatch_source_id")
+    if isinstance(mismatch, str) and mismatch:
+        return True
+    corruption_type = _normalize_stress_name(row.get("corruption_type", ""))
+    return "mismatch" in corruption_type or "hard_negative" in corruption_type
+
+
+def _has_temporal_shift(row: dict[str, Any]) -> bool:
+    shift = row.get("temporal_shift_sec")
+    try:
+        return abs(float(shift)) > 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _normalize_stress_name(value: Any) -> str:
+    return str(value).strip().lower().replace("-", "_").replace(" ", "_")
