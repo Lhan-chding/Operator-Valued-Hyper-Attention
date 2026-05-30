@@ -15,6 +15,9 @@ DEFAULT_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
 CONTROLLED_TRAINING_STAGES = ("T0", "T1", "T2", "T3", "T4")
 PUBLIC_TRAINING_STAGES = ("T0", "T5")
 ROBUSTNESS_EVAL_STAGES = ("T0", "T6")
+CONTROLLED_TASK_TYPES = ("controlled_multimodal", "controlled_relation_operator")
+REGION_TEXT_TASK_TYPES = ("phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities")
+SENTIMENT_EMOTION_TASK_TYPES = ("sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "meld")
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,11 @@ class MultimodalExperimentConfig:
     def validate(self) -> None:
         if not self.training_stages:
             raise ValueError("training_stages must be explicit")
+        expected_stages = _expected_training_stages(self.task_type, self.robustness_corruptions)
+        if self.training_stages != expected_stages:
+            raise ValueError(
+                f"training_stages for {self.task_type} must be {expected_stages}, got {self.training_stages}"
+            )
         if self.eval_episode_count <= 0:
             raise ValueError("eval_episode_count must be positive")
         if not self.baseline_names:
@@ -93,3 +101,13 @@ class MultimodalExperimentConfig:
                 "external references must not be listed as same-feature baselines: "
                 + ", ".join(forbidden)
             )
+
+
+def _expected_training_stages(task_type: str, robustness_corruptions: tuple[str, ...]) -> tuple[str, ...]:
+    if robustness_corruptions:
+        return ROBUSTNESS_EVAL_STAGES
+    if task_type in CONTROLLED_TASK_TYPES:
+        return CONTROLLED_TRAINING_STAGES
+    if task_type in REGION_TEXT_TASK_TYPES or task_type in SENTIMENT_EMOTION_TASK_TYPES:
+        return PUBLIC_TRAINING_STAGES
+    raise ValueError(f"unknown multimodal task_type for training stages: {task_type}")
