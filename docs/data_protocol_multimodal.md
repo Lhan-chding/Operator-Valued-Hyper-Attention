@@ -52,6 +52,8 @@ Every formal cache must include:
 
 The cache must preserve `source_id`, split provenance, license tag, feature extractor version, pseudo-label provenance, failed sample manifests, and checksum records.
 
+Every `provenance/source_ids_<split>.txt` line must already be a non-empty normalized source ID. Leading or trailing whitespace and blank manifest rows are invalid because they can hide split leakage or silent provenance drops.
+
 `checksums.json` must be a non-empty object whose keys are existing relative file artifact paths that remain inside the cache root.
 
 Each sample-record manifest row must be a JSON object with `source_id`, `split`, `raw_ref`, and `license_tag`; the row set must match the split's source-id file.
