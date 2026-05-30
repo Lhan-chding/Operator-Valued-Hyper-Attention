@@ -552,6 +552,39 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("pseudo labels must not be generated from test split", "\n".join(report.errors))
 
+    def test_cache_validator_rejects_non_object_pseudo_label_versions(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            _write_complete_checksums(layout.root)
+            (layout.root / "provenance" / "pseudo_label_versions.json").write_text(json.dumps(["train"]) + "\n")
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn("pseudo_label_versions.json must be an object", "\n".join(report.errors))
+
+    def test_cache_validator_rejects_string_pseudo_label_generated_from_splits(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            _write_complete_checksums(layout.root)
+            (layout.root / "provenance" / "pseudo_label_versions.json").write_text(
+                json.dumps({"generated_from_splits": "test", "version": "bad"}) + "\n"
+            )
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "pseudo_label_versions.json generated_from_splits must be a list of split names",
+            "\n".join(report.errors),
+        )
+
 
 def _write_minimal_cache(
     root: Path,
