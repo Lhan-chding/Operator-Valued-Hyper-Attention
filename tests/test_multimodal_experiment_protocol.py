@@ -205,6 +205,40 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertFalse(sentiment_report.ok)
         self.assertIn("sentiment/emotion public entry requires SPO collapse", "\n".join(sentiment_report.errors))
 
+    def test_sentiment_public_entry_requires_lrio_and_rceo_ablation_degradation(self):
+        from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+
+        missing_ablation_gates = {
+            "go_no_go": {"controlled_multimodal_passed": True},
+            "gate_table": {
+                "LRIO collapse": {"passed": True},
+                "SPO collapse": {"passed": True},
+                "RCEO gate": {"passed": True},
+            },
+        }
+
+        blocked = validate_public_entry_requirements("sentiment_emotion", missing_ablation_gates)
+
+        self.assertFalse(blocked.ok)
+        joined = "\n".join(blocked.errors)
+        self.assertIn("sentiment/emotion public entry requires no-LRIO ablation degradation", joined)
+        self.assertIn("sentiment/emotion public entry requires no-RCEO ablation degradation", joined)
+
+        passed_ablation_gates = {
+            "go_no_go": {"controlled_multimodal_passed": True},
+            "gate_table": {
+                "LRIO collapse": {"passed": True},
+                "SPO collapse": {"passed": True},
+                "RCEO gate": {"passed": True},
+                "no-LRIO ablation": {"passed": True},
+                "no-RCEO ablation": {"passed": True},
+            },
+        }
+
+        allowed = validate_public_entry_requirements("sentiment_emotion", passed_ablation_gates)
+
+        self.assertTrue(allowed.ok, allowed.errors)
+
     def test_public_smoke_runner_requires_controlled_report_after_cache_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_root = Path(tmp) / "cache"
