@@ -17,6 +17,7 @@ REQUIRED_DATA_CARD_KEYS = (
 )
 
 FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "reason")
+TOKEN_FIELD_MANIFEST_REQUIRED_KEYS = ("x", "pos", "mask")
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ def required_cache_files(layout: MultimodalCacheLayout, splits: tuple[str, ...] 
             {
                 root / "provenance" / f"source_ids_{split}.txt",
                 root / "provenance" / f"failed_samples_{split}.jsonl",
+                root / "token_fields" / f"manifest_{split}.json",
                 root / "masks" / f"text_mask_{split}.npy",
                 root / "supervision" / f"task_labels_{split}.npy",
             }
@@ -74,6 +76,7 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
 
     data_card_path = layout.root / "data_card.json"
     data_card: dict[str, Any] = {}
+    checksums: dict[str, Any] | None = None
     if data_card_path.exists():
         try:
             data_card = json.loads(data_card_path.read_text())
@@ -96,19 +99,21 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
     checksums_path = layout.root / "checksums.json"
     if checksums_path.exists():
         try:
-            checksums = json.loads(checksums_path.read_text())
+            loaded_checksums = json.loads(checksums_path.read_text())
         except json.JSONDecodeError as exc:
             errors.append(f"invalid checksums.json: {exc}")
         else:
-            if not isinstance(checksums, dict) or not checksums:
+            if not isinstance(loaded_checksums, dict) or not loaded_checksums:
                 warnings.append("checksums.json is empty; formal runs require file hashes")
             else:
+                checksums = loaded_checksums
                 _validate_checksum_coverage(layout, required_files, checksums, errors)
 
     _validate_source_split_controls(layout, splits, errors)
     _validate_feature_parity(layout, data_card, errors)
     _validate_pseudo_label_provenance(layout, errors)
     _validate_failed_sample_manifests(layout, splits, errors)
+    _validate_token_field_manifests(layout, splits, data_card, checksums, errors)
 
     return CacheValidationReport(ok=not errors, errors=errors, warnings=warnings)
 
@@ -245,3 +250,77 @@ def _validate_failed_sample_manifests(
                 errors.append(f"{path.name} line {line_number} missing required keys: {', '.join(missing)}")
             if payload.get("split") != split:
                 errors.append(f"{path.name} line {line_number} split must match {split}")
+
+
+def _validate_token_field_manifests(
+    layout: MultimodalCacheLayout,
+    splits: tuple[str, ...],
+    data_card: dict[str, Any],
+    checksums: dict[str, Any] | None,
+    errors: list[str],
+) -> None:
+    modalities = data_card.get("modalities", []) if isinstance(data_card, dict) else []
+    if not isinstance(modalities, list) or not modalities:
+        return
+    expected_modalities = tuple(str(modality) for modality in modalities)
+    for split in splits:
+        manifest_path = layout.root / "token_fields" / f"manifest_{split}.json"
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except json.JSONDecodeError as exc:
+            errors.append(f"invalid {manifest_path.relative_to(layout.root)}: {exc}")
+            continue
+        if not isinstance(manifest, dict):
+            errors.append(f"{manifest_path.relative_to(layout.root)} must be a JSON object keyed by modality")
+            continue
+        for modality in expected_modalities:
+            entry = manifest.get(modality)
+            if not isinstance(entry, dict):
+                errors.append(f"{manifest_path.relative_to(layout.root)} missing modality entry: {modality}")
+                continue
+            missing = [key for key in TOKEN_FIELD_MANIFEST_REQUIRED_KEYS if not entry.get(key)]
+            if missing:
+                errors.append(
+                    f"{manifest_path.relative_to(layout.root)} entry for {modality} "
+                    f"missing required keys: {', '.join(missing)}"
+                )
+            for key in TOKEN_FIELD_MANIFEST_REQUIRED_KEYS:
+                relative_path = entry.get(key)
+                if not relative_path:
+                    continue
+                if not isinstance(relative_path, str):
+                    errors.append(
+                        f"{manifest_path.relative_to(layout.root)} entry for {modality}.{key} must be a relative path string"
+                    )
+                    continue
+                _validate_manifest_shard_path(layout, manifest_path, modality, key, relative_path, checksums, errors)
+
+
+def _validate_manifest_shard_path(
+    layout: MultimodalCacheLayout,
+    manifest_path: Path,
+    modality: str,
+    key: str,
+    relative_path: str,
+    checksums: dict[str, Any] | None,
+    errors: list[str],
+) -> None:
+    shard_relative = Path(relative_path)
+    manifest_name = manifest_path.relative_to(layout.root)
+    if shard_relative.is_absolute():
+        errors.append(f"{manifest_name} entry for {modality}.{key} must be relative, got {relative_path}")
+        return
+    shard_path = (layout.root / shard_relative).resolve()
+    try:
+        normalized_relative = shard_path.relative_to(layout.root.resolve())
+    except ValueError:
+        errors.append(f"{manifest_name} entry for {modality}.{key} escapes cache root: {relative_path}")
+        return
+    if not shard_path.exists():
+        errors.append(f"{manifest_name} points to missing {key} shard for {modality}: {normalized_relative}")
+        return
+    checksum_key = str(normalized_relative)
+    if checksums and checksum_key not in checksums:
+        errors.append(f"checksums.json missing hash for token field shard: {checksum_key}")

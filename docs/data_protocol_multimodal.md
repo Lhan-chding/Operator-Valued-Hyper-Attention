@@ -41,6 +41,7 @@ Every formal cache must include:
 - `checksums.json`
 - `samples.parquet` or an equivalent indexed manifest
 - per-split token field shards
+- `token_fields/manifest_<split>.json` mapping every data-card modality to `x`, `pos`, and `mask` shard paths
 - per-split masks and positions
 - supervision shards
 - provenance/source id files
