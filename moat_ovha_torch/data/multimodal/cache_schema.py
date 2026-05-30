@@ -405,13 +405,23 @@ def _validate_failed_sample_manifests(
             if not isinstance(payload, dict):
                 errors.append(f"{path.name} line {line_number} must be a JSON object")
                 continue
-            missing = [key for key in FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS if not payload.get(key)]
+            missing = [key for key in FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS if key not in payload]
             if missing:
                 errors.append(f"{path.name} line {line_number} missing required keys: {', '.join(missing)}")
+            invalid_string_fields = [
+                key
+                for key in FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS
+                if key in payload and (not isinstance(payload.get(key), str) or not payload.get(key))
+            ]
+            if invalid_string_fields:
+                errors.append(
+                    f"{path.name} line {line_number} required fields must be non-empty strings: "
+                    f"{', '.join(invalid_string_fields)}"
+                )
             if payload.get("split") != split:
                 errors.append(f"{path.name} line {line_number} split must match {split}")
             source_id = payload.get("source_id")
-            if source_id and str(source_id) in retained_source_ids:
+            if isinstance(source_id, str) and source_id and source_id in retained_source_ids:
                 errors.append(
                     f"{path.name} source_id must not also appear in retained "
                     f"split source ids: {source_id}"
