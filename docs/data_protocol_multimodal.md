@@ -52,7 +52,7 @@ Every formal cache must include:
 
 The cache must preserve `source_id`, split provenance, license tag, feature extractor version, pseudo-label provenance, failed sample manifests, and checksum records.
 
-Checksum manifest keys must be existing relative artifact paths that remain inside the cache root.
+`checksums.json` must be a non-empty object whose keys are existing relative artifact paths that remain inside the cache root.
 
 Each sample-record manifest row must be a JSON object with `source_id`, `split`, `raw_ref`, and `license_tag`; the row set must match the split's source-id file.
 

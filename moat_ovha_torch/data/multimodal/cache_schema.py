@@ -110,7 +110,7 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
             errors.append(f"invalid checksums.json: {exc}")
         else:
             if not isinstance(loaded_checksums, dict) or not loaded_checksums:
-                warnings.append("checksums.json is empty; formal runs require file hashes")
+                errors.append("checksums.json must be a non-empty object of artifact hashes")
             else:
                 checksums = loaded_checksums
                 _validate_checksum_coverage(layout, required_files, checksums, errors)
