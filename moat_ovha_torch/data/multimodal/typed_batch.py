@@ -126,7 +126,8 @@ def validate_multimodal_batch_contract(batch: MultimodalEpisodeBatch) -> BatchCo
         _require_first_dims("target_y", target_y, (batch_size, query_count), errors)
         _require_exact_shape("target_mask", target_mask, (batch_size, query_count), errors)
         _validate_provenance_bank(batch.provenance, batch_size, batch.split, errors)
-        _validate_supervision_bank(batch.supervision, batch_size, query_count, errors)
+        modality_count = len(batch.fields) if isinstance(batch.fields, dict) else 0
+        _validate_supervision_bank(batch.supervision, batch_size, query_count, modality_count, errors)
     else:
         errors.append("cannot infer shared [B,Q] from query.x, target_y, or query.mask")
 
@@ -339,9 +340,12 @@ def _validate_supervision_bank(
     supervision: SupervisionBank,
     batch_size: int,
     query_count: int,
+    modality_count: int,
     errors: list[str],
 ) -> None:
     _validate_alignment_supervision(supervision, batch_size, query_count, errors)
+    _validate_missing_modality_supervision(supervision, batch_size, modality_count, errors)
+    _validate_corruption_metadata(supervision, batch_size, query_count, modality_count, errors)
     weak_labels = supervision.weak_labels
     if weak_labels is None:
         return
@@ -396,3 +400,55 @@ def _validate_alignment_supervision(
         weight_shape = _shape("supervision.alignment_weights", supervision.alignment_weights, errors)
         _require_rank("supervision.alignment_weights", weight_shape, 2, errors)
         _require_exact_shape("supervision.alignment_weights", weight_shape, (batch_size, query_count), errors)
+
+
+def _validate_missing_modality_supervision(
+    supervision: SupervisionBank,
+    batch_size: int,
+    modality_count: int,
+    errors: list[str],
+) -> None:
+    if supervision.modality_missing_mask is None:
+        return
+    mask_shape = _shape("supervision.modality_missing_mask", supervision.modality_missing_mask, errors)
+    _require_rank("supervision.modality_missing_mask", mask_shape, 2, errors)
+    if modality_count > 0:
+        _require_exact_shape(
+            "supervision.modality_missing_mask",
+            mask_shape,
+            (batch_size, modality_count),
+            errors,
+            target_name="[B,M]",
+        )
+
+
+def _validate_corruption_metadata(
+    supervision: SupervisionBank,
+    batch_size: int,
+    query_count: int,
+    modality_count: int,
+    errors: list[str],
+) -> None:
+    metadata = supervision.corruption_metadata
+    if metadata is None:
+        return
+    if not isinstance(metadata, dict) or not metadata:
+        errors.append("supervision.corruption_metadata must be a non-empty dict keyed by non-empty strings")
+        return
+    for key, value in sorted(metadata.items(), key=lambda item: str(item[0])):
+        if not isinstance(key, str) or not key:
+            errors.append("supervision.corruption_metadata keys must be non-empty strings")
+            continue
+        value_shape = _shape(f"supervision.corruption_metadata.{key}", value, errors)
+        if value_shape is None:
+            continue
+        if not value_shape:
+            errors.append(f"supervision.corruption_metadata.{key} must have at least one batch dimension")
+            continue
+        if value_shape[0] != batch_size:
+            errors.append(f"supervision.corruption_metadata.{key} first dimension must match batch size {batch_size}")
+            continue
+        if len(value_shape) >= 2 and value_shape[1] not in {1, query_count, modality_count}:
+            errors.append(
+                f"supervision.corruption_metadata.{key} second dimension must be 1, Q={query_count}, or M={modality_count}"
+            )

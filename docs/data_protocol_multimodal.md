@@ -27,6 +27,8 @@ If `SupervisionBank.weak_labels` is present, matching `weak_label_confidence` an
 
 If public alignment supervision is present, `alignment_pairs` must align to `[B,Q,2]` and `alignment_weights` must align to `[B,Q]` so CATO public alignment losses cannot silently train on mismatched query-region labels.
 
+If missing-modality supervision is present, `modality_missing_mask` must align to `[B,M]`, where `M` is the number of typed token fields in the batch. If corruption metadata is present, it must be a non-empty map from public metadata names to tensor-like values with a leading batch dimension `B`; optional second dimensions may only encode a singleton sample value, query axis `Q`, or modality axis `M`. Controlled corruption measurements may be kept in `SupervisionBank` for reporting and robustness supervision, but they must remain excluded from `model_inputs`.
+
 ## Candidate Bank
 
 Version 1 has exactly four candidate operators:

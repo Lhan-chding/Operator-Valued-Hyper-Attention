@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from moat_ovha_torch.data.multimodal.typed_batch import MultimodalEpisodeBatch, TokenField
+from moat_ovha_torch.data.multimodal.transforms._metadata import batch_strength_from_noise
 
 
 def add_gaussian_corruption(batch: MultimodalEpisodeBatch, modality: str, noise) -> MultimodalEpisodeBatch:
@@ -12,7 +13,6 @@ def add_gaussian_corruption(batch: MultimodalEpisodeBatch, modality: str, noise)
     corrupted = TokenField(field.modality, field.x + noise, field.pos, field.mask, quality=field.quality, attrs=field.attrs)
     fields = {**batch.fields, modality: corrupted}
     metadata = dict(batch.supervision.corruption_metadata or {})
-    metadata["corruption_type"] = "gaussian_noise"
-    metadata["corruption_strength"] = noise.detach().abs().mean() if hasattr(noise, "detach") else noise
+    metadata["gaussian_noise_strength"] = batch_strength_from_noise(noise)
     supervision = replace(batch.supervision, corruption_metadata=metadata)
     return replace(batch, fields=fields, supervision=supervision)
