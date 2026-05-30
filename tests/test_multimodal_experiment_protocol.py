@@ -80,6 +80,22 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             {"MDETR", "GLIP", "GroundingDINO"},
         )
 
+    def test_controlled_baselines_include_router_decomposition_ablations(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
+
+        required = {
+            "no_evidence_router",
+            "no_reliability_prior",
+            "memory_only_router",
+            "evidence_only_router",
+        }
+        registry = set(baseline_names_for_task("controlled_multimodal"))
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_controlled_v1_smoke.json")
+
+        self.assertTrue(required.issubset(registry), sorted(required - registry))
+        self.assertTrue(required.issubset(set(config.baseline_names)), sorted(required - set(config.baseline_names)))
+
     def test_config_parser_requires_complete_same_feature_baseline_set(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
 
