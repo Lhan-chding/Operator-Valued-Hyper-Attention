@@ -42,6 +42,8 @@ Every candidate returns `CandidateOutput.value: [B,Q,Dy]`. Only these four outpu
 
 `RCEO` is a support module only. It may produce router prior bias, adapter conditioning features, and diagnostics. It must not appear in the candidate stack.
 
+Controlled v1 experiments must include the router decomposition ablations `no_evidence_router`, `no_reliability_prior`, `memory_only_router`, and `evidence_only_router` so the reported router gain can be attributed to memory, evidence, and reliability terms rather than an undiagnosed mixture shortcut.
+
 ## Cache Requirements
 
 Every formal cache must include:
