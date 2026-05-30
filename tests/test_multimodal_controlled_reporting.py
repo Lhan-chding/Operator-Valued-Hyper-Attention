@@ -80,6 +80,34 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("tleo_local_evidence missing oracle gap evidence: TLEO_oracle_gap", joined)
         self.assertIn("rceo_reliability_corruption missing RCEO prior effect", joined)
 
+    def test_controlled_report_emits_sentiment_entry_ablation_gates(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+        from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+
+        rows = [
+            _row("tleo_local_evidence", "TLEO", 0.010, 0.010),
+            _row("spo_global_prototype", "SPO", 0.020, 0.020),
+            _row("lrio_low_rank_interaction", "LRIO", 0.030, 0.030, no_lrio_delta=0.12),
+            _row("cato_alignment_transport", "CATO", 0.040, 0.040),
+            _row("rceo_reliability_corruption", "LRIO", 0.050, 0.050, rceo=True, no_rceo_delta=0.14),
+            _row(
+                "mixed_relation_operator",
+                "mixed",
+                0.060,
+                0.060,
+                router_accuracy=0.85,
+                no_lrio_delta=0.10,
+                no_rceo_delta=0.11,
+            ),
+        ]
+
+        report = build_controlled_report(rows)
+        entry = validate_public_entry_requirements("sentiment_emotion", report)
+
+        self.assertTrue(report["gate_table"]["no-LRIO ablation"]["passed"])
+        self.assertTrue(report["gate_table"]["no-RCEO ablation"]["passed"])
+        self.assertTrue(entry.ok, entry.errors)
+
     def test_oracle_report_conversion_produces_gate_ready_row_without_torch(self):
         from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
         from moat_ovha_torch.eval.multimodal_oracle import controlled_row_from_oracle_report
@@ -321,6 +349,8 @@ def _row(
     include_operator_diagnostics: bool = True,
     include_oracle_gap_evidence: bool = True,
     include_rceo_prior_effect: bool = True,
+    no_lrio_delta: float | None = None,
+    no_rceo_delta: float | None = None,
 ) -> dict[str, object]:
     row = {
         "family": family,
@@ -351,6 +381,10 @@ def _row(
         row["rceo_router_load_shift"] = 0.1
         if include_rceo_prior_effect:
             row["rceo_prior_effect"] = 0.1
+    if no_lrio_delta is not None:
+        row["no_lrio_delta"] = no_lrio_delta
+    if no_rceo_delta is not None:
+        row["no_rceo_delta"] = no_rceo_delta
     if include_operator_diagnostics:
         if active_operator == "SPO":
             row["prototype_kl_delta"] = 0.1
