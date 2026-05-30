@@ -16,6 +16,7 @@ REQUIRED_DATA_CARD_KEYS = (
     "leakage_controls",
 )
 
+REQUIRED_OPERATOR_SUPERVISION_KEYS = ("TLEO", "SPO", "LRIO", "CATO", "RCEO")
 FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "reason")
 TOKEN_FIELD_MANIFEST_REQUIRED_KEYS = ("x", "pos", "mask")
 
@@ -86,6 +87,7 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
             for key in REQUIRED_DATA_CARD_KEYS:
                 if key not in data_card:
                     errors.append(f"data_card.json missing required key: {key}")
+            _validate_operator_supervision(data_card.get("operator_supervision"), errors)
             controls = data_card.get("leakage_controls", {})
             for key in (
                 "split_by_source_id",
@@ -165,6 +167,15 @@ def _validate_checksum_coverage(
         relative = str(path.relative_to(layout.root))
         if relative not in checksums:
             errors.append(f"checksums.json missing hash for required artifact: {relative}")
+
+
+def _validate_operator_supervision(operator_supervision: Any, errors: list[str]) -> None:
+    if not isinstance(operator_supervision, dict):
+        errors.append("data_card.json operator_supervision must be an object")
+        return
+    for operator in REQUIRED_OPERATOR_SUPERVISION_KEYS:
+        if not operator_supervision.get(operator):
+            errors.append(f"data_card.json operator_supervision missing required operator: {operator}")
 
 
 def _validate_source_split_controls(layout: MultimodalCacheLayout, splits: tuple[str, ...], errors: list[str]) -> None:
