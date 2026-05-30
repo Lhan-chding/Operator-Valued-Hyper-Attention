@@ -125,7 +125,7 @@ def validate_multimodal_batch_contract(batch: MultimodalEpisodeBatch) -> BatchCo
         _require_first_dims("target_y", target_y, (batch_size, query_count), errors)
         _require_exact_shape("target_mask", target_mask, (batch_size, query_count), errors)
         _validate_provenance_bank(batch.provenance, batch_size, errors)
-        _validate_supervision_bank(batch.supervision, errors)
+        _validate_supervision_bank(batch.supervision, batch_size, query_count, errors)
     else:
         errors.append("cannot infer shared [B,Q] from query.x, target_y, or query.mask")
 
@@ -293,7 +293,12 @@ def _validate_string_version_map(
             return
 
 
-def _validate_supervision_bank(supervision: SupervisionBank, errors: list[str]) -> None:
+def _validate_supervision_bank(
+    supervision: SupervisionBank,
+    batch_size: int,
+    query_count: int,
+    errors: list[str],
+) -> None:
     weak_labels = supervision.weak_labels
     if weak_labels is None:
         return
@@ -309,6 +314,21 @@ def _validate_supervision_bank(supervision: SupervisionBank, errors: list[str]) 
         errors.append("supervision.pseudo_label_source keys must match weak_labels keys")
     if not _is_string_to_non_empty_string_map(sources):
         errors.append("supervision.pseudo_label_source must map strings to non-empty strings")
+    if not isinstance(confidence, dict):
+        return
+    for key, weak_value in sorted(weak_labels.items()):
+        weak_shape = _shape(f"supervision.weak_labels.{key}", weak_value, errors)
+        if weak_shape is not None:
+            _require_first_dims(
+                f"supervision.weak_labels.{key}",
+                weak_shape,
+                (batch_size, query_count),
+                errors,
+            )
+        confidence_value = confidence.get(key)
+        confidence_shape = _shape(f"supervision.weak_label_confidence.{key}", confidence_value, errors)
+        if weak_shape is not None and confidence_shape is not None and confidence_shape != weak_shape:
+            errors.append(f"supervision.weak_label_confidence.{key} shape must match weak label")
 
 
 def _is_string_to_non_empty_string_map(value: Any) -> bool:
