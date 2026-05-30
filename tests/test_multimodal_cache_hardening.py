@@ -5,6 +5,49 @@ from pathlib import Path
 
 
 class MultimodalCacheHardeningTests(unittest.TestCase):
+    def test_cache_validator_rejects_missing_failed_sample_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                include_failed_manifests=False,
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("missing required cache artifact: provenance/failed_samples_train.jsonl", joined)
+        self.assertIn("missing required cache artifact: provenance/failed_samples_test.jsonl", joined)
+
+    def test_cache_validator_rejects_malformed_failed_sample_manifest_entry(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                invalid_failed_manifest=True,
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "failed_samples_train.jsonl line 1 missing required keys",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_detects_source_overlap_checksum_gap_and_feature_mismatch(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -50,7 +93,15 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertIn("pseudo labels must not be generated from test split", "\n".join(report.errors))
 
 
-def _write_minimal_cache(root: Path, *, train_ids: list[str], test_ids: list[str], mismatched_features: bool) -> None:
+def _write_minimal_cache(
+    root: Path,
+    *,
+    train_ids: list[str],
+    test_ids: list[str],
+    mismatched_features: bool,
+    include_failed_manifests: bool = True,
+    invalid_failed_manifest: bool = False,
+) -> None:
     for folder in ("provenance", "masks", "supervision"):
         (root / folder).mkdir(parents=True, exist_ok=True)
     root.mkdir(parents=True, exist_ok=True)
@@ -92,6 +143,10 @@ def _write_minimal_cache(root: Path, *, train_ids: list[str], test_ids: list[str
     for split in ("train", "test"):
         (root / "masks" / f"text_mask_{split}.npy").write_text("placeholder mask\n")
         (root / "supervision" / f"task_labels_{split}.npy").write_text("placeholder labels\n")
+        if include_failed_manifests:
+            payload = {"source_id": f"failed-{split}", "split": split} if invalid_failed_manifest and split == "train" else {}
+            line = json.dumps(payload, sort_keys=True) + "\n" if payload else ""
+            (root / "provenance" / f"failed_samples_{split}.jsonl").write_text(line)
 
 
 def _write_complete_checksums(root: Path) -> None:
