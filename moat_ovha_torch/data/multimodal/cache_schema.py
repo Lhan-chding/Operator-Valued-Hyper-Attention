@@ -262,10 +262,9 @@ def _validate_leakage_controls(controls: Any, errors: list[str]) -> None:
 def _validate_source_split_controls(layout: MultimodalCacheLayout, splits: tuple[str, ...], errors: list[str]) -> None:
     seen: dict[str, str] = {}
     for split in splits:
-        path = layout.root / "provenance" / f"source_ids_{split}.txt"
-        if not path.exists():
+        ids = _read_source_ids(layout, split, errors)
+        if ids is None:
             continue
-        ids = [line.strip() for line in path.read_text().splitlines() if line.strip()]
         if len(ids) != len(set(ids)):
             errors.append(f"duplicate source_id within split {split}")
         for source_id in ids:
@@ -303,7 +302,9 @@ def _validate_split_manifest_consistency(layout: MultimodalCacheLayout, splits: 
         source_path = layout.root / "provenance" / f"source_ids_{split}.txt"
         if not source_path.exists():
             continue
-        actual = [line.strip() for line in source_path.read_text().splitlines() if line.strip()]
+        actual = _read_source_ids(layout, split)
+        if actual is None:
+            continue
         if set(expected_source_ids) != set(actual):
             errors.append(f"provenance/source_ids_{split}.txt must match splits.json {split} entries")
 
@@ -496,11 +497,25 @@ def _read_jsonl_objects(path: Path, errors: list[str]) -> list[tuple[int, dict[s
     return records
 
 
-def _read_source_ids(layout: MultimodalCacheLayout, split: str) -> list[str] | None:
+def _read_source_ids(
+    layout: MultimodalCacheLayout,
+    split: str,
+    errors: list[str] | None = None,
+) -> list[str] | None:
     path = layout.root / "provenance" / f"source_ids_{split}.txt"
     if not path.exists():
         return None
-    return [line.strip() for line in path.read_text().splitlines() if line.strip()]
+    source_ids: list[str] = []
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line or line != line.strip():
+            if errors is not None:
+                errors.append(
+                    f"provenance/source_ids_{split}.txt line {line_number} "
+                    "must be a non-empty normalized source_id"
+                )
+            continue
+        source_ids.append(line)
+    return source_ids
 
 
 def _validate_token_field_manifests(
