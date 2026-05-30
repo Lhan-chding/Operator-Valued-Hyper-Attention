@@ -126,6 +126,33 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("provenance.feature_extractor_version must map strings to non-empty strings", joined)
         self.assertIn("provenance.pseudo_label_version must map strings to non-empty strings", joined)
 
+    def test_typed_batch_rejects_unmarked_weak_or_pseudo_supervision(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import SupervisionBank, validate_multimodal_batch_contract
+
+        batch = _static_batch(
+            supervision=SupervisionBank(
+                task_label=None,
+                alignment_pairs=None,
+                alignment_weights=None,
+                bbox_targets=None,
+                region_targets=None,
+                timestamp_targets=None,
+                modality_missing_mask=None,
+                corruption_metadata=None,
+                weak_labels={"caption_sentiment": _Shape((2, 5, 1)), "alignment_hint": _Shape((2, 5, 1))},
+                weak_label_confidence={"caption_sentiment": _Shape((2, 5, 1))},
+                pseudo_label_source={"caption_sentiment": "", 2: "teacher-v1"},
+            )
+        )
+
+        report = validate_multimodal_batch_contract(batch)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("supervision.weak_label_confidence keys must match weak_labels keys", joined)
+        self.assertIn("supervision.pseudo_label_source keys must match weak_labels keys", joined)
+        self.assertIn("supervision.pseudo_label_source must map strings to non-empty strings", joined)
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; multimodal tensor contract tests skipped.")
 class MultimodalMainlineTorchContractTests(unittest.TestCase):
