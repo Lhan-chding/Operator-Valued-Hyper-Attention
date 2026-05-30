@@ -354,7 +354,10 @@ def _validate_feature_parity(layout: MultimodalCacheLayout, data_card: dict[str,
     for model_name, versions in sorted(baselines.items()):
         if model_name == "ovha_full":
             continue
-        if dict(versions) != reference:
+        if not isinstance(versions, dict):
+            errors.append(f"feature_versions.json baselines.{model_name} must be an object")
+            continue
+        if versions != reference:
             errors.append(
                 "same_features_for_baselines is true but "
                 f"{model_name} differs from ovha_full"
