@@ -132,6 +132,25 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_duplicate_sample_provenance_source_id(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                sample_record_mode="duplicate_source_id",
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn("duplicate source_id within sample_records_train.jsonl: train-source", "\n".join(report.errors))
+
     def test_cache_validator_rejects_missing_token_field_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -549,6 +568,8 @@ def _write_sample_records(root: Path, split: str, source_ids: list[str], *, mode
             record.pop("raw_ref")
             record.pop("license_tag")
         records.append(record)
+        if mode == "duplicate_source_id":
+            records.append({**record})
     lines = [json.dumps(record, sort_keys=True) for record in records]
     (root / "provenance" / f"sample_records_{split}.jsonl").write_text("\n".join(lines) + "\n")
 
