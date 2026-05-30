@@ -256,6 +256,7 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
     from moat_ovha_torch.data.multimodal.cache_schema import (
         MultimodalCacheLayout,
         default_data_card,
+        file_sha256,
         required_cache_files,
     )
 
@@ -304,10 +305,11 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
         (root / "token_fields" / f"manifest_{split}.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
     checksums = {}
     for path in required_cache_files(layout, splits=("val", "test")):
-        checksums[str(path.relative_to(root))] = "placeholder"
+        if path.exists():
+            checksums[str(path.relative_to(root))] = file_sha256(path)
     for path in sorted(root.rglob("*")):
         if path.is_file():
-            checksums.setdefault(str(path.relative_to(root)), "placeholder")
+            checksums.setdefault(str(path.relative_to(root)), file_sha256(path))
     (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
 
 

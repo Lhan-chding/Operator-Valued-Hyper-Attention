@@ -255,7 +255,7 @@ def _write_minimal_cache(
 
 
 def _write_complete_checksums(root: Path) -> None:
-    from moat_ovha_torch.data.multimodal.cache_schema import required_cache_files
+    from moat_ovha_torch.data.multimodal.cache_schema import file_sha256, required_cache_files
 
     class _Layout:
         pass
@@ -264,10 +264,11 @@ def _write_complete_checksums(root: Path) -> None:
     layout.root = root
     checksums = {}
     for path in required_cache_files(layout, splits=("train", "test")):
-        checksums[str(path.relative_to(root))] = "placeholder"
+        if path.exists():
+            checksums[str(path.relative_to(root))] = file_sha256(path)
     for path in sorted(root.rglob("*")):
         if path.is_file():
-            checksums.setdefault(str(path.relative_to(root)), "placeholder")
+            checksums.setdefault(str(path.relative_to(root)), file_sha256(path))
     (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
 
 

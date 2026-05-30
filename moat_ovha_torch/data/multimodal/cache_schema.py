@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ REQUIRED_DATA_CARD_KEYS = (
 REQUIRED_OPERATOR_SUPERVISION_KEYS = ("TLEO", "SPO", "LRIO", "CATO", "RCEO")
 FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "reason")
 TOKEN_FIELD_MANIFEST_REQUIRED_KEYS = ("x", "pos", "mask")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+CHECKSUM_MANIFEST_NAME = "checksums.json"
 
 
 @dataclass(frozen=True)
@@ -162,12 +165,32 @@ def _validate_checksum_coverage(
     checksums: dict[str, Any],
     errors: list[str],
 ) -> None:
+    for relative, digest in sorted(checksums.items()):
+        if not isinstance(relative, str):
+            errors.append("checksums.json keys must be relative path strings")
+            continue
+        if relative == CHECKSUM_MANIFEST_NAME:
+            continue
+        path = layout.root / relative
+        if path.exists():
+            _validate_checksum_value(relative, path, digest, errors)
     for path in sorted(required_files):
         if not path.exists():
             continue
         relative = str(path.relative_to(layout.root))
+        if relative == CHECKSUM_MANIFEST_NAME:
+            continue
         if relative not in checksums:
             errors.append(f"checksums.json missing hash for required artifact: {relative}")
+
+
+def _validate_checksum_value(relative: str, path: Path, digest: Any, errors: list[str]) -> None:
+    if not isinstance(digest, str) or SHA256_PATTERN.fullmatch(digest) is None:
+        errors.append(f"checksums.json hash for artifact must be lowercase SHA-256: {relative}")
+        return
+    actual = file_sha256(path)
+    if digest != actual:
+        errors.append(f"checksums.json hash mismatch for artifact: {relative}")
 
 
 def _validate_operator_supervision(operator_supervision: Any, errors: list[str]) -> None:
