@@ -125,6 +125,7 @@ def validate_multimodal_batch_contract(batch: MultimodalEpisodeBatch) -> BatchCo
         _require_first_dims("target_y", target_y, (batch_size, query_count), errors)
         _require_exact_shape("target_mask", target_mask, (batch_size, query_count), errors)
         _validate_provenance_bank(batch.provenance, batch_size, errors)
+        _validate_supervision_bank(batch.supervision, errors)
     else:
         errors.append("cannot infer shared [B,Q] from query.x, target_y, or query.mask")
 
@@ -290,3 +291,27 @@ def _validate_string_version_map(
         if not isinstance(key, str) or not key or not isinstance(version, str) or not version:
             errors.append(f"{name} must map strings to non-empty strings")
             return
+
+
+def _validate_supervision_bank(supervision: SupervisionBank, errors: list[str]) -> None:
+    weak_labels = supervision.weak_labels
+    if weak_labels is None:
+        return
+    if not isinstance(weak_labels, dict) or any(not isinstance(key, str) or not key for key in weak_labels):
+        errors.append("supervision.weak_labels must be a dict keyed by non-empty strings")
+        return
+    expected_keys = set(weak_labels)
+    confidence = supervision.weak_label_confidence
+    if not isinstance(confidence, dict) or set(confidence) != expected_keys:
+        errors.append("supervision.weak_label_confidence keys must match weak_labels keys")
+    sources = supervision.pseudo_label_source
+    if not isinstance(sources, dict) or set(sources) != expected_keys:
+        errors.append("supervision.pseudo_label_source keys must match weak_labels keys")
+    if not _is_string_to_non_empty_string_map(sources):
+        errors.append("supervision.pseudo_label_source must map strings to non-empty strings")
+
+
+def _is_string_to_non_empty_string_map(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return all(isinstance(key, str) and key and isinstance(item, str) and item for key, item in value.items())
