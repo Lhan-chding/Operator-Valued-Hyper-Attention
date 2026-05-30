@@ -40,6 +40,10 @@ CONTROLLED_BASELINES = (
     "concat_transformer",
 )
 
+REGION_TEXT_EXTERNAL_REFERENCES = ("MDETR", "GLIP", "GroundingDINO")
+SENTIMENT_EMOTION_EXTERNAL_REFERENCES = ()
+CONTROLLED_EXTERNAL_REFERENCES = ()
+
 
 def baseline_names_for_task(task_type: str) -> tuple[str, ...]:
     if task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities"}:
@@ -51,6 +55,37 @@ def baseline_names_for_task(task_type: str) -> tuple[str, ...]:
     raise ValueError(f"unknown multimodal task type for baseline registry: {task_type}")
 
 
+def external_reference_names_for_task(task_type: str) -> tuple[str, ...]:
+    if task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities"}:
+        return REGION_TEXT_EXTERNAL_REFERENCES
+    if task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "meld"}:
+        return SENTIMENT_EMOTION_EXTERNAL_REFERENCES
+    if task_type in {"controlled_multimodal", "controlled_relation_operator"}:
+        return CONTROLLED_EXTERNAL_REFERENCES
+    raise ValueError(f"unknown multimodal task type for external reference registry: {task_type}")
+
+
+def missing_required_baselines(task_type: str, baseline_names: tuple[str, ...]) -> tuple[str, ...]:
+    required = set(baseline_names_for_task(task_type))
+    present = set(baseline_names)
+    return tuple(sorted(required - present))
+
+
+def forbidden_external_references(task_type: str, baseline_names: tuple[str, ...]) -> tuple[str, ...]:
+    external = set(external_reference_names_for_task(task_type))
+    present = set(baseline_names)
+    return tuple(sorted(external & present))
+
+
 def assert_same_feature_baseline_policy(config) -> None:
     if not config.enforce_same_features_for_baselines:
         raise ValueError("all OVHA/baseline comparisons must use the same frozen features")
+    missing = missing_required_baselines(config.task_type, config.baseline_names)
+    if missing:
+        raise ValueError(f"missing required same-feature baselines: {', '.join(missing)}")
+    forbidden = forbidden_external_references(config.task_type, config.baseline_names)
+    if forbidden:
+        raise ValueError(
+            "external references must not be listed as same-feature baselines: "
+            + ", ".join(forbidden)
+        )

@@ -42,7 +42,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             MultimodalExperimentConfig.from_mapping({"name": "bad", "seeds": [1], "dataset_name": "controlled_multimodal"})
 
     def test_same_feature_baseline_registry_matches_plan(self):
-        from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
+        from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task, external_reference_names_for_task
 
         region = set(baseline_names_for_task("phrase_region_grounding"))
         self.assertTrue(
@@ -75,6 +75,47 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "ovha_no_evidence_router",
             }.issubset(sentiment)
         )
+        self.assertEqual(
+            set(external_reference_names_for_task("phrase_region_grounding")),
+            {"MDETR", "GLIP", "GroundingDINO"},
+        )
+
+    def test_config_parser_requires_complete_same_feature_baseline_set(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+
+        valid = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_refcoco_public_smoke.json")
+        self.assertIn("cross_attention_transformer", valid.baseline_names)
+        self.assertIn("ovha_no_cato", valid.baseline_names)
+
+        invalid = {
+            "name": "bad_refcoco",
+            "dataset_name": "refcoco",
+            "task_type": "phrase_region_grounding",
+            "seeds": [1, 2, 3],
+            "training_stages": ["T0", "T5"],
+            "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
+            "baseline_names": ["text_only", "cross_attention_transformer"],
+            "eval_episode_count": 16,
+        }
+        with self.assertRaisesRegex(ValueError, "missing required same-feature baselines"):
+            MultimodalExperimentConfig.from_mapping(invalid)
+
+    def test_config_parser_rejects_external_references_as_same_feature_baselines(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
+
+        invalid = {
+            "name": "bad_external",
+            "dataset_name": "refcoco",
+            "task_type": "phrase_region_grounding",
+            "seeds": [1, 2, 3],
+            "training_stages": ["T0", "T5"],
+            "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
+            "baseline_names": list(baseline_names_for_task("phrase_region_grounding")) + ["GroundingDINO"],
+            "eval_episode_count": 16,
+        }
+        with self.assertRaisesRegex(ValueError, "external references must not be listed as same-feature baselines"):
+            MultimodalExperimentConfig.from_mapping(invalid)
 
     def test_public_smoke_runner_fails_fast_on_missing_cache(self):
         with tempfile.TemporaryDirectory() as tmp:

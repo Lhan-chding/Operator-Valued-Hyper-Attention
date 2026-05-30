@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from moat_ovha_torch.models.multimodal.baselines import (
+    forbidden_external_references,
+    missing_required_baselines,
+)
+
 
 DEFAULT_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
 CONTROLLED_TRAINING_STAGES = ("T0", "T1", "T2", "T3", "T4")
@@ -79,3 +84,12 @@ class MultimodalExperimentConfig:
             raise ValueError("missing cache artifacts must fail fast")
         if self.task_type != "controlled_multimodal" and self.allow_hidden_losses:
             raise ValueError("hidden losses are controlled-only and forbidden for public data")
+        missing = missing_required_baselines(self.task_type, self.baseline_names)
+        if missing:
+            raise ValueError(f"missing required same-feature baselines: {', '.join(missing)}")
+        forbidden = forbidden_external_references(self.task_type, self.baseline_names)
+        if forbidden:
+            raise ValueError(
+                "external references must not be listed as same-feature baselines: "
+                + ", ".join(forbidden)
+            )
