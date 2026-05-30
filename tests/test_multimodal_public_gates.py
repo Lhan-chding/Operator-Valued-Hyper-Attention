@@ -220,6 +220,55 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("paired comparison requires at least 3 common seeds", joined)
         self.assertIn("paired comparison missing paired_bootstrap_ci95", joined)
 
+    def test_public_gate_requires_topconf_reporting_metadata_not_only_mean(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        report = evaluate_region_text_gate(
+            statistics_summary=_summary(
+                "phrase_region_grounding",
+                "test",
+                full=0.80,
+                baseline=0.72,
+                include_reporting_metadata=False,
+            ),
+            diagnostics_rows=[
+                _diagnostic(
+                    "clean",
+                    {"CATO": 0.55, "TLEO": 0.2, "SPO": 0.15, "LRIO": 0.1},
+                    cato_entropy=0.30,
+                    grounding_accuracy=0.74,
+                    top_alignment_accuracy=0.72,
+                    rceo_reliability=0.90,
+                ),
+                _diagnostic(
+                    "no_cato",
+                    {"CATO": 0.0, "TLEO": 0.4, "SPO": 0.4, "LRIO": 0.2},
+                    cato_entropy=0.90,
+                    grounding_accuracy=0.52,
+                    top_alignment_accuracy=0.20,
+                ),
+                _diagnostic(
+                    "corrupted_visual",
+                    {"CATO": 0.28, "TLEO": 0.30, "SPO": 0.32, "LRIO": 0.10},
+                    cato_entropy=0.58,
+                    grounding_accuracy=0.61,
+                    top_alignment_accuracy=0.56,
+                    rceo_reliability=0.55,
+                    rceo_corruption_response=0.35,
+                ),
+            ],
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("ovha_full main table missing std", joined)
+        self.assertIn("cross_attention_transformer main table missing ci95", joined)
+        self.assertIn("reporting metadata missing parameter_count", joined)
+        self.assertIn("reporting metadata missing per_seed_table", joined)
+
     def test_public_gate_cli_emits_go_no_go_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -295,21 +344,50 @@ def _summary(
     seed_count: int = 3,
     common_seed_count: int = 3,
     include_bootstrap: bool = True,
+    include_reporting_metadata: bool = True,
 ) -> dict[str, object]:
     paired = {"common_seed_count": common_seed_count, "paired_permutation_p": 0.25}
     if include_bootstrap:
         paired["paired_bootstrap_ci95"] = [0.01, 0.12]
-    return {
+    full_row: dict[str, object] = {"mean": full, "seed_count": seed_count, "higher_is_better": True}
+    baseline_row: dict[str, object] = {"mean": baseline, "seed_count": seed_count, "higher_is_better": True}
+    if include_reporting_metadata:
+        full_row.update({"std": 0.01, "ci95": [full - 0.01, full + 0.01], "per_seed_scores": [full - 0.01, full, full + 0.01]})
+        baseline_row.update(
+            {
+                "std": 0.01,
+                "ci95": [baseline - 0.01, baseline + 0.01],
+                "per_seed_scores": [baseline - 0.01, baseline, baseline + 0.01],
+            }
+        )
+    summary: dict[str, object] = {
         "main_table": {
             task: {
                 split: {
-                    "ovha_full": {"mean": full, "seed_count": seed_count, "higher_is_better": True},
-                    "cross_attention_transformer": {"mean": baseline, "seed_count": seed_count, "higher_is_better": True},
+                    "ovha_full": full_row,
+                    "cross_attention_transformer": baseline_row,
                 }
             }
         },
         "paired_tests": {task: {split: paired}},
     }
+    if include_reporting_metadata:
+        summary["reporting_metadata"] = {
+            "parameter_count": {"ovha_full": 123456, "cross_attention_transformer": 120000},
+            "training_steps": {"ovha_full": 1000, "cross_attention_transformer": 1000},
+            "frozen_feature_versions": {"text": "frozen-text-v1", "region": "frozen-region-v1"},
+            "hardware": "unit-test-cpu",
+            "wall_clock_summary": {"ovha_full": "10m", "cross_attention_transformer": "9m"},
+            "per_seed_table": [
+                {"model": "ovha_full", "seed": 1, "score": full - 0.01},
+                {"model": "ovha_full", "seed": 2, "score": full},
+                {"model": "ovha_full", "seed": 3, "score": full + 0.01},
+                {"model": "cross_attention_transformer", "seed": 1, "score": baseline - 0.01},
+                {"model": "cross_attention_transformer", "seed": 2, "score": baseline},
+                {"model": "cross_attention_transformer", "seed": 3, "score": baseline + 0.01},
+            ],
+        }
+    return summary
 
 
 def _diagnostic(
