@@ -50,6 +50,8 @@ Oracle smoke output is report-shaped but must be labeled `oracle_smoke_only`; it
 
 Public go/no-go gates must reject full-vs-baseline claims without at least three seeds for both models, at least three paired common seeds, and paired permutation plus bootstrap interval evidence.
 
+Public statistics summaries must also include top-conference reporting metadata, not only means: per-model `std`, `ci95`, raw per-seed scores, parameter counts, training steps, frozen feature versions, hardware, wall-clock summary, and a per-seed table. Reports with only best seed, single run, or mean-only aggregate evidence must fail public gates.
+
 Robustness summaries must include required ablation degradation for `ovha_no_rceo` and `ovha_no_evidence_router`; both ablations must drop more than `ovha_full` under corruption or missing-modality stress.
 
 Robustness summaries must prove Step 6 stress-family coverage: missing text, missing vision, missing audio, image quality corruption, audio quality corruption, text noise, and hard-negative mismatch. Temporal-shift coverage is required only when the dataset has temporal alignment. These stress descriptors must come from reporting metadata such as `corruption_type`, `missing_modalities`, `mismatch_source_id`, or `temporal_shift_sec`, never from model-input fields.

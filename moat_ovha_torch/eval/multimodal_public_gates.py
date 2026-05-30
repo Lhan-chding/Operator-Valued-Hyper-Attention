@@ -327,6 +327,9 @@ def _statistical_evidence_reasons(
     baseline_seed_count = _seed_count(main_models.get(baseline_model, {}))
     if full_seed_count < 3 or baseline_seed_count < 3:
         reasons.append("full and baseline comparison requires at least 3 seeds")
+    reasons.extend(_main_table_reporting_reasons(main_models, full_model, full_seed_count))
+    reasons.extend(_main_table_reporting_reasons(main_models, baseline_model, baseline_seed_count))
+    reasons.extend(_summary_reporting_metadata_reasons(summary, (full_model, baseline_model)))
     paired = (((summary.get("paired_tests", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
     if not isinstance(paired, dict) or not paired:
         reasons.append("paired comparison missing")
@@ -337,6 +340,73 @@ def _statistical_evidence_reasons(
         if key not in paired:
             reasons.append(f"paired comparison missing {key}")
     return reasons
+
+
+def _main_table_reporting_reasons(main_models: dict[str, Any], model: str, seed_count: int) -> list[str]:
+    reasons: list[str] = []
+    row = main_models.get(model)
+    if not isinstance(row, dict):
+        reasons.append(f"{model} main table row missing")
+        return reasons
+    for key in ("std", "ci95"):
+        if key not in row:
+            reasons.append(f"{model} main table missing {key}")
+    per_seed = row.get("per_seed_scores", row.get("per_seed"))
+    if not isinstance(per_seed, list) or len(per_seed) < seed_count or seed_count < 3:
+        reasons.append(f"{model} main table missing raw per-seed scores")
+    elif any(_finite_float(value) is None for value in per_seed):
+        reasons.append(f"{model} main table per-seed scores must be finite numbers")
+    return reasons
+
+
+def _summary_reporting_metadata_reasons(summary: dict[str, Any], models: tuple[str, str]) -> list[str]:
+    metadata = summary.get("reporting_metadata")
+    if not isinstance(metadata, dict):
+        return [
+            "reporting metadata missing parameter_count",
+            "reporting metadata missing training_steps",
+            "reporting metadata missing frozen_feature_versions",
+            "reporting metadata missing hardware",
+            "reporting metadata missing wall_clock_summary",
+            "reporting metadata missing per_seed_table",
+        ]
+    reasons: list[str] = []
+    _require_model_metadata(metadata, "parameter_count", models, reasons)
+    _require_model_metadata(metadata, "training_steps", models, reasons)
+    for key in ("frozen_feature_versions", "hardware", "wall_clock_summary", "per_seed_table"):
+        value = metadata.get(key)
+        if _is_empty_reporting_value(value):
+            reasons.append(f"reporting metadata missing {key}")
+    per_seed_table = metadata.get("per_seed_table")
+    if isinstance(per_seed_table, list):
+        covered_models = {str(row.get("model")) for row in per_seed_table if isinstance(row, dict) and row.get("model")}
+        for model in models:
+            if model not in covered_models:
+                reasons.append(f"reporting metadata per_seed_table missing model: {model}")
+    return reasons
+
+
+def _require_model_metadata(
+    metadata: dict[str, Any],
+    key: str,
+    models: tuple[str, str],
+    reasons: list[str],
+) -> None:
+    value = metadata.get(key)
+    if not isinstance(value, dict) or not value:
+        reasons.append(f"reporting metadata missing {key}")
+        return
+    for model in models:
+        if model not in value or _is_empty_reporting_value(value.get(model)):
+            reasons.append(f"reporting metadata {key} missing model: {model}")
+
+
+def _is_empty_reporting_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (str, list, dict, tuple, set)):
+        return len(value) == 0
+    return False
 
 
 def _seed_count(values: Any) -> int:
