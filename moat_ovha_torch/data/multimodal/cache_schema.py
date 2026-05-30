@@ -341,7 +341,13 @@ def _validate_pseudo_label_provenance(layout: MultimodalCacheLayout, errors: lis
     except json.JSONDecodeError as exc:
         errors.append(f"invalid pseudo_label_versions.json: {exc}")
         return
+    if not isinstance(payload, dict):
+        errors.append("pseudo_label_versions.json must be an object")
+        return
     generated_from = payload.get("generated_from_splits", [])
+    if not isinstance(generated_from, list) or any(not isinstance(split, str) or not split for split in generated_from):
+        errors.append("pseudo_label_versions.json generated_from_splits must be a list of split names")
+        return
     if "test" in set(generated_from):
         errors.append("pseudo labels must not be generated from test split")
 
