@@ -320,6 +320,9 @@ def _validate_feature_parity(layout: MultimodalCacheLayout, data_card: dict[str,
     except json.JSONDecodeError as exc:
         errors.append(f"invalid feature_versions.json: {exc}")
         return
+    if not isinstance(feature_versions, dict):
+        errors.append("feature_versions.json must be a JSON object")
+        return
     baselines = feature_versions.get("baselines", {})
     if not isinstance(baselines, dict) or not baselines:
         errors.append("feature_versions.json baselines must be a non-empty object when same_features_for_baselines is true")
