@@ -431,18 +431,27 @@ def _validate_sample_record_manifests(
         observed_source_ids: list[str] = []
         seen_source_ids: set[str] = set()
         for line_number, payload in records:
-            missing = [key for key in SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS if not payload.get(key)]
+            missing = [key for key in SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS if key not in payload]
             if missing:
                 errors.append(f"{path.name} line {line_number} missing required keys: {', '.join(missing)}")
+            invalid_string_fields = [
+                key
+                for key in SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS
+                if key in payload and (not isinstance(payload.get(key), str) or not payload.get(key))
+            ]
+            if invalid_string_fields:
+                errors.append(
+                    f"{path.name} line {line_number} required fields must be non-empty strings: "
+                    f"{', '.join(invalid_string_fields)}"
+                )
             if payload.get("split") != split:
                 errors.append(f"{path.name} line {line_number} split must match {split}")
             source_id = payload.get("source_id")
-            if source_id:
-                normalized_source_id = str(source_id)
-                if normalized_source_id in seen_source_ids:
-                    errors.append(f"duplicate source_id within {path.name}: {normalized_source_id}")
-                seen_source_ids.add(normalized_source_id)
-                observed_source_ids.append(normalized_source_id)
+            if isinstance(source_id, str) and source_id:
+                if source_id in seen_source_ids:
+                    errors.append(f"duplicate source_id within {path.name}: {source_id}")
+                seen_source_ids.add(source_id)
+                observed_source_ids.append(source_id)
         expected_source_ids = _read_source_ids(layout, split)
         if expected_source_ids is None:
             continue
