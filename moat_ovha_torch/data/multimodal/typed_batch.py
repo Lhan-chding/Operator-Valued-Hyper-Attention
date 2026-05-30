@@ -131,8 +131,17 @@ def validate_multimodal_batch_contract(batch: MultimodalEpisodeBatch) -> BatchCo
 
     if not batch.fields:
         errors.append("fields must contain at least one TokenField")
-    for name, field in sorted(batch.fields.items()):
-        if field.modality != name:
+    for name, field in sorted(batch.fields.items(), key=lambda item: str(item[0])):
+        if not isinstance(name, str) or not name:
+            errors.append("fields keys must be non-empty strings")
+            continue
+        if _contains_forbidden_metadata_key(name):
+            errors.append(f"fields.{name} must not expose controlled or hidden metadata as model input")
+        if not isinstance(field.modality, str) or not field.modality:
+            errors.append(f"fields.{name}.modality must be a non-empty string")
+        elif _contains_forbidden_metadata_key(field.modality):
+            errors.append(f"fields.{name}.modality must not expose controlled or hidden metadata as model input")
+        elif field.modality != name:
             errors.append(f"fields.{name}.modality must match dictionary key")
         field_x = _shape(f"fields.{name}.x", field.x, errors)
         field_pos = _shape(f"fields.{name}.pos", field.pos, errors)
@@ -146,15 +155,15 @@ def validate_multimodal_batch_contract(batch: MultimodalEpisodeBatch) -> BatchCo
             _require_first_dims(f"fields.{name}.pos", field_pos, field_x[:2], errors, target_name=f"fields.{name}.x")
             _require_exact_shape(f"fields.{name}.mask", field_mask, field_x[:2], errors, target_name=f"fields.{name}.x")
             _validate_quality_shape(name, field.quality, field_x, errors)
+            _validate_field_attrs(name, field.attrs, errors)
     return BatchContractReport(ok=not errors, errors=errors)
 
 
 def assert_no_multimodal_metadata_leakage(inputs: dict[str, Any]) -> None:
     lowered = _flatten_keys(inputs)
     for key in lowered:
-        for forbidden in FORBIDDEN_MULTIMODAL_INPUT_KEYS:
-            if forbidden in key:
-                raise ValueError(f"multimodal metadata leakage detected in model input key: {key}")
+        if _contains_forbidden_metadata_key(key):
+            raise ValueError(f"multimodal metadata leakage detected in model input key: {key}")
 
 
 def _flatten_keys(value: Any, prefix: str = "") -> set[str]:
@@ -249,6 +258,27 @@ def _validate_quality_shape(name: str, quality: Any | None, field_shape: tuple[i
         f"fields.{name}.quality shape must be [B,1] or [B,N,1]: "
         f"expected {(field_shape[0], 1)} or {(field_shape[0], field_shape[1], 1)}, got {quality_shape}"
     )
+
+
+def _validate_field_attrs(name: str, attrs: dict[str, Any] | None, errors: list[str]) -> None:
+    if attrs is None:
+        return
+    if not isinstance(attrs, dict):
+        errors.append(f"fields.{name}.attrs must be a dict keyed by non-empty strings")
+        return
+    for key in attrs:
+        if not isinstance(key, str) or not key:
+            errors.append(f"fields.{name}.attrs keys must be non-empty strings")
+            continue
+        if _contains_forbidden_metadata_key(key):
+            errors.append(
+                f"fields.{name}.attrs must not expose controlled or hidden metadata as model input: {key}"
+            )
+
+
+def _contains_forbidden_metadata_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(forbidden in lowered for forbidden in FORBIDDEN_MULTIMODAL_INPUT_KEYS)
 
 
 def _validate_provenance_bank(provenance: ProvenanceBank, batch_size: int, errors: list[str]) -> None:
