@@ -23,6 +23,10 @@ CONTROLLED_REQUIRED_GATES = (
     "Memory gate",
     "Adapter gate",
 )
+SENTIMENT_ENTRY_GATES = (
+    "no-LRIO ablation",
+    "no-RCEO ablation",
+)
 CANDIDATE_ORACLE_GAP_KEYS = (
     "TLEO_oracle_gap",
     "SPO_oracle_gap",
@@ -54,6 +58,18 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "RCEO gate": _rceo_gate(family_rows),
         "Memory gate": _delta_gate(rows, "no_operator_memory_delta", "Memory gate"),
         "Adapter gate": _delta_gate(rows, "no_hyper_adapter_delta", "Adapter gate"),
+        SENTIMENT_ENTRY_GATES[0]: _targeted_delta_gate(
+            family_rows,
+            "no_lrio_delta",
+            SENTIMENT_ENTRY_GATES[0],
+            ("lrio_low_rank_interaction", "mixed_relation_operator"),
+        ),
+        SENTIMENT_ENTRY_GATES[1]: _targeted_delta_gate(
+            family_rows,
+            "no_rceo_delta",
+            SENTIMENT_ENTRY_GATES[1],
+            ("rceo_reliability_corruption", "mixed_relation_operator"),
+        ),
     }
     reasons: list[str] = []
     for family in CONTROLLED_REQUIRED_FAMILIES:
@@ -67,7 +83,8 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             reasons.append(oracle_reason)
         for rceo_reason in _rceo_prior_effect_reasons(row):
             reasons.append(rceo_reason)
-    for name, gate in gate_table.items():
+    for name in CONTROLLED_REQUIRED_GATES:
+        gate = gate_table[name]
         if not gate["passed"]:
             reasons.append(f"gate failed: {name}")
         for diagnostic_reason in gate.get("diagnostic_reasons", ()):
@@ -165,6 +182,32 @@ def _delta_gate(rows: list[dict[str, Any]], key: str, name: str) -> dict[str, An
         "passed": bool(values) and min_value > 0.0,
         "value": min_value,
         "condition": f"{name} ablation is worse than full model for every controlled row",
+    }
+
+
+def _targeted_delta_gate(
+    family_rows: dict[str, dict[str, Any]],
+    key: str,
+    name: str,
+    required_families: tuple[str, ...],
+) -> dict[str, Any]:
+    values: list[float] = []
+    reasons: list[str] = []
+    for family in required_families:
+        row = family_rows.get(family)
+        if row is None or key not in row:
+            reasons.append(f"missing {name} evidence for {family}")
+            continue
+        value = float(row[key])
+        values.append(value)
+        if value <= 0.0:
+            reasons.append(f"{name} does not degrade for {family}")
+    return {
+        "passed": not reasons,
+        "value": min(values) if values else 0.0,
+        "required_families": required_families,
+        "reasons": reasons,
+        "condition": f"{name} is worse than full model on targeted sentiment-entry controlled families",
     }
 
 

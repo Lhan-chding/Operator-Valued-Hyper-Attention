@@ -41,6 +41,8 @@ def controlled_row_from_oracle_report(
     stackability_passed: bool = True,
     no_operator_memory_delta: float = 0.0,
     no_hyper_adapter_delta: float = 0.0,
+    no_lrio_delta: float | None = None,
+    no_rceo_delta: float | None = None,
     diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
@@ -56,6 +58,10 @@ def controlled_row_from_oracle_report(
         "no_operator_memory_delta": float(no_operator_memory_delta),
         "no_hyper_adapter_delta": float(no_hyper_adapter_delta),
     }
+    if no_lrio_delta is not None:
+        row["no_lrio_delta"] = float(no_lrio_delta)
+    if no_rceo_delta is not None:
+        row["no_rceo_delta"] = float(no_rceo_delta)
     for name in MULTIMODAL_CANDIDATE_NAMES:
         row[f"{name}_oracle_gap"] = _as_float(oracle_report.get(f"{name}_oracle_gap", 0.0))
     if "rceo_prior_effect" in oracle_report:

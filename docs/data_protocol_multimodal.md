@@ -44,7 +44,7 @@ Every candidate returns `CandidateOutput.value: [B,Q,Dy]`. Only these four outpu
 
 Controlled v1 experiments must include the router decomposition ablations `no_evidence_router`, `no_reliability_prior`, `memory_only_router`, and `evidence_only_router` so the reported router gain can be attributed to memory, evidence, and reliability terms rather than an undiagnosed mixture shortcut.
 
-Controlled reports must include the full learned/true router-adapter oracle matrix, per-candidate `TLEO_oracle_gap`, `SPO_oracle_gap`, `LRIO_oracle_gap`, and `CATO_oracle_gap`, plus a positive `rceo_prior_effect` for the reliability-corruption family. These fields are required before any public multimodal entry because they localize whether failures come from candidate expressivity, router choice, adapter parameters, memory, or reliability prior.
+Controlled reports must include the full learned/true router-adapter oracle matrix, per-candidate `TLEO_oracle_gap`, `SPO_oracle_gap`, `LRIO_oracle_gap`, and `CATO_oracle_gap`, plus a positive `rceo_prior_effect` for the reliability-corruption family. For sentiment/emotion entry, controlled reports must also expose `no_lrio_delta` on LRIO and mixed-relation rows and `no_rceo_delta` on RCEO and mixed-relation rows so the entry gate can prove no-LRIO and no-RCEO ablation degradation. These fields are required before public multimodal entry because they localize whether failures come from candidate expressivity, router choice, adapter parameters, memory, or reliability prior.
 
 Oracle smoke output is report-shaped but must be labeled `oracle_smoke_only`; it is a schema and expressivity sanity check, not a substitute for trained controlled go/no-go rows with memory, adapter, router, and reliability ablation deltas.
 

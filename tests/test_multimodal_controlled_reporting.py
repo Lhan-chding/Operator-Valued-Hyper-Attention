@@ -129,6 +129,7 @@ class MultimodalControlledReportingTests(unittest.TestCase):
             oracle_report,
             no_operator_memory_delta=0.1,
             no_hyper_adapter_delta=0.1,
+            no_rceo_delta=0.2,
             diagnostics={
                 "rank_logits_kl_delta": 0.1,
                 "rceo_reliability_monotonic": True,
@@ -148,6 +149,7 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertEqual(rceo_row["oracle_matrix"]["true_true"]["loss"], 0.0)
         self.assertEqual(rceo_row["LRIO_oracle_gap"], 0.2)
         self.assertEqual(rceo_row["rceo_prior_effect"], 0.3)
+        self.assertEqual(rceo_row["no_rceo_delta"], 0.2)
         self.assertTrue(report["go_no_go"]["controlled_multimodal_passed"], report["go_no_go"]["reasons"])
 
     def test_robustness_summary_requires_auc_reliability_and_load_shift(self):
