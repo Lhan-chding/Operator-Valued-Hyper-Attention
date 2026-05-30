@@ -179,6 +179,33 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("supervision.weak_labels.alignment_hint first two dims must match [B,Q]", joined)
         self.assertIn("supervision.weak_label_confidence.caption_sentiment shape must match weak label", joined)
 
+    def test_typed_batch_rejects_misaligned_alignment_supervision(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import SupervisionBank, validate_multimodal_batch_contract
+
+        batch = _static_batch(
+            supervision=SupervisionBank(
+                task_label=None,
+                alignment_pairs=_Shape((1, 5, 3)),
+                alignment_weights=_Shape((2, 4)),
+                bbox_targets=None,
+                region_targets=None,
+                timestamp_targets=None,
+                modality_missing_mask=None,
+                corruption_metadata=None,
+                weak_labels=None,
+                weak_label_confidence=None,
+                pseudo_label_source=None,
+            )
+        )
+
+        report = validate_multimodal_batch_contract(batch)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("supervision.alignment_pairs first two dims must match [B,Q]", joined)
+        self.assertIn("supervision.alignment_pairs last dimension must be 2", joined)
+        self.assertIn("supervision.alignment_weights shape must be [B,Q]", joined)
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; multimodal tensor contract tests skipped.")
 class MultimodalMainlineTorchContractTests(unittest.TestCase):
