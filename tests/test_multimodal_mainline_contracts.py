@@ -33,6 +33,30 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("not used as the main top-conference benchmark claim", note)
         self.assertIn("multimodal typed-token relation-operator tasks", note)
 
+    def test_model_source_emits_step14_candidate_specific_diagnostics(self):
+        model_source = (ROOT / "moat_ovha_torch" / "models" / "multimodal" / "ovha_multimodal.py").read_text()
+        self.assertIn('"candidate_diagnostics": _candidate_diagnostics(', model_source)
+        self.assertIn("candidate_outputs", model_source)
+        self.assertIn("candidate_losses", model_source)
+
+        primitive_requirements = {
+            "typed_local_evidence.py": ("lengthscale", "local_entropy", "local_window_size"),
+            "semantic_prototype.py": ("prototype_entropy", "top_prototype", "prototype_temperature"),
+            "low_rank_interaction.py": ("rank_entropy", "rank_top_k", "pair_interaction_strength"),
+            "alignment_transport.py": ("alignment_entropy", "top_k_alignment", "transport_marginal_error"),
+        }
+        primitive_root = ROOT / "moat_ovha_torch" / "models" / "multimodal" / "primitives"
+        for filename, required_keys in primitive_requirements.items():
+            source = (primitive_root / filename).read_text()
+            for key in required_keys:
+                with self.subTest(filename=filename, key=key):
+                    self.assertIn(key, source)
+
+        rceo_source = (ROOT / "moat_ovha_torch" / "models" / "multimodal" / "reliability_prior.py").read_text()
+        for key in ("modality_reliability", "reliability_bias_norm", "corruption_response"):
+            with self.subTest(module="RCEO", key=key):
+                self.assertIn(key, rceo_source)
+
     def test_cache_schema_requires_data_card_checksums_and_provenance(self):
         from moat_ovha_torch.data.multimodal.cache_schema import (
             MultimodalCacheLayout,
