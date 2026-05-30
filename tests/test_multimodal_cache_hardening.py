@@ -113,6 +113,35 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_non_string_sample_provenance_fields(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["123"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+            )
+            (layout.root / "provenance" / "sample_records_train.jsonl").write_text(
+                json.dumps(
+                    {"source_id": 123, "split": "train", "raw_ref": 456, "license_tag": ["bad"]},
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "sample_records_train.jsonl line 1 required fields must be non-empty strings: "
+            "source_id, raw_ref, license_tag",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_sample_provenance_split_mismatch(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
