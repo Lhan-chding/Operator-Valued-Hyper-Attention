@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import sys
+
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Validate a multimodal OVHA training/loss protocol plan.")
+    parser.add_argument("plan_json", type=Path)
+    args = parser.parse_args()
+    report = validate_training_protocol(json.loads(args.plan_json.read_text()))
+    print(json.dumps({"ok": report.ok, "errors": report.errors, "warnings": report.warnings}, indent=2, sort_keys=True))
+    return 0 if report.ok else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
