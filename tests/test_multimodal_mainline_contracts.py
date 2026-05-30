@@ -206,6 +206,49 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("supervision.alignment_pairs last dimension must be 2", joined)
         self.assertIn("supervision.alignment_weights shape must be [B,Q]", joined)
 
+    def test_typed_batch_rejects_misaligned_missing_and_corruption_supervision(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import SupervisionBank, TokenField, validate_multimodal_batch_contract
+
+        fields = {
+            "text": TokenField(
+                modality="text",
+                x=_Shape((2, 6, 4)),
+                pos=_Shape((2, 6, 2)),
+                mask=_Shape((2, 6)),
+            ),
+            "region": TokenField(
+                modality="region",
+                x=_Shape((2, 8, 4)),
+                pos=_Shape((2, 8, 2)),
+                mask=_Shape((2, 8)),
+            ),
+        }
+        batch = _static_batch(
+            fields=fields,
+            supervision=SupervisionBank(
+                task_label=None,
+                alignment_pairs=None,
+                alignment_weights=None,
+                bbox_targets=None,
+                region_targets=None,
+                timestamp_targets=None,
+                modality_missing_mask=_Shape((2, 1)),
+                corruption_metadata={"": _Shape((2,)), "corruption_strength": _Shape((1,)), "corruption_type": "gaussian"},
+                weak_labels=None,
+                weak_label_confidence=None,
+                pseudo_label_source=None,
+            ),
+        )
+
+        report = validate_multimodal_batch_contract(batch)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("supervision.modality_missing_mask shape must be [B,M]", joined)
+        self.assertIn("supervision.corruption_metadata keys must be non-empty strings", joined)
+        self.assertIn("supervision.corruption_metadata.corruption_strength first dimension must match batch size 2", joined)
+        self.assertIn("supervision.corruption_metadata.corruption_type must expose a tensor-like shape", joined)
+
     def test_typed_batch_rejects_hidden_token_field_metadata(self):
         from moat_ovha_torch.data.multimodal.typed_batch import TokenField, validate_multimodal_batch_contract
 
