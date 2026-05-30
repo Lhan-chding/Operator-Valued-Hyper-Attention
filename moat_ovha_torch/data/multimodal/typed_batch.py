@@ -66,6 +66,12 @@ class ProvenanceBank:
 
 
 @dataclass(frozen=True)
+class BatchContractReport:
+    ok: bool
+    errors: list[str]
+
+
+@dataclass(frozen=True)
 class MultimodalEpisodeBatch:
     fields: dict[str, TokenField]
     query: QueryField
@@ -79,6 +85,9 @@ class MultimodalEpisodeBatch:
     hidden: dict[str, Any] | None = None
 
     def model_inputs(self) -> dict[str, Any]:
+        contract = validate_multimodal_batch_contract(self)
+        if not contract.ok:
+            raise ValueError("invalid multimodal batch contract: " + "; ".join(contract.errors))
         values = {
             "fields": self.fields,
             "query": self.query,
@@ -89,6 +98,54 @@ class MultimodalEpisodeBatch:
         }
         assert_no_multimodal_metadata_leakage(values)
         return values
+
+
+def validate_multimodal_batch_contract(batch: MultimodalEpisodeBatch) -> BatchContractReport:
+    errors: list[str] = []
+    query_x = _shape("query.x", batch.query.x, errors)
+    query_pos = _shape("query.pos", batch.query.pos, errors)
+    query_type = _shape("query.query_type", batch.query.query_type, errors)
+    query_mask = _shape("query.mask", batch.query.mask, errors)
+    target_y = _shape("target_y", batch.target_y, errors)
+    target_mask = _shape("target_mask", batch.target_mask, errors)
+
+    _require_rank("query.x", query_x, 3, errors)
+    _require_rank("query.pos", query_pos, 3, errors)
+    _require_rank_one_of("query.query_type", query_type, (2, 3), errors)
+    _require_rank("query.mask", query_mask, 2, errors)
+    _require_rank("target_y", target_y, 3, errors)
+    _require_rank("target_mask", target_mask, 2, errors)
+
+    batch_query = _infer_batch_query_shape(query_x, target_y, query_mask, query_type)
+    if batch_query is not None:
+        batch_size, query_count = batch_query
+        _require_first_dims("query.pos", query_pos, (batch_size, query_count), errors)
+        _require_first_dims("query.query_type", query_type, (batch_size, query_count), errors)
+        _require_exact_shape("query.mask", query_mask, (batch_size, query_count), errors)
+        _require_first_dims("target_y", target_y, (batch_size, query_count), errors)
+        _require_exact_shape("target_mask", target_mask, (batch_size, query_count), errors)
+        _validate_provenance_lengths(batch.provenance, batch_size, errors)
+    else:
+        errors.append("cannot infer shared [B,Q] from query.x, target_y, or query.mask")
+
+    if not batch.fields:
+        errors.append("fields must contain at least one TokenField")
+    for name, field in sorted(batch.fields.items()):
+        if field.modality != name:
+            errors.append(f"fields.{name}.modality must match dictionary key")
+        field_x = _shape(f"fields.{name}.x", field.x, errors)
+        field_pos = _shape(f"fields.{name}.pos", field.pos, errors)
+        field_mask = _shape(f"fields.{name}.mask", field.mask, errors)
+        _require_rank(f"fields.{name}.x", field_x, 3, errors)
+        _require_rank(f"fields.{name}.pos", field_pos, 3, errors)
+        _require_rank(f"fields.{name}.mask", field_mask, 2, errors)
+        if field_x is not None and len(field_x) >= 2:
+            if batch_query is not None and field_x[0] != batch_query[0]:
+                errors.append(f"fields.{name}.x batch dimension must match query batch")
+            _require_first_dims(f"fields.{name}.pos", field_pos, field_x[:2], errors, target_name=f"fields.{name}.x")
+            _require_exact_shape(f"fields.{name}.mask", field_mask, field_x[:2], errors, target_name=f"fields.{name}.x")
+            _validate_quality_shape(name, field.quality, field_x, errors)
+    return BatchContractReport(ok=not errors, errors=errors)
 
 
 def assert_no_multimodal_metadata_leakage(inputs: dict[str, Any]) -> None:
@@ -113,3 +170,88 @@ def _flatten_keys(value: Any, prefix: str = "") -> set[str]:
             keys.add(name)
             keys.update(_flatten_keys(item, name))
     return keys
+
+
+def _shape(name: str, value: Any, errors: list[str]) -> tuple[int, ...] | None:
+    raw_shape = getattr(value, "shape", None)
+    if raw_shape is None:
+        errors.append(f"{name} must expose a tensor-like shape")
+        return None
+    try:
+        return tuple(int(dim) for dim in raw_shape)
+    except (TypeError, ValueError):
+        errors.append(f"{name} shape must be an integer tuple")
+        return None
+
+
+def _require_rank(name: str, shape: tuple[int, ...] | None, rank: int, errors: list[str]) -> None:
+    if shape is not None and len(shape) != rank:
+        errors.append(f"{name} must have rank {rank}, got {len(shape)}")
+
+
+def _require_rank_one_of(name: str, shape: tuple[int, ...] | None, ranks: tuple[int, ...], errors: list[str]) -> None:
+    if shape is not None and len(shape) not in ranks:
+        allowed = "/".join(str(rank) for rank in ranks)
+        errors.append(f"{name} must have rank {allowed}, got {len(shape)}")
+
+
+def _infer_batch_query_shape(
+    query_x: tuple[int, ...] | None,
+    target_y: tuple[int, ...] | None,
+    query_mask: tuple[int, ...] | None,
+    query_type: tuple[int, ...] | None,
+) -> tuple[int, int] | None:
+    for shape, ranks in ((query_x, (3,)), (target_y, (3,)), (query_mask, (2,)), (query_type, (2, 3))):
+        if shape is not None and len(shape) in ranks:
+            return shape[0], shape[1]
+    return None
+
+
+def _require_first_dims(
+    name: str,
+    shape: tuple[int, ...] | None,
+    expected: tuple[int, int],
+    errors: list[str],
+    *,
+    target_name: str = "[B,Q]",
+) -> None:
+    if shape is not None and len(shape) >= 2 and shape[:2] != expected:
+        if len(shape) == 2:
+            errors.append(f"{name} shape must be {target_name}: expected {expected}, got {shape}")
+        else:
+            errors.append(f"{name} first two dims must match {target_name}: expected {expected}, got {shape[:2]}")
+
+
+def _require_exact_shape(
+    name: str,
+    shape: tuple[int, ...] | None,
+    expected: tuple[int, int],
+    errors: list[str],
+    *,
+    target_name: str = "[B,Q]",
+) -> None:
+    if shape is not None and shape != expected:
+        errors.append(f"{name} shape must be {target_name}: expected {expected}, got {shape}")
+
+
+def _validate_quality_shape(name: str, quality: Any | None, field_shape: tuple[int, ...], errors: list[str]) -> None:
+    if quality is None:
+        return
+    quality_shape = _shape(f"fields.{name}.quality", quality, errors)
+    if quality_shape is None:
+        return
+    if quality_shape == (field_shape[0], 1):
+        return
+    if quality_shape == (field_shape[0], field_shape[1], 1):
+        return
+    errors.append(
+        f"fields.{name}.quality shape must be [B,1] or [B,N,1]: "
+        f"expected {(field_shape[0], 1)} or {(field_shape[0], field_shape[1], 1)}, got {quality_shape}"
+    )
+
+
+def _validate_provenance_lengths(provenance: ProvenanceBank, batch_size: int, errors: list[str]) -> None:
+    for key in ("source_id", "original_split", "raw_ref", "license_tag"):
+        values = getattr(provenance, key)
+        if len(values) != batch_size:
+            errors.append(f"provenance.{key} length must match batch size {batch_size}, got {len(values)}")
