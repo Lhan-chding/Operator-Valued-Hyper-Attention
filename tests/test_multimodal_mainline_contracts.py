@@ -99,6 +99,33 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "query.query_type shape must be"):
             batch.model_inputs()
 
+    def test_typed_batch_rejects_malformed_provenance_values(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import ProvenanceBank, validate_multimodal_batch_contract
+
+        batch = _static_batch(
+            provenance=ProvenanceBank(
+                source_id=["sample-0", 2],
+                original_split=["train", ""],
+                raw_ref=["shape", None],
+                license_tag=["test", []],
+                preprocessing_version="",
+                feature_extractor_version={"text": 123, "region": ""},
+                pseudo_label_version={1: "teacher-v1", "teacher": 456},
+            )
+        )
+
+        report = validate_multimodal_batch_contract(batch)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("provenance.source_id entries must be non-empty strings", joined)
+        self.assertIn("provenance.original_split entries must be non-empty strings", joined)
+        self.assertIn("provenance.raw_ref entries must be non-empty strings", joined)
+        self.assertIn("provenance.license_tag entries must be non-empty strings", joined)
+        self.assertIn("provenance.preprocessing_version must be a non-empty string", joined)
+        self.assertIn("provenance.feature_extractor_version must map strings to non-empty strings", joined)
+        self.assertIn("provenance.pseudo_label_version must map strings to non-empty strings", joined)
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; multimodal tensor contract tests skipped.")
 class MultimodalMainlineTorchContractTests(unittest.TestCase):
