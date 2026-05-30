@@ -234,6 +234,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "candidate_loss",
             "adapter_params",
             "memory_slot_norm",
+            "candidate_diagnostics",
             "stackability_passed",
         ):
             self.assertIn(key, required)
@@ -303,6 +304,17 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("candidate_diagnostics.LRIO missing pair_interaction_strength", joined)
         self.assertIn("candidate_diagnostics.CATO missing top_k_alignment", joined)
         self.assertIn("candidate_diagnostics.CATO missing transport_marginal_error", joined)
+
+        row["candidate_diagnostics"]["TLEO"]["local_window_size"] = 5
+        row["candidate_diagnostics"]["SPO"]["top_prototype"] = 2
+        row["candidate_diagnostics"]["LRIO"]["rank_top_k"] = [0, 1]
+        row["candidate_diagnostics"]["LRIO"]["pair_interaction_strength"] = 0.8
+        row["candidate_diagnostics"]["CATO"]["top_k_alignment"] = [0, 2]
+        row["candidate_diagnostics"]["CATO"]["transport_marginal_error"] = 0.03
+
+        complete_report = validate_diagnostic_row(row)
+
+        self.assertTrue(complete_report.ok, complete_report.errors)
 
 def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
     from moat_ovha_torch.data.multimodal.cache_schema import (

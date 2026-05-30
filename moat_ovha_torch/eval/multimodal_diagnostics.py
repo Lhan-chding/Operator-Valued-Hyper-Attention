@@ -11,6 +11,7 @@ REQUIRED_DIAGNOSTIC_KEYS = (
     "candidate_loss",
     "adapter_params",
     "memory_slot_norm",
+    "candidate_diagnostics",
     "stackability_passed",
 )
 MULTIMODAL_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
@@ -23,10 +24,10 @@ REQUIRED_ADAPTER_PARAM_KEYS = (
 )
 
 CANDIDATE_DIAGNOSTIC_KEYS = {
-    "TLEO": ("lengthscale", "local_entropy", "candidate_loss"),
-    "SPO": ("prototype_entropy", "prototype_temperature", "candidate_loss"),
-    "LRIO": ("rank_entropy", "interaction_temperature", "candidate_loss"),
-    "CATO": ("alignment_entropy", "alignment_temperature", "transport_scale", "candidate_loss"),
+    "TLEO": ("lengthscale", "local_entropy", "local_window_size", "candidate_loss"),
+    "SPO": ("prototype_entropy", "top_prototype", "prototype_temperature", "candidate_loss"),
+    "LRIO": ("rank_entropy", "rank_top_k", "pair_interaction_strength", "candidate_loss"),
+    "CATO": ("alignment_entropy", "top_k_alignment", "transport_marginal_error", "candidate_loss"),
     "RCEO": ("modality_reliability", "reliability_bias_norm", "corruption_response"),
 }
 
@@ -56,6 +57,7 @@ def validate_diagnostic_row(row: dict[str, Any]) -> DiagnosticValidationReport:
     _require_nested_keys(row, "candidate_loss", MULTIMODAL_CANDIDATE_NAMES, errors)
     _require_nested_keys(row, "adapter_params", REQUIRED_ADAPTER_PARAM_KEYS, errors)
     _require_nested_keys(row, "memory_slot_norm", MULTIMODAL_CANDIDATE_NAMES, errors)
+    _validate_candidate_diagnostics(row, errors)
     return DiagnosticValidationReport(ok=not errors, errors=errors, warnings=warnings)
 
 
@@ -77,3 +79,18 @@ def _require_nested_keys(row: dict[str, Any], parent: str, keys: tuple[str, ...]
     for key in keys:
         if key not in value:
             errors.append(f"{parent} missing {key}")
+
+
+def _validate_candidate_diagnostics(row: dict[str, Any], errors: list[str]) -> None:
+    diagnostics = row.get("candidate_diagnostics")
+    if not isinstance(diagnostics, dict):
+        errors.append("candidate_diagnostics must be an object keyed by candidate/support module")
+        return
+    for candidate, keys in CANDIDATE_DIAGNOSTIC_KEYS.items():
+        candidate_values = diagnostics.get(candidate)
+        if not isinstance(candidate_values, dict):
+            errors.append(f"candidate_diagnostics missing {candidate}")
+            continue
+        for key in keys:
+            if key not in candidate_values:
+                errors.append(f"candidate_diagnostics.{candidate} missing {key}")
