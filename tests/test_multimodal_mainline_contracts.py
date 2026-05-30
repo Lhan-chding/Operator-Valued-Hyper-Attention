@@ -242,6 +242,32 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             joined,
         )
 
+    def test_typed_batch_rejects_invalid_episode_identity_and_split_provenance(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import ProvenanceBank, validate_multimodal_batch_contract
+
+        batch = _static_batch(
+            task_type="",
+            split="val",
+            source_dataset=123,
+            provenance=ProvenanceBank(
+                source_id=["sample-0", "sample-1"],
+                original_split=["val", "test"],
+                raw_ref=["shape", "shape"],
+                license_tag=["test", "test"],
+                preprocessing_version="test",
+                feature_extractor_version={"text": "test"},
+                pseudo_label_version={},
+            ),
+        )
+
+        report = validate_multimodal_batch_contract(batch)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("task_type must be a non-empty string", joined)
+        self.assertIn("source_dataset must be a non-empty string", joined)
+        self.assertIn("provenance.original_split entries must match batch split val", joined)
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; multimodal tensor contract tests skipped.")
 class MultimodalMainlineTorchContractTests(unittest.TestCase):
