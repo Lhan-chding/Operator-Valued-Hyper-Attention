@@ -433,6 +433,26 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("checksums.json key must stay within cache root: ../escaped.txt", "\n".join(report.errors))
 
+    def test_cache_validator_rejects_checksum_manifest_missing_artifact_entry(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            _write_complete_checksums(layout.root)
+            checksums_path = layout.root / "checksums.json"
+            checksums = json.loads(checksums_path.read_text())
+            checksums["token_fields/missing_train.npy"] = "0" * 64
+            checksums_path.write_text(json.dumps(checksums, sort_keys=True) + "\n")
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "checksums.json references missing artifact: token_fields/missing_train.npy",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_same_feature_policy_without_ovha_reference(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
