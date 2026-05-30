@@ -43,6 +43,7 @@ class Phase15Config:
         "mlp_expert_moe",
         "ovha_no_memory",
         "ovha_no_hyper_adapter",
+        "ovha_gated_adapter",
         "ovha_vector_value_only",
         "ovha_random_router",
         "ovha_no_query_router",

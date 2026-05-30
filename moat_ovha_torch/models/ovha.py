@@ -40,6 +40,8 @@ class OVHAMetaOperator(nn.Module):
         query_conditioned_adapter: bool = True,
         random_router: bool = False,
         controlled_generator_variant: str = "model_aligned",
+        adapter_gate: bool = False,
+        adapter_gate_init: float = -1.0,
     ):
         super().__init__()
         self.primitive_names = primitive_names
@@ -64,6 +66,8 @@ class OVHAMetaOperator(nn.Module):
             query_conditioned_adapter=query_conditioned_adapter,
             random_router=random_router,
             controlled_generator_variant=controlled_generator_variant,
+            adapter_gate=adapter_gate,
+            adapter_gate_init=adapter_gate_init,
         )
         self.primitives = make_primitive_registry(primitive_names)
 
@@ -198,6 +202,11 @@ def _adapter_stats(params: dict[str, PrimitiveParams | None]) -> dict[str, dict[
             probs = torch.softmax(param.separable_rank_logits, dim=-1)
             item["rank_entropy"] = -(probs * probs.clamp_min(1e-12).log()).sum(dim=-1).mean()
             item["q_variance_rank_logits"] = param.separable_rank_logits.var(dim=1, unbiased=False).mean()
+        if param.raw is not None and param.raw.get("adapter_gate") is not None:
+            adapter_gate = param.raw["adapter_gate"]
+            item["adapter_gate_mean"] = adapter_gate.mean()
+            item["adapter_gate_min"] = adapter_gate.min()
+            item["adapter_gate_max"] = adapter_gate.max()
         stats[name] = item
     return stats
 

@@ -30,15 +30,23 @@ def _build_report(eval_rows: list[dict[str, Any]], diagnostic_rows: list[dict[st
         "|---|---|---:|---:|---:|---|---|---:|",
         *_adapter_effect_rows(eval_rows),
         "",
-        "## Full OVHA Diagnostic Signals",
+        "## Gated Adapter Effect",
         "",
-        "| dataset | split | model | adapter_norm | router_query_residual_norm | router_context_entropy | primitive_entropy | q_variance |",
-        "|---|---|---|---:|---:|---:|---:|---:|",
+        "| dataset | split | ovha_full | ovha_gated_adapter | ovha_no_hyper_adapter | gated_delta_vs_full | gated_delta_vs_no_adapter | conclusion | best_model | best_relL2 |",
+        "|---|---|---:|---:|---:|---:|---:|---|---|---:|",
+        *_gated_adapter_effect_rows(eval_rows),
+        "",
+        "## OVHA Diagnostic Signals",
+        "",
+        "| dataset | split | model | adapter_norm | adapter_gate_mean | router_query_residual_norm | router_context_entropy | primitive_entropy | q_variance |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|",
         *_diagnostic_signal_rows(diagnostic_rows),
         "",
         "## Interpretation Guide",
         "",
         "- `adapter_delta = ovha_no_hyper_adapter - ovha_full`; positive means the hyper-adapter helped.",
+        "- `gated_delta_vs_full = ovha_full - ovha_gated_adapter`; positive means the gated adapter improved over full OVHA.",
+        "- `gated_delta_vs_no_adapter = ovha_no_hyper_adapter - ovha_gated_adapter`; positive means the gated adapter improved over the no-adapter ablation.",
         "- `adapter_hurts` means the primitive stack did better when the hyper-adapter was disabled.",
         "- High `router_query_residual_norm` or `q_variance` on a hurt case is evidence for over-conditioned routing/adapter behavior.",
     ]
@@ -72,6 +80,32 @@ def _adapter_effect_rows(rows: list[dict[str, Any]]) -> list[str]:
     return lines or ["| not_available | not_available |  |  |  | no eval rows found |  |  |"]
 
 
+def _gated_adapter_effect_rows(rows: list[dict[str, Any]]) -> list[str]:
+    grouped = _group_eval_rows(rows)
+    lines = []
+    dataset_splits = sorted({(dataset, split) for dataset, split, _ in grouped})
+    for dataset, split in dataset_splits:
+        values = {
+            model: mean(items)
+            for (row_dataset, row_split, model), items in grouped.items()
+            if row_dataset == dataset and row_split == split
+        }
+        gated = values.get("ovha_gated_adapter")
+        if gated is None:
+            continue
+        full = values.get("ovha_full")
+        no_adapter = values.get("ovha_no_hyper_adapter")
+        gated_delta_vs_full = None if full is None else full - gated
+        gated_delta_vs_no_adapter = None if no_adapter is None else no_adapter - gated
+        best_model, best_value = min(values.items(), key=lambda item: item[1])
+        lines.append(
+            f"| {dataset} | {split} | {_fmt(full)} | {_fmt(gated)} | {_fmt(no_adapter)} | "
+            f"{_fmt(gated_delta_vs_full)} | {_fmt(gated_delta_vs_no_adapter)} | "
+            f"{_gated_conclusion(gated, full, no_adapter)} | {best_model} | {_fmt(best_value)} |"
+        )
+    return lines or ["| not_available | not_available |  |  |  |  |  | no gated adapter rows found |  |  |"]
+
+
 def _diagnostic_signal_rows(rows: list[dict[str, Any]]) -> list[str]:
     grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -83,15 +117,27 @@ def _diagnostic_signal_rows(rows: list[dict[str, Any]]) -> list[str]:
 
     lines = []
     for (dataset, split, model), items in sorted(grouped.items()):
-        if model != "ovha_full":
+        if model not in {"ovha_full", "ovha_gated_adapter"}:
             continue
         lines.append(
             f"| {dataset} | {split} | {model} | {_fmt(_mean_adapter_norm(items))} | "
+            f"{_fmt(_mean_adapter_gate(items))} | "
             f"{_fmt(_mean_field(items, 'router_query_residual_norm'))} | "
             f"{_fmt(_mean_field(items, 'router_context_prior_entropy'))} | "
             f"{_fmt(_mean_field(items, 'primitive_entropy'))} | {_fmt(_mean_q_variance(items))} |"
         )
-    return lines or ["| not_available | not_available | not_available |  |  |  |  |  |"]
+    return lines or ["| not_available | not_available | not_available |  |  |  |  |  |  |"]
+
+
+def _group_eval_rows(rows: list[dict[str, Any]]) -> dict[tuple[str, str, str], list[float]]:
+    grouped: dict[tuple[str, str, str], list[float]] = defaultdict(list)
+    for row in rows:
+        dataset = row.get("dataset") or row.get("family")
+        split = row.get("split")
+        model = row.get("model_name") or row.get("model")
+        if dataset and split and model and row.get("relative_l2") is not None:
+            grouped[(str(dataset), str(split), str(model))].append(float(row["relative_l2"]))
+    return grouped
 
 
 def _find_eval_paths(root: Path) -> list[Path]:
@@ -140,6 +186,17 @@ def _adapter_conclusion(delta: float | None) -> str:
     return "adapter_neutral"
 
 
+def _gated_conclusion(gated: float, full: float | None, no_adapter: float | None) -> str:
+    comparisons = [value for value in (full, no_adapter) if value is not None]
+    if not comparisons:
+        return "gated_only"
+    if gated <= min(comparisons):
+        return "gated_best"
+    if gated >= max(comparisons):
+        return "gated_worse"
+    return "gated_between"
+
+
 def _mean_field(rows: list[dict[str, Any]], field: str) -> float | None:
     values = [float(row[field]) for row in rows if row.get(field) is not None]
     return mean(values) if values else None
@@ -151,6 +208,16 @@ def _mean_adapter_norm(rows: list[dict[str, Any]]) -> float | None:
         adapter_norms = row.get("adapter_norms") or {}
         if adapter_norms:
             values.append(mean(float(value) for value in adapter_norms.values()))
+    return mean(values) if values else None
+
+
+def _mean_adapter_gate(rows: list[dict[str, Any]]) -> float | None:
+    values = []
+    for row in rows:
+        adapter_stats = row.get("adapter_stats") or {}
+        for stats in adapter_stats.values():
+            if stats.get("adapter_gate_mean") is not None:
+                values.append(float(stats["adapter_gate_mean"]))
     return mean(values) if values else None
 
 

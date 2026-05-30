@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Optional
 
 
 class PublicAdapterDiagnosticsTests(unittest.TestCase):
@@ -23,10 +24,23 @@ class PublicAdapterDiagnosticsTests(unittest.TestCase):
                 ],
             )
             _write_rows(
+                root / "seed_81_ovha_gated_adapter" / "eval_metrics" / "ovha_gated_adapter" / "seed_81.jsonl",
+                [
+                    _eval_row("pdebench_burgers_1d", "iid", "ovha_gated_adapter", 0.24),
+                    _eval_row("pdebench_darcy_2d", "iid", "ovha_gated_adapter", 0.62),
+                ],
+            )
+            _write_rows(
                 root / "seed_81_ovha_full" / "diagnostics" / "ovha_full" / "seed_81.jsonl",
                 [
                     _diagnostic_row("pdebench_burgers_1d", "iid", "ovha_full", 1.2, 0.7),
                     _diagnostic_row("pdebench_darcy_2d", "iid", "ovha_full", 0.8, 0.2),
+                ],
+            )
+            _write_rows(
+                root / "seed_81_ovha_gated_adapter" / "diagnostics" / "ovha_gated_adapter" / "seed_81.jsonl",
+                [
+                    _diagnostic_row("pdebench_burgers_1d", "iid", "ovha_gated_adapter", 1.1, 0.6, 0.42),
                 ],
             )
 
@@ -37,7 +51,10 @@ class PublicAdapterDiagnosticsTests(unittest.TestCase):
 
         self.assertIn("| pdebench_burgers_1d | iid | 0.300000 | 0.250000 | -0.050000 | adapter_hurts |", report)
         self.assertIn("| pdebench_darcy_2d | iid | 0.600000 | 0.800000 | 0.200000 | adapter_helps |", report)
-        self.assertIn("| pdebench_burgers_1d | iid | ovha_full | 1.200000 | 0.700000 |", report)
+        self.assertIn("| pdebench_burgers_1d | iid | 0.300000 | 0.240000 | 0.250000 | 0.060000 | 0.010000 | gated_best |", report)
+        self.assertIn("| pdebench_darcy_2d | iid | 0.600000 | 0.620000 | 0.800000 | -0.020000 | 0.180000 | gated_between |", report)
+        self.assertIn("| pdebench_burgers_1d | iid | ovha_full | 1.200000 |  | 0.700000 |", report)
+        self.assertIn("| pdebench_burgers_1d | iid | ovha_gated_adapter | 1.100000 | 0.420000 | 0.600000 |", report)
 
 
 def _write_rows(path: Path, rows: list[dict[str, object]]) -> None:
@@ -62,7 +79,11 @@ def _diagnostic_row(
     model: str,
     adapter_norm: float,
     router_query_residual_norm: float,
+    adapter_gate_mean: Optional[float] = None,
 ) -> dict[str, object]:
+    adapter_stats = {"q_variance_scale": 0.01}
+    if adapter_gate_mean is not None:
+        adapter_stats["adapter_gate_mean"] = adapter_gate_mean
     return {
         "family": family,
         "split": split,
@@ -72,7 +93,7 @@ def _diagnostic_row(
         "router_context_prior_entropy": 0.3,
         "router_query_residual_norm": router_query_residual_norm,
         "adapter_norms": {"spectral": adapter_norm, "local": adapter_norm, "separable": adapter_norm},
-        "adapter_stats": {"spectral": {"q_variance_scale": 0.01}},
+        "adapter_stats": {"spectral": adapter_stats},
     }
 
 

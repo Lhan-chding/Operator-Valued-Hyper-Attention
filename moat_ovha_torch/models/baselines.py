@@ -22,6 +22,14 @@ def build_model(
             top_k=top_k,
             controlled_generator_variant=controlled_generator_variant,
         )
+    if name == "ovha_gated_adapter":
+        return OVHAMetaOperator(
+            d_model=d_model,
+            memory_tokens=memory_tokens,
+            top_k=top_k,
+            controlled_generator_variant=controlled_generator_variant,
+            adapter_gate=True,
+        )
     if name == "ovha_vector_value_big":
         return OVHAMetaOperator(
             d_model=max(d_model + d_model // 2, d_model + 1),

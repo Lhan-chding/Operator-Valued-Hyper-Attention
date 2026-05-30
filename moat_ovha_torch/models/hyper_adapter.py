@@ -60,6 +60,8 @@ class HyperAdapter(nn.Module):
         direct_evidence_dim: int = 12,
         scale_span: float = 1.0,
         bias_span: float = 0.5,
+        adapter_gate: bool = False,
+        adapter_gate_init: float = -1.0,
     ):
         super().__init__()
         self.primitive_names = primitive_names
@@ -71,6 +73,8 @@ class HyperAdapter(nn.Module):
         self.direct_evidence_dim = direct_evidence_dim
         self.scale_span = scale_span
         self.bias_span = bias_span
+        self.adapter_gate = adapter_gate
+        self.adapter_gate_init = adapter_gate_init
         self.param_scope_config = dict(DEFAULT_PARAM_SCOPE)
         if controlled_generator_variant == "model_aligned":
             self.param_scope_config["spectral_frequency"] = "disabled"
@@ -86,12 +90,16 @@ class HyperAdapter(nn.Module):
 
         self.global_heads = nn.ModuleDict()
         self.query_heads = nn.ModuleDict()
+        self.adapter_gate_heads = nn.ModuleDict()
         for name in primitive_names:
             key = safe_module_name(name)
             output_dim = self._output_dim(name)
             self.global_heads[key] = EpisodeGlobalParamHead(d_model + 2 + direct_evidence_dim, d_model, output_dim)
             self.query_heads[key] = QueryLocalParamHead(d_model + 3 + direct_evidence_dim, d_model, output_dim)
+            if adapter_gate:
+                self.adapter_gate_heads[key] = EpisodeGlobalParamHead(d_model + 2 + direct_evidence_dim, d_model, 1)
         self._initialize_identity_defaults()
+        self._initialize_adapter_gate_defaults()
 
     def forward(
         self,
@@ -141,7 +149,10 @@ class HyperAdapter(nn.Module):
             self.controlled_generator_variant,
             posterior.mean(dim=1) if router_out is not None else None,
         )
-        return self._params_for(primitive_name, selected_raw, global_raw, query_raw)
+        adapter_gate = self._adapter_gate_for_name(primitive_name, global_features, target_q)
+        if adapter_gate is not None:
+            selected_raw = selected_raw * adapter_gate
+        return self._params_for(primitive_name, selected_raw, global_raw, query_raw, adapter_gate)
 
     def _select_raw_by_scope(self, primitive_name: str, global_raw: torch.Tensor, query_raw: torch.Tensor) -> torch.Tensor:
         if not self.query_conditioned:
@@ -199,11 +210,16 @@ class HyperAdapter(nn.Module):
         raw: torch.Tensor,
         global_raw: torch.Tensor,
         query_raw: torch.Tensor,
+        adapter_gate: torch.Tensor | None = None,
     ) -> PrimitiveParams:
         kind = _primitive_kind(primitive_name)
         scale = 1.0 + self.scale_span * torch.tanh(raw[..., 0:1])
         bias = self.bias_span * torch.tanh(raw[..., 1:2])
-        raw_payload = {"selected": raw, "global": global_raw, "query": query_raw} if self.return_raw else None
+        raw_payload = None
+        if self.return_raw:
+            raw_payload = {"selected": raw, "global": global_raw, "query": query_raw}
+            if adapter_gate is not None:
+                raw_payload["adapter_gate"] = adapter_gate.expand(-1, raw.shape[1], -1)
         scope = dict(self.param_scope_config)
         if kind == "spectral":
             if self.controlled_generator_variant == "full":
@@ -260,12 +276,31 @@ class HyperAdapter(nn.Module):
     def _scope(self, param_name: str) -> str:
         return self.param_scope_config.get(param_name, "episode")
 
+    def _adapter_gate_for_name(
+        self,
+        primitive_name: str,
+        global_features: torch.Tensor,
+        target_q: torch.Tensor,
+    ) -> torch.Tensor | None:
+        if not self.adapter_gate:
+            return None
+        key = safe_module_name(primitive_name)
+        gate = torch.sigmoid(self.adapter_gate_heads[key](global_features))
+        return gate.expand(-1, target_q.shape[1], -1)
+
     def _initialize_identity_defaults(self) -> None:
         for head in list(self.global_heads.values()) + list(self.query_heads.values()):
             final = head.net[-1]
             if isinstance(final, nn.Linear):
                 nn.init.zeros_(final.weight)
                 nn.init.zeros_(final.bias)
+
+    def _initialize_adapter_gate_defaults(self) -> None:
+        for head in self.adapter_gate_heads.values():
+            final = head.net[-1]
+            if isinstance(final, nn.Linear):
+                nn.init.zeros_(final.weight)
+                nn.init.constant_(final.bias, self.adapter_gate_init)
 
 
 def _primitive_evidence_features(

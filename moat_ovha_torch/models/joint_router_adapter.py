@@ -21,6 +21,8 @@ class JointRouterAdapter(nn.Module):
         query_conditioned_adapter: bool = True,
         random_router: bool = False,
         controlled_generator_variant: str = "model_aligned",
+        adapter_gate: bool = False,
+        adapter_gate_init: float = -1.0,
     ):
         super().__init__()
         self.router = PrimitiveRouter(primitive_names, d_model, top_k, query_conditioned_router, random_router)
@@ -29,6 +31,8 @@ class JointRouterAdapter(nn.Module):
             d_model=d_model,
             query_conditioned=query_conditioned_adapter,
             controlled_generator_variant=controlled_generator_variant,
+            adapter_gate=adapter_gate,
+            adapter_gate_init=adapter_gate_init,
         )
 
     def forward(

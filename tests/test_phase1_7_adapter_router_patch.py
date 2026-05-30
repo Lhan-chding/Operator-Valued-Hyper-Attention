@@ -185,6 +185,23 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
 
         self.assertGreater(float(params["separable"].scale.detach().max()), 1.5)
 
+    def test_gated_hyper_adapter_can_close_back_to_identity(self):
+        import torch
+
+        from moat_ovha_torch.models.hyper_adapter import HyperAdapter
+
+        adapter = HyperAdapter(("separable",), d_model=8, adapter_gate=True, adapter_gate_init=-20.0)
+        memory = torch.zeros(2, 2, 8)
+        target_q = torch.linspace(0.0, 1.0, 5).view(1, 5, 1).repeat(2, 1, 1)
+
+        with torch.no_grad():
+            adapter.global_heads["separable"].net[-1].bias[0] = 2.0
+
+        params = adapter(memory, target_q)
+
+        self.assertLess(float(params["separable"].raw["adapter_gate"].detach().max()), 1e-6)
+        self.assertTrue(torch.allclose(params["separable"].scale, torch.ones(2, 5, 1), atol=1e-5))
+
     def test_local_lengthscale_uses_public_evidence_candidate_prior(self):
         import torch
 
@@ -452,6 +469,20 @@ class Phase17AdapterRouterPatchTests(unittest.TestCase):
 
                 self.assertEqual(tuple(output.y_hat.shape), (2, 6, 1))
                 self.assertTrue(torch.isfinite(output.y_hat).all())
+
+    def test_gated_adapter_model_exposes_adapter_gate_diagnostic(self):
+        import torch
+
+        from moat_ovha_torch.models.baselines import build_model
+
+        batch = _two_dim_operator_batch(torch)
+        model = build_model("ovha_gated_adapter", d_model=16, memory_tokens=2)
+        output = model(batch)
+
+        self.assertEqual(tuple(output.y_hat.shape), (2, 6, 1))
+        gate = output.diagnostics["adapter_stats"]["spectral"]["adapter_gate_mean"].detach()
+        self.assertGreaterEqual(float(gate), 0.0)
+        self.assertLessEqual(float(gate), 1.0)
 
     def test_oracle_metrics_include_router_adapter_matrix_and_adapter_stats(self):
         from moat_ovha_torch.data.operator_zoo_torch import MetadataFreeOperatorZoo
