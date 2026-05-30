@@ -153,6 +153,32 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("supervision.pseudo_label_source keys must match weak_labels keys", joined)
         self.assertIn("supervision.pseudo_label_source must map strings to non-empty strings", joined)
 
+    def test_typed_batch_rejects_misaligned_weak_label_confidence_shapes(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import SupervisionBank, validate_multimodal_batch_contract
+
+        batch = _static_batch(
+            supervision=SupervisionBank(
+                task_label=None,
+                alignment_pairs=None,
+                alignment_weights=None,
+                bbox_targets=None,
+                region_targets=None,
+                timestamp_targets=None,
+                modality_missing_mask=None,
+                corruption_metadata=None,
+                weak_labels={"caption_sentiment": _Shape((2, 5, 1)), "alignment_hint": _Shape((1, 5, 1))},
+                weak_label_confidence={"caption_sentiment": _Shape((2, 4, 1)), "alignment_hint": _Shape((1, 5, 1))},
+                pseudo_label_source={"caption_sentiment": "teacher-v1", "alignment_hint": "teacher-v1"},
+            )
+        )
+
+        report = validate_multimodal_batch_contract(batch)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("supervision.weak_labels.alignment_hint first two dims must match [B,Q]", joined)
+        self.assertIn("supervision.weak_label_confidence.caption_sentiment shape must match weak label", joined)
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; multimodal tensor contract tests skipped.")
 class MultimodalMainlineTorchContractTests(unittest.TestCase):
