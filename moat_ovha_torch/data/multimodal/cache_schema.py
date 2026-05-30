@@ -179,6 +179,9 @@ def _validate_checksum_coverage(
         if not path.exists():
             errors.append(f"checksums.json references missing artifact: {relative}")
             continue
+        if not path.is_file():
+            errors.append(f"checksums.json key must point to a file artifact: {relative}")
+            continue
         _validate_checksum_value(relative, path, digest, errors)
     for path in sorted(required_files):
         if not path.exists():
