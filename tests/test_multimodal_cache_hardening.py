@@ -69,6 +69,28 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_failed_sample_that_is_retained(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                failed_sample_mode="overlaps_retained_source",
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "failed_samples_train.jsonl source_id must not also appear in retained split source ids: train-source",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_malformed_sample_provenance_manifest_entry(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -610,6 +632,7 @@ def _write_minimal_cache(
     mismatched_features: bool,
     include_failed_manifests: bool = True,
     invalid_failed_manifest: bool = False,
+    failed_sample_mode: str = "valid",
     include_sample_records: bool = True,
     sample_record_mode: str = "valid",
     include_token_manifests: bool = True,
@@ -664,7 +687,11 @@ def _write_minimal_cache(
         (root / "masks" / f"text_mask_{split}.npy").write_text("placeholder mask\n")
         (root / "supervision" / f"task_labels_{split}.npy").write_text("placeholder labels\n")
         if include_failed_manifests:
-            payload = {"source_id": f"failed-{split}", "split": split} if invalid_failed_manifest and split == "train" else {}
+            payload = {}
+            if invalid_failed_manifest and split == "train":
+                payload = {"source_id": f"failed-{split}", "split": split}
+            elif failed_sample_mode == "overlaps_retained_source" and split == "train":
+                payload = {"source_id": train_ids[0], "split": split, "reason": "decode_failed"}
             line = json.dumps(payload, sort_keys=True) + "\n" if payload else ""
             (root / "provenance" / f"failed_samples_{split}.jsonl").write_text(line)
         if include_sample_records:
