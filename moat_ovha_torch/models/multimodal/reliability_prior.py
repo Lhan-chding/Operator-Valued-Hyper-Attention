@@ -39,8 +39,11 @@ class RCEOReliabilityPrior(nn.Module):
         features = torch.cat([evidence.query_features, reliability_query], dim=-1)
         bias = self.bias_head(features)
         diagnostics = {
+            "modality_reliability": modality_reliability.mean(dim=0),
             "modality_reliability_mean": modality_reliability.mean(),
+            "reliability_bias_norm": bias.norm(dim=-1).mean(),
             "operator_logit_bias_norm": bias.norm(dim=-1).mean(),
+            "corruption_response": (1.0 - modality_reliability).clamp_min(0.0).mean(),
         }
         return ReliabilityPrior(
             operator_logit_bias=bias,

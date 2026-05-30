@@ -19,6 +19,7 @@ class SPOPrimitive(MultimodalCandidatePrimitive):
         logits = params.get("prototype_logits_shift")
         diagnostics = {
             "prototype_entropy": _entropy(logits) if logits is not None else torch.zeros((), device=value.device),
+            "top_prototype": _top_index(logits, value.device),
             "prototype_temperature": params.get("prototype_temperature"),
             "candidate": self.name,
         }
@@ -28,3 +29,9 @@ class SPOPrimitive(MultimodalCandidatePrimitive):
 def _entropy(logits: torch.Tensor) -> torch.Tensor:
     probs = torch.softmax(logits, dim=-1)
     return -(probs * probs.clamp_min(1e-12).log()).sum(dim=-1).mean()
+
+
+def _top_index(logits: torch.Tensor | None, device: torch.device) -> torch.Tensor:
+    if logits is None:
+        return torch.zeros((), device=device)
+    return logits.argmax(dim=-1).to(dtype=torch.float32).mean()

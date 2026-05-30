@@ -75,15 +75,17 @@ class MultimodalOVHA(nn.Module):
         assert_stackable(candidate_outputs, batch_size, q_count, self.output_dim)
         candidate_values = stack_candidate_values(candidate_outputs)
         y_hat = (router_output.weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
+        candidate_losses = _candidate_losses(candidate_outputs, batch.target_y, batch.target_mask)
         diagnostics = {
             **router_output.diagnostics,
             "router_logit_parts": {
                 key: value.detach()
                 for key, value in router_output.logit_parts.items()
             },
-            "candidate_loss": _candidate_losses(candidate_outputs, batch.target_y, batch.target_mask),
+            "candidate_loss": candidate_losses,
             "adapter_params": _adapter_param_diagnostics(params),
             "memory_slot_norm": {name: memory_bank[name].norm(dim=-1).mean() for name in self.candidate_names},
+            "candidate_diagnostics": _candidate_diagnostics(candidate_outputs, candidate_losses, reliability),
             "stackability_passed": True,
             "reliability": reliability.diagnostics if reliability is not None else {},
         }
@@ -119,4 +121,18 @@ def _adapter_param_diagnostics(params: dict[str, dict[str, torch.Tensor]]) -> di
         diagnostics[name] = {}
         for key, tensor in values.items():
             diagnostics[name][f"{key}_mean"] = tensor.mean()
+    return diagnostics
+
+
+def _candidate_diagnostics(
+    candidate_outputs: dict[str, CandidateOutput],
+    candidate_losses: dict[str, torch.Tensor],
+    reliability: ReliabilityPrior | None,
+) -> dict[str, dict[str, Any]]:
+    diagnostics: dict[str, dict[str, Any]] = {}
+    for name, output in candidate_outputs.items():
+        values = dict(output.diagnostics)
+        values["candidate_loss"] = candidate_losses[name]
+        diagnostics[name] = values
+    diagnostics["RCEO"] = dict(reliability.diagnostics) if reliability is not None else {}
     return diagnostics

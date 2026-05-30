@@ -19,6 +19,7 @@ class TLEOPrimitive(MultimodalCandidatePrimitive):
         diagnostics = {
             "lengthscale": params.get("lengthscale"),
             "local_entropy": evidence.local_entropy,
+            "local_window_size": torch.as_tensor(feature.shape[1], device=value.device),
             "candidate": self.name,
         }
         return CandidateOutput(value=value, feature=feature, diagnostics=diagnostics)

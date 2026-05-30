@@ -19,6 +19,8 @@ class LRIOPrimitive(MultimodalCandidatePrimitive):
         rank_logits = params.get("rank_logits")
         diagnostics = {
             "rank_entropy": _entropy(rank_logits) if rank_logits is not None else torch.zeros((), device=value.device),
+            "rank_top_k": _top_k(rank_logits, value.device),
+            "pair_interaction_strength": evidence.low_rank_features.norm(dim=-1).mean(),
             "interaction_temperature": params.get("interaction_temperature"),
             "candidate": self.name,
         }
@@ -28,3 +30,10 @@ class LRIOPrimitive(MultimodalCandidatePrimitive):
 def _entropy(logits: torch.Tensor) -> torch.Tensor:
     probs = torch.softmax(logits, dim=-1)
     return -(probs * probs.clamp_min(1e-12).log()).sum(dim=-1).mean()
+
+
+def _top_k(logits: torch.Tensor | None, device: torch.device) -> torch.Tensor:
+    if logits is None:
+        return torch.zeros((), device=device)
+    k = min(2, logits.shape[-1])
+    return torch.topk(logits, k=k, dim=-1).indices.to(dtype=torch.float32).mean()
