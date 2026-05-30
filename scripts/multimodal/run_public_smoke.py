@@ -14,12 +14,14 @@ if str(ROOT) not in sys.path:
 from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
 from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 from moat_ovha_torch.models.multimodal.baselines import assert_same_feature_baseline_policy
+from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate and launch a multimodal public smoke run.")
     parser.add_argument("config", type=Path)
     parser.add_argument("--cache-root", type=Path)
+    parser.add_argument("--controlled-report", type=Path)
     args = parser.parse_args()
 
     config = MultimodalExperimentConfig.from_file(args.config)
@@ -43,12 +45,30 @@ def main() -> int:
             )
         )
         return 2
+    controlled_report = json.loads(args.controlled_report.read_text()) if args.controlled_report else None
+    entry_report = validate_public_entry_requirements(config.task_type, controlled_report)
+    if not entry_report.ok:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "policy": "fail-fast: controlled multimodal gates must pass before public entry",
+                    "config": config.name,
+                    "errors": entry_report.errors,
+                    "warnings": entry_report.warnings,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
     print(
         json.dumps(
             {
                 "ok": True,
                 "policy": "cache validated; training launch intentionally requires explicit GPU runner",
                 "config": config.name,
+                "public_entry": "controlled go/no-go report validated",
                 "baselines": config.baseline_names,
                 "seeds": config.seeds,
             },

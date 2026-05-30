@@ -189,6 +189,24 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertFalse(sentiment_report.ok)
         self.assertIn("sentiment/emotion public entry requires SPO collapse", "\n".join(sentiment_report.errors))
 
+    def test_public_smoke_runner_requires_controlled_report_after_cache_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_root = Path(tmp) / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            command = [
+                sys.executable,
+                str(ROOT / "scripts" / "multimodal" / "run_public_smoke.py"),
+                str(ROOT / "configs" / "multimodal_refcoco_public_smoke.json"),
+                "--cache-root",
+                str(cache_root),
+            ]
+            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("controlled go/no-go report is required", "\n".join(payload["errors"]))
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
@@ -207,6 +225,64 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         report = validate_diagnostic_row({"router_entropy": 1.0})
         self.assertFalse(report.ok)
         self.assertIn("router_load_by_candidate", "\n".join(report.errors))
+
+def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
+    from moat_ovha_torch.data.multimodal.cache_schema import (
+        MultimodalCacheLayout,
+        default_data_card,
+        required_cache_files,
+    )
+
+    layout = MultimodalCacheLayout(cache_root, "refcoco", "v0.1")
+    root = layout.root
+    for folder in ("masks", "positions", "provenance", "supervision", "token_fields"):
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    (root / "data_card.json").write_text(
+        json.dumps(default_data_card("refcoco", "v0.1", ["text", "region"], ["phrase_region_grounding"]), sort_keys=True) + "\n"
+    )
+    (root / "splits.json").write_text(json.dumps({"val": ["val-source"], "test": ["test-source"]}, sort_keys=True) + "\n")
+    (root / "samples.parquet").write_text("placeholder samples\n")
+    (root / "provenance" / "feature_versions.json").write_text(
+        json.dumps(
+            {
+                "text": "clip-text-test",
+                "region": "clip-region-test",
+                "baselines": {
+                    "cross_attention_transformer": {"text": "clip-text-test", "region": "clip-region-test"},
+                    "ovha_full": {"text": "clip-text-test", "region": "clip-region-test"},
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    (root / "provenance" / "pseudo_label_versions.json").write_text(json.dumps({"generated_from_splits": ["train"]}) + "\n")
+    for split in ("val", "test"):
+        (root / "provenance" / f"source_ids_{split}.txt").write_text(f"{split}-source\n")
+        (root / "provenance" / f"failed_samples_{split}.jsonl").write_text("")
+        (root / "supervision" / f"task_labels_{split}.npy").write_text("placeholder labels\n")
+        manifest = {}
+        for modality in ("text", "region"):
+            x_path = root / "token_fields" / f"{modality}_{split}.npy"
+            pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
+            mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
+            x_path.write_text("placeholder token field\n")
+            pos_path.write_text("placeholder positions\n")
+            mask_path.write_text("placeholder mask\n")
+            manifest[modality] = {
+                "x": str(x_path.relative_to(root)),
+                "pos": str(pos_path.relative_to(root)),
+                "mask": str(mask_path.relative_to(root)),
+            }
+        (root / "masks" / f"text_mask_{split}.npy").write_text("placeholder mask\n")
+        (root / "token_fields" / f"manifest_{split}.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
+    checksums = {}
+    for path in required_cache_files(layout, splits=("val", "test")):
+        checksums[str(path.relative_to(root))] = "placeholder"
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            checksums.setdefault(str(path.relative_to(root)), "placeholder")
+    (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":
