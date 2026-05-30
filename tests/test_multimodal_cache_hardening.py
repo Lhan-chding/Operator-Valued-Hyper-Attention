@@ -763,6 +763,47 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_non_string_feature_extractor_versions(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            (layout.root / "provenance" / "feature_versions.json").write_text(
+                json.dumps(
+                    {
+                        "text": 123,
+                        "region": "clip-region-v1",
+                        "baselines": {
+                            "cross_attention_transformer": {"text": 123, "region": "clip-region-v1"},
+                            "ovha_full": {"text": 123, "region": "clip-region-v1"},
+                        },
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "feature_versions.json feature extractor version for modality text must be a non-empty string",
+            joined,
+        )
+        self.assertIn(
+            "feature_versions.json baselines.ovha_full feature extractor version for modality text "
+            "must be a non-empty string",
+            joined,
+        )
+        self.assertIn(
+            "feature_versions.json baselines.cross_attention_transformer feature extractor version "
+            "for modality text must be a non-empty string",
+            joined,
+        )
+
     def test_cache_validator_detects_source_overlap_checksum_gap_and_feature_mismatch(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
