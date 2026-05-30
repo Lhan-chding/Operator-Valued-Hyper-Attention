@@ -107,6 +107,21 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         self.assertIn("metadata.hardware missing wall_clock_hours", joined)
         self.assertIn("parameter_count missing for model: cross_attention_transformer", joined)
 
+    def test_public_summary_rejects_main_delta_against_weak_baseline_only(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        rows = _metric_rows()
+        for row in rows:
+            if row["model"] == "cross_attention_transformer":
+                row["baseline_strength"] = "weak"
+        summary = summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        joined = "\n".join(validation.errors)
+        self.assertIn("cannot report only improvement over weak baseline", joined)
+        self.assertIn("cross_attention_transformer", joined)
+
     def test_public_summary_cli_emits_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             metrics_path = Path(tmp) / "metrics.jsonl"
