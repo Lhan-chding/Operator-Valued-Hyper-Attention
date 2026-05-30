@@ -57,6 +57,15 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             with self.subTest(module="RCEO", key=key):
                 self.assertIn(key, rceo_source)
 
+    def test_model_source_emits_step14_flat_adapter_param_diagnostics(self):
+        model_source = (ROOT / "moat_ovha_torch" / "models" / "multimodal" / "ovha_multimodal.py").read_text()
+
+        for key in ("TLEO_lengthscale", "SPO_temperature", "LRIO_rank_entropy", "CATO_alignment_temperature"):
+            with self.subTest(key=key):
+                self.assertIn(f'"{key}"', model_source)
+        self.assertIn('"adapter_params_detail": _adapter_param_details(', model_source)
+        self.assertNotIn("diagnostics[name] = {}", model_source)
+
     def test_cache_schema_requires_data_card_checksums_and_provenance(self):
         from moat_ovha_torch.data.multimodal.cache_schema import (
             MultimodalCacheLayout,
