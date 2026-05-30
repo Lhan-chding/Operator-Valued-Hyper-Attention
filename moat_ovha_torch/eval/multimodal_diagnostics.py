@@ -13,6 +13,14 @@ REQUIRED_DIAGNOSTIC_KEYS = (
     "memory_slot_norm",
     "stackability_passed",
 )
+MULTIMODAL_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
+REQUIRED_ROUTER_LOGIT_PARTS = ("memory", "evidence", "reliability")
+REQUIRED_ADAPTER_PARAM_KEYS = (
+    "TLEO_lengthscale",
+    "SPO_temperature",
+    "LRIO_rank_entropy",
+    "CATO_alignment_temperature",
+)
 
 CANDIDATE_DIAGNOSTIC_KEYS = {
     "TLEO": ("lengthscale", "local_entropy", "candidate_loss"),
@@ -41,9 +49,13 @@ def validate_diagnostic_row(row: dict[str, Any]) -> DiagnosticValidationReport:
         errors.append("stackability_passed is false")
     load = row.get("router_load_by_candidate")
     if isinstance(load, dict):
-        for name in ("TLEO", "SPO", "LRIO", "CATO"):
+        for name in MULTIMODAL_CANDIDATE_NAMES:
             if name not in load:
                 errors.append(f"router_load_by_candidate missing {name}")
+    _require_nested_keys(row, "router_logit_parts", REQUIRED_ROUTER_LOGIT_PARTS, errors)
+    _require_nested_keys(row, "candidate_loss", MULTIMODAL_CANDIDATE_NAMES, errors)
+    _require_nested_keys(row, "adapter_params", REQUIRED_ADAPTER_PARAM_KEYS, errors)
+    _require_nested_keys(row, "memory_slot_norm", MULTIMODAL_CANDIDATE_NAMES, errors)
     return DiagnosticValidationReport(ok=not errors, errors=errors, warnings=warnings)
 
 
@@ -56,3 +68,12 @@ def summarize_diagnostic_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "required_keys": REQUIRED_DIAGNOSTIC_KEYS,
         "candidate_diagnostic_keys": CANDIDATE_DIAGNOSTIC_KEYS,
     }
+
+
+def _require_nested_keys(row: dict[str, Any], parent: str, keys: tuple[str, ...], errors: list[str]) -> None:
+    value = row.get(parent)
+    if not isinstance(value, dict):
+        return
+    for key in keys:
+        if key not in value:
+            errors.append(f"{parent} missing {key}")
