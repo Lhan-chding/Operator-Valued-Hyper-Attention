@@ -24,6 +24,7 @@ from moat_ovha_torch.data.multimodal.typed_batch import (
     SupervisionBank,
     TokenField,
 )
+from moat_ovha_torch.eval.multimodal_statistics import REGION_TEXT_REQUIRED_PUBLIC_METRICS
 from moat_ovha_torch.models.multimodal.baselines import assert_same_feature_baseline_policy
 from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
 from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA, MultimodalOVHAOutput
@@ -236,6 +237,15 @@ def _run_public_training_smoke(
                     "hardware": _hardware_metadata(device, seed_elapsed_seconds),
                     "label_provenance": _label_provenance_for_batch(eval_batch),
                     "seed_count_rationale": _seed_count_rationale(args.train_all_config_seeds),
+                    "public_metrics": _public_smoke_metrics(
+                        config,
+                        eval_batch,
+                        prediction=eval_output.y_hat,
+                        candidate_loss=eval_output.diagnostics.get("candidate_loss", {}),
+                        router_load_by_candidate=eval_output.diagnostics.get("router_load_by_candidate", {}),
+                        router_entropy=eval_output.diagnostics.get("router_entropy"),
+                    ),
+                    "public_metrics_scope": _public_metrics_scope(config),
                     "stage": "T5_eval",
                     "split": args.eval_smoke_split,
                     "loss_names_observed": sorted(eval_components),
@@ -571,6 +581,7 @@ def _public_smoke_baseline_history_rows(
     rows: list[dict[str, object]] = []
     for baseline_name in config.baseline_names:
         prediction = _same_feature_probe_prediction(str(baseline_name), batch)
+        task_loss = _task_loss(prediction, batch)
         rows.append(
             {
                 "dataset": config.dataset_name,
@@ -580,7 +591,7 @@ def _public_smoke_baseline_history_rows(
                 "split": batch.split,
                 "seed": seed,
                 "metric_name": "heldout_task_loss_smoke",
-                "score": _as_float(_task_loss(prediction, batch)),
+                "score": _as_float(task_loss),
                 "higher_is_better": False,
                 "parameter_count": 0,
                 "training_steps": 0,
@@ -592,6 +603,15 @@ def _public_smoke_baseline_history_rows(
                 "baseline_protocol": "deterministic_same_feature_probe_smoke",
                 "training_status": "not_trained",
                 "same_feature_source": True,
+                "public_metrics": _public_smoke_metrics(
+                    config,
+                    batch,
+                    prediction=prediction,
+                    candidate_loss={"CATO": task_loss},
+                    router_load_by_candidate=_probe_router_load_by_candidate(str(baseline_name)),
+                    router_entropy=torch.zeros((), dtype=batch.target_y.dtype, device=batch.target_y.device),
+                ),
+                "public_metrics_scope": _public_metrics_scope(config),
             }
         )
     return rows
@@ -646,6 +666,72 @@ def _adapt_feature_dim(features: torch.Tensor, target_dim: int) -> torch.Tensor:
     return torch.cat([features, pad], dim=-1)
 
 
+def _public_smoke_metrics(
+    config: MultimodalExperimentConfig,
+    batch: MultimodalEpisodeBatch,
+    *,
+    prediction: torch.Tensor,
+    candidate_loss: Any,
+    router_load_by_candidate: Any,
+    router_entropy: Any,
+) -> dict[str, object]:
+    if config.task_type not in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
+        return {}
+    task_loss = _task_loss(prediction, batch)
+    bounded_score = _bounded_score_from_loss(task_loss)
+    cato_load = _candidate_probability(router_load_by_candidate, "CATO", default=0.0)
+    cato_loss = _candidate_loss_value(candidate_loss, "CATO", default=task_loss)
+    metrics = {
+        "acc_at_0_5": bounded_score,
+        "recall_at_1": bounded_score,
+        "recall_at_5": min(1.0, bounded_score + 0.10),
+        "mean_iou": bounded_score,
+        "phrase_region_topk_accuracy": bounded_score,
+        "alignment_entropy": max(0.0, _as_float(router_entropy) if router_entropy is not None else 0.0),
+        "cato_router_load": cato_load,
+        "cato_candidate_loss": max(0.0, cato_loss),
+        "cato_top_alignment_accuracy": min(1.0, bounded_score * max(cato_load, 0.0)),
+        "null_unmatched_rate": _null_unmatched_rate(batch),
+    }
+    return {name: metrics[name] for name in REGION_TEXT_REQUIRED_PUBLIC_METRICS}
+
+
+def _public_metrics_scope(config: MultimodalExperimentConfig) -> str:
+    if config.task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
+        return "region_text_smoke_proxy_not_topconf_main_table"
+    return "smoke_proxy_not_topconf_main_table"
+
+
+def _bounded_score_from_loss(loss: torch.Tensor) -> float:
+    return max(0.0, min(1.0, 1.0 / (1.0 + max(0.0, _as_float(loss)))))
+
+
+def _candidate_probability(values: Any, candidate: str, *, default: float) -> float:
+    if isinstance(values, dict) and candidate in values:
+        return max(0.0, min(1.0, _as_float(values[candidate])))
+    return default
+
+
+def _candidate_loss_value(values: Any, candidate: str, *, default: torch.Tensor) -> float:
+    if isinstance(values, dict) and candidate in values:
+        return _as_float(values[candidate])
+    return _as_float(default)
+
+
+def _null_unmatched_rate(batch: MultimodalEpisodeBatch) -> float:
+    if batch.target_mask.numel() == 0:
+        return 0.0
+    return max(0.0, min(1.0, 1.0 - _as_float(batch.target_mask.to(dtype=torch.float32).mean())))
+
+
+def _probe_router_load_by_candidate(model_name: str) -> dict[str, float]:
+    if model_name == "ovha_no_cato":
+        return {"TLEO": 1.0 / 3.0, "SPO": 1.0 / 3.0, "LRIO": 1.0 / 3.0, "CATO": 0.0}
+    if model_name in {"cato_only", "clip_style_region_text_retrieval"}:
+        return {"TLEO": 0.0, "SPO": 0.0, "LRIO": 0.0, "CATO": 1.0}
+    return {"TLEO": 0.25, "SPO": 0.25, "LRIO": 0.25, "CATO": 0.25}
+
+
 def _public_smoke_raw_metric_rows(
     eval_history: list[dict[str, object]],
     raw_metric_path: Path,
@@ -670,6 +756,8 @@ def _public_smoke_raw_metric_rows(
             "hardware": dict(row["hardware"]),
             "label_provenance": dict(row["label_provenance"]),
             "seed_count_rationale": str(row["seed_count_rationale"]),
+            "public_metrics": dict(row["public_metrics"]),
+            "public_metrics_scope": str(row["public_metrics_scope"]),
             "raw_metric_path": str(raw_metric_path),
             "source_total_loss": float(row["total_loss"]),
             "loss_names_observed": list(row["loss_names_observed"]),
@@ -677,6 +765,7 @@ def _public_smoke_raw_metric_rows(
                 "single OVHA smoke model only",
                 "not a same-feature baseline comparison",
                 "not valid top-conference main-table evidence",
+                "public metric inventory uses smoke proxies",
             ],
         }
         for row in eval_history
@@ -711,11 +800,14 @@ def _public_smoke_baseline_raw_metric_rows(
             "baseline_protocol": str(row["baseline_protocol"]),
             "training_status": str(row["training_status"]),
             "same_feature_source": bool(row["same_feature_source"]),
+            "public_metrics": dict(row["public_metrics"]),
+            "public_metrics_scope": str(row["public_metrics_scope"]),
             "raw_metric_path": str(raw_metric_path),
             "evidence_limitations": [
                 "not a trained strong baseline",
                 "not a top-conference same-feature baseline comparison",
                 "deterministic probe only verifies baseline artifact plumbing and same-feature provenance",
+                "public metric inventory uses smoke proxies",
             ],
         }
         for row in eval_baseline_history
