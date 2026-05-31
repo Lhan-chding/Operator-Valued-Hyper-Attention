@@ -9,6 +9,15 @@ from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
 
 _SENTIMENT_ANCHOR_BASELINES = ("tfn_lmf", "mult_style_crossmodal_transformer")
 _REQUIRED_ROBUSTNESS_ABLATIONS = ("ovha_no_rceo", "ovha_no_evidence_router")
+_REGION_TEXT_TASKS = frozenset(
+    {
+        "phrase_region_grounding",
+        "region_text_grounding",
+        "refcoco",
+        "flickr30k_entities",
+        "visual_genome",
+    }
+)
 
 
 def evaluate_region_text_gate(
@@ -414,7 +423,7 @@ def _robustness_auc_delta(summary: dict[str, Any], full_model: str, baseline_mod
 
 
 def _required_strong_baselines_for_gate(task: str) -> tuple[str, ...]:
-    if task == "phrase_region_grounding":
+    if task in _REGION_TEXT_TASKS:
         return ("modality_expert_moe",)
     return ()
 
@@ -1283,7 +1292,7 @@ def _frozen_feature_versions_reasons(value: Any, task: str) -> list[str]:
 
 
 def _required_feature_modalities(task: str) -> tuple[str, ...]:
-    if task == "phrase_region_grounding":
+    if task in _REGION_TEXT_TASKS:
         return ("text", "region")
     if task == "sentiment_emotion":
         return ("text", "audio", "vision")

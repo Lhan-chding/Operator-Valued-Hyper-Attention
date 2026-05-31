@@ -49,7 +49,7 @@ CONTROLLED_EXTERNAL_REFERENCES = ()
 
 
 def baseline_names_for_task(task_type: str) -> tuple[str, ...]:
-    if task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities"}:
+    if task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
         return REGION_TEXT_BASELINES
     if task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
         return SENTIMENT_EMOTION_BASELINES
@@ -59,7 +59,7 @@ def baseline_names_for_task(task_type: str) -> tuple[str, ...]:
 
 
 def external_reference_names_for_task(task_type: str) -> tuple[str, ...]:
-    if task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities"}:
+    if task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
         return REGION_TEXT_EXTERNAL_REFERENCES
     if task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
         return SENTIMENT_EMOTION_EXTERNAL_REFERENCES
