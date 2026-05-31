@@ -355,6 +355,46 @@ class MultimodalPublicGateTests(unittest.TestCase):
             "\n".join(report["reasons"]),
         )
 
+    def test_public_gate_rejects_invalid_paired_permutation_probability(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["paired_tests"]["phrase_region_grounding"]["test"]["paired_permutation_p"] = 1.25
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "paired comparison paired_permutation_p must be a finite probability",
+            "\n".join(report["reasons"]),
+        )
+
+    def test_public_gate_rejects_unordered_bootstrap_ci_for_main_delta(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["paired_tests"]["phrase_region_grounding"]["test"]["paired_bootstrap_ci95"] = [0.12, 0.01]
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "paired comparison paired_bootstrap_ci95 lower bound must not exceed upper bound",
+            "\n".join(report["reasons"]),
+        )
+
     def test_public_gate_rejects_paired_mean_delta_that_disagrees_with_main_table_delta(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
