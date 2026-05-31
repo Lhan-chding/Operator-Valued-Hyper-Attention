@@ -503,6 +503,44 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
                     joined,
                 )
 
+    def test_cache_validator_rejects_punctuation_separated_hidden_metadata_aliases(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        hidden_modalities = ("true.active.operator", "corruption.strength")
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                data_card_overrides={"modalities": ["text", "region", *hidden_modalities]},
+            )
+            for modality in hidden_modalities:
+                _write_hidden_metadata_token_shards(layout.root, modality)
+            hidden_relative = "token_fields/text.true.active.operator_train.npy"
+            (layout.root / hidden_relative).write_text("hidden active operator tokens\n")
+            _rewrite_token_manifest_path(layout.root, "train", "text", "x", hidden_relative)
+            _write_feature_versions_for_modalities(layout.root, ("text", "region", *hidden_modalities))
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        for modality in hidden_modalities:
+            with self.subTest(modality=modality):
+                self.assertIn(
+                    "data_card.json modalities must not expose controlled or hidden metadata as model input: "
+                    f"{modality}",
+                    joined,
+                )
+        self.assertIn(
+            "token_fields/manifest_train.json entry for text.x must not reference "
+            "controlled or hidden metadata: token_fields/text.true.active.operator_train.npy",
+            joined,
+        )
+
     def test_cache_validator_rejects_hidden_metadata_shard_path_under_declared_modality(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
