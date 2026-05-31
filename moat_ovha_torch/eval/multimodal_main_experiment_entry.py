@@ -11,8 +11,11 @@ from typing import Any
 
 from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 from moat_ovha_torch.eval.multimodal_controlled_report import (
+    CANDIDATE_ORACLE_GAP_KEYS,
     CONTROLLED_REQUIRED_FAMILIES,
+    OPERATOR_DIAGNOSTIC_REQUIREMENTS,
     ORACLE_MATRIX_CELLS,
+    ROUTER_DECOMPOSITION_ABLATION_KEYS,
     build_controlled_report,
 )
 from moat_ovha_torch.eval.multimodal_public_entry import (
@@ -190,6 +193,8 @@ def _validate_controlled_diagnostics_report_content(
             errors.append(
                 f"controlled report diagnostics_report {family} stackability_passed disagrees with controlled_rows"
             )
+        for key in _required_controlled_diagnostic_keys(family):
+            _validate_controlled_diagnostic_value(family, row, controlled_row, key, errors)
         matrix = row.get("oracle_matrix")
         if not isinstance(matrix, Mapping):
             errors.append(f"controlled report diagnostics_report {family} oracle_matrix must be an object")
@@ -216,6 +221,98 @@ def _controlled_rows_by_family(rows: list[dict[str, Any]]) -> dict[str, dict[str
         if family and family in CONTROLLED_REQUIRED_FAMILIES and family not in by_family:
             by_family[family] = row
     return by_family
+
+
+def _required_controlled_diagnostic_keys(family: str) -> tuple[str, ...]:
+    keys: list[str] = [
+        *CANDIDATE_ORACLE_GAP_KEYS,
+        *ROUTER_DECOMPOSITION_ABLATION_KEYS,
+        "no_operator_memory_delta",
+        "no_hyper_adapter_delta",
+    ]
+    if family == "spo_global_prototype":
+        keys.extend(OPERATOR_DIAGNOSTIC_REQUIREMENTS["SPO"])
+    if family == "lrio_low_rank_interaction":
+        keys.extend(OPERATOR_DIAGNOSTIC_REQUIREMENTS["LRIO"])
+        keys.append("no_lrio_delta")
+    if family == "cato_alignment_transport":
+        keys.extend(OPERATOR_DIAGNOSTIC_REQUIREMENTS["CATO"])
+    if family == "rceo_reliability_corruption":
+        keys.extend(
+            (
+                "rceo_prior_effect",
+                "rceo_reliability_monotonic",
+                "rceo_router_load_shift",
+                "rceo_reliability_curve",
+                "no_rceo_delta",
+            )
+        )
+    if family == "mixed_relation_operator":
+        keys.extend(("router_accuracy", "no_lrio_delta", "no_rceo_delta"))
+    return tuple(dict.fromkeys(keys))
+
+
+def _validate_controlled_diagnostic_value(
+    family: str,
+    diagnostic_row: Mapping[str, Any],
+    controlled_row: Mapping[str, Any] | None,
+    key: str,
+    errors: list[str],
+) -> None:
+    if key not in diagnostic_row:
+        errors.append(f"controlled report diagnostics_report {family} missing gate diagnostic: {key}")
+        return
+    value = diagnostic_row.get(key)
+    if key == "rceo_reliability_monotonic":
+        if value is not True:
+            errors.append(f"controlled report diagnostics_report {family} {key} must be explicit true")
+        if controlled_row is not None and value != controlled_row.get(key):
+            errors.append(f"controlled report diagnostics_report {family} {key} disagrees with controlled_rows")
+        return
+    if key == "rceo_reliability_curve":
+        if not _rceo_reliability_curve_valid(value):
+            errors.append(f"controlled report diagnostics_report {family} {key} must be a valid monotonic curve")
+        if controlled_row is not None and value != controlled_row.get(key):
+            errors.append(f"controlled report diagnostics_report {family} {key} disagrees with controlled_rows")
+        return
+
+    numeric = _finite_float(value)
+    if numeric is None:
+        errors.append(f"controlled report diagnostics_report {family} {key} must be finite")
+    elif key == "router_accuracy":
+        if numeric < 0.80 or numeric > 1.0:
+            errors.append(f"controlled report diagnostics_report {family} {key} must be in [0.80, 1.0]")
+    elif numeric <= 0.0 and key not in CANDIDATE_ORACLE_GAP_KEYS:
+        errors.append(f"controlled report diagnostics_report {family} {key} must be positive")
+    elif numeric < 0.0 and key in CANDIDATE_ORACLE_GAP_KEYS:
+        errors.append(f"controlled report diagnostics_report {family} {key} must be non-negative")
+
+    if controlled_row is not None and key in controlled_row:
+        controlled_numeric = _finite_float(controlled_row.get(key))
+        if controlled_numeric is not None and numeric is not None:
+            if not math.isclose(numeric, controlled_numeric, rel_tol=1e-9, abs_tol=1e-9):
+                errors.append(f"controlled report diagnostics_report {family} {key} disagrees with controlled_rows")
+
+
+def _rceo_reliability_curve_valid(value: Any) -> bool:
+    if not isinstance(value, (list, tuple)) or len(value) < 2:
+        return False
+    previous_strength: float | None = None
+    previous_reliability: float | None = None
+    for point in value:
+        if not isinstance(point, Mapping):
+            return False
+        strength = _finite_float(point.get("corruption_strength"))
+        reliability = _finite_float(point.get("mean_reliability"))
+        if strength is None or reliability is None or reliability < 0.0 or reliability > 1.0:
+            return False
+        if previous_strength is not None and strength <= previous_strength:
+            return False
+        if previous_reliability is not None and reliability > previous_reliability + 1e-12:
+            return False
+        previous_strength = strength
+        previous_reliability = reliability
+    return True
 
 
 def _oracle_cell_loss(row: dict[str, Any] | None, cell: str) -> float | None:
