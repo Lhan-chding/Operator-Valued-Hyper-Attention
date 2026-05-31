@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import importlib.util
 import math
+from types import SimpleNamespace
 import subprocess
 import sys
 import tempfile
@@ -980,6 +981,34 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertTrue(math.isfinite(float(rceo_row["rceo_router_load_shift"])))
         self.assertIn("no_lrio_delta", controlled_by_family["lrio_low_rank_interaction"])
         self.assertIn("no_rceo_delta", rceo_row)
+
+    def test_router_decomposition_diagnostics_use_active_operator_ce_not_task_loss(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for controlled training smoke")
+
+        import torch
+
+        from scripts.multimodal.run_controlled_training_smoke import _router_decomposition_ablation_deltas
+
+        candidate_values = torch.zeros(1, 4, 4, 1)
+        batch = SimpleNamespace(
+            hidden={"true_active_operator": torch.arange(4).view(1, 4)},
+            target_y=torch.zeros(1, 4, 1),
+            target_mask=torch.ones(1, 4, dtype=torch.bool),
+        )
+        output = SimpleNamespace(
+            candidate_values=candidate_values,
+            router_logit_parts={
+                "memory": torch.nn.functional.one_hot(torch.arange(4).view(1, 4), num_classes=4).float() * 2.0,
+                "evidence": torch.nn.functional.one_hot(torch.arange(4).view(1, 4), num_classes=4).float() * 2.0,
+                "reliability": torch.zeros(1, 4, 4),
+            },
+        )
+
+        deltas = _router_decomposition_ablation_deltas(output, batch, full_loss=0.0)
+
+        self.assertGreater(deltas["memory_only_router_delta"], 0.0)
+        self.assertGreater(deltas["evidence_only_router_delta"], 0.0)
 
     def test_controlled_training_smoke_consumes_formal_config_and_stage_protocol(self):
         if importlib.util.find_spec("torch") is None:
