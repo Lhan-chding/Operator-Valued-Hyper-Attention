@@ -1,0 +1,288 @@
+# Ubuntu 多模态数据下载命令
+
+本文档对应 `OVHA_next_step_topconf_final_plan_multimodal_mainline_cn.md` 的 Step 1/4/5 数据准备阶段。目标是先把公开数据源稳定下载到 Ubuntu 主机，再由后续 feature extraction / cache builder 产出本仓库 adapter 需要的 raw manifest：
+
+```text
+data/raw_multimodal/<dataset>/
+  annotations/...
+  features/*_features.npy
+  labels/...
+  metadata/...
+  splits.json
+```
+
+注意：当前 adapter 不把原始图片/视频直接当正式 cache。下载完成后仍需要冻结特征提取与 provenance/checksum 生成，才能进入 `scripts/multimodal/build_cache.py` 和 `validate_cache.py`。
+
+## 1. 复用已有 PDEBench `.venv`
+
+可以继续用 `~/work/Operator-Valued-Hyper-Attention/.venv`。需要补的是下载/解压/音视频/Parquet/Hugging Face 工具，不需要重建 Python 环境。
+
+```bash
+cd ~/work/Operator-Valued-Hyper-Attention
+source .venv/bin/activate
+
+python -m pip install -U pip setuptools wheel
+python -m pip install -U \
+  huggingface_hub hf_xet datasets kaggle gdown requests tqdm \
+  pandas pyarrow fastparquet h5py scipy numpy pillow opencv-python-headless \
+  soundfile librosa
+```
+
+系统工具：
+
+```bash
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  aria2 git git-lfs unzip p7zip-full pigz zstd ffmpeg libsndfile1
+git lfs install
+```
+
+Hugging Face 官方当前推荐 `hf-xet`；`HF_HUB_ENABLE_HF_TRANSFER` 已是旧变量。高带宽机器用：
+
+```bash
+export HF_HOME="$PWD/.hf_cache"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export HF_XET_HIGH_PERFORMANCE=1
+export HF_HUB_DOWNLOAD_TIMEOUT=60
+export HF_HUB_ETAG_TIMEOUT=30
+```
+
+如果 Ubuntu 主机访问 Hugging Face 很慢，可以临时使用镜像端点；下载完建议 `unset HF_ENDPOINT` 回到官方源复核：
+
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+```
+
+## 2. 建议目录
+
+根分区空间不足时，不要把全量 COCO / Visual Genome 放在 `/`。优先挂到更大的盘，例如 `/data/ovha_datasets`；没有额外挂盘时才用 repo 内目录。
+
+```bash
+cd ~/work/Operator-Valued-Hyper-Attention
+mkdir -p data/raw_multimodal/_downloads
+mkdir -p data/raw_multimodal/{refcoco,flickr30k_entities,visual_genome,cmu_mosei,cmu_mosi,meld}
+```
+
+## 3. Region-text grounding 数据
+
+### 3.1 RefCOCO / RefCOCO+ / RefCOCOg
+
+RefCOCO 系列需要 COCO 2014 train images、COCO 2014 annotations 和 UNC refer annotations。TensorFlow Datasets 也明确标注该数据需要 manual download。
+
+```bash
+cd ~/work/Operator-Valued-Hyper-Attention
+mkdir -p data/raw_multimodal/_downloads/refcoco
+
+aria2c -c -x16 -s16 -k1M \
+  -d data/raw_multimodal/_downloads/refcoco \
+  -o train2014.zip \
+  http://images.cocodataset.org/zips/train2014.zip
+
+aria2c -c -x16 -s16 -k1M \
+  -d data/raw_multimodal/_downloads/refcoco \
+  -o annotations_trainval2014.zip \
+  http://images.cocodataset.org/annotations/annotations_trainval2014.zip
+
+aria2c -c -x16 -s16 -k1M \
+  -d data/raw_multimodal/_downloads/refcoco \
+  -o refcoco.zip \
+  https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcoco.zip
+
+aria2c -c -x16 -s16 -k1M \
+  -d data/raw_multimodal/_downloads/refcoco \
+  -o refcoco_plus.zip \
+  https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcoco+.zip
+
+aria2c -c -x16 -s16 -k1M \
+  -d data/raw_multimodal/_downloads/refcoco \
+  -o refcocog.zip \
+  https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcocog.zip
+```
+
+如果 UNC 直链失败，用 Web Archive fallback：
+
+```bash
+aria2c -c -x16 -s16 -k1M \
+  -d data/raw_multimodal/_downloads/refcoco \
+  -o refcoco.zip \
+  https://web.archive.org/web/20220413011718/https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcoco.zip
+```
+
+解压：
+
+```bash
+mkdir -p data/raw_multimodal/_downloads/refcoco/extracted
+unzip -q data/raw_multimodal/_downloads/refcoco/annotations_trainval2014.zip \
+  -d data/raw_multimodal/_downloads/refcoco/extracted
+unzip -q data/raw_multimodal/_downloads/refcoco/refcoco.zip \
+  -d data/raw_multimodal/_downloads/refcoco/extracted
+unzip -q data/raw_multimodal/_downloads/refcoco/refcoco_plus.zip \
+  -d data/raw_multimodal/_downloads/refcoco/extracted
+unzip -q data/raw_multimodal/_downloads/refcoco/refcocog.zip \
+  -d data/raw_multimodal/_downloads/refcoco/extracted
+```
+
+### 3.2 Flickr30k Entities
+
+优先用 GitHub 拉取 Entities annotations，用 Hugging Face/Xet 下载 Flickr30k images/captions。HF 数据集不是唯一权威源，正式实验前要记录具体 repo、revision 和 license。
+
+```bash
+cd ~/work/Operator-Valued-Hyper-Attention
+mkdir -p data/raw_multimodal/_downloads/flickr30k_entities
+
+git clone --depth 1 \
+  https://github.com/BryanPlummer/flickr30k_entities.git \
+  data/raw_multimodal/_downloads/flickr30k_entities/annotations_repo
+
+hf download cjc/flickr30k \
+  --repo-type dataset \
+  --local-dir data/raw_multimodal/_downloads/flickr30k_entities/hf_flickr30k \
+  --local-dir-use-symlinks False
+```
+
+若 `cjc/flickr30k` 不稳定，可替换为：
+
+```bash
+hf download nlphuji/flickr30k \
+  --repo-type dataset \
+  --local-dir data/raw_multimodal/_downloads/flickr30k_entities/hf_flickr30k_nlphuji \
+  --local-dir-use-symlinks False
+```
+
+### 3.3 Visual Genome subset
+
+Visual Genome 全量较大，当前计划中只建议作为 Region-text grounding 的补充 subset，不要在根分区空间不足时下载全量。
+
+```bash
+cd ~/work/Operator-Valued-Hyper-Attention
+mkdir -p data/raw_multimodal/_downloads/visual_genome
+
+aria2c -c -x16 -s16 -k1M \
+  -d data/raw_multimodal/_downloads/visual_genome \
+  -o image_data.json.zip \
+  https://visualgenome.org/static/data/dataset/image_data.json.zip
+
+aria2c -c -x16 -s16 -k1M \
+  -d data/raw_multimodal/_downloads/visual_genome \
+  -o region_descriptions.json.zip \
+  https://visualgenome.org/static/data/dataset/region_descriptions.json.zip
+```
+
+只在空间确认足够后再下载 images：
+
+```bash
+aria2c -c -x16 -s16 -k1M \
+  -d data/raw_multimodal/_downloads/visual_genome \
+  -o images.zip \
+  https://visualgenome.org/static/data/dataset/images.zip
+
+aria2c -c -x16 -s16 -k1M \
+  -d data/raw_multimodal/_downloads/visual_genome \
+  -o images2.zip \
+  https://visualgenome.org/static/data/dataset/images2.zip
+```
+
+## 4. Sentiment / emotion 数据
+
+### 4.1 CMU-MOSEI / CMU-MOSI
+
+正式来源优先使用 CMU Multimodal SDK；CMU SDK 文档说明 `mmdatasdk` 负责下载和处理 computational sequences。MultiBench README 也说明 MOSI/MOSEI 的 ready-to-go aligned data 可从 MultiBench 获取。
+
+```bash
+cd ~/work/Operator-Valued-Hyper-Attention
+source .venv/bin/activate
+
+python -m pip install -U git+https://github.com/CMU-MultiComp-Lab/CMU-MultimodalSDK.git
+mkdir -p data/raw_multimodal/_downloads/cmu_sdk
+```
+
+下载 MOSEI/MOSI 的 high-level features 和 labels：
+
+```bash
+python - <<'PY'
+from pathlib import Path
+import mmdatasdk
+
+targets = {
+    "cmu_mosei": mmdatasdk.cmu_mosei,
+    "cmu_mosi": mmdatasdk.cmu_mosi,
+}
+for name, spec in targets.items():
+    out = Path("data/raw_multimodal/_downloads/cmu_sdk") / name
+    out.mkdir(parents=True, exist_ok=True)
+    recipe = {}
+    for attr in ("highlevel", "labels"):
+        value = getattr(spec, attr, {})
+        if isinstance(value, dict):
+            recipe.update(value)
+    print(f"Downloading {name} sequences -> {out}")
+    mmdatasdk.mmdataset(recipe, str(out))
+PY
+```
+
+如果 CMU SDK 速度慢，可先用 HF/Xet 下载公开预处理版本作为开发缓存，但正式主表要保留来源和版本，不要混写成原始 CMU SDK 数据：
+
+```bash
+hf download reeha-parkar/cmu-mosei-comp-seq \
+  --repo-type dataset \
+  --local-dir data/raw_multimodal/_downloads/cmu_mosei_hf_comp_seq \
+  --local-dir-use-symlinks False
+```
+
+### 4.2 MELD
+
+MELD 官方页面提供两个下载入口，其中一个就是 Hugging Face `declare-lab/MELD`。
+
+```bash
+cd ~/work/Operator-Valued-Hyper-Attention
+mkdir -p data/raw_multimodal/_downloads/meld
+
+aria2c -c -x16 -s16 -k1M \
+  -d data/raw_multimodal/_downloads/meld \
+  -o MELD.Raw.tar.gz \
+  https://huggingface.co/datasets/declare-lab/MELD/resolve/main/MELD.Raw.tar.gz
+
+mkdir -p data/raw_multimodal/_downloads/meld/extracted
+tar -xzf data/raw_multimodal/_downloads/meld/MELD.Raw.tar.gz \
+  -C data/raw_multimodal/_downloads/meld/extracted
+```
+
+## 5. 下载后校验与 cache 初始化
+
+下载只是第一步。正式进入 OVHA 训练前，必须生成本仓库 adapter 期望的 frozen features / labels / metadata / splits，然后运行 fail-fast 初始化与 cache 校验。
+
+先检查 adapter 期望的 raw 文件：
+
+```bash
+python scripts/multimodal/build_cache.py refcoco data/raw_multimodal/refcoco data/multimodal_cache --version v0.1
+python scripts/multimodal/build_cache.py cmu_mosei data/raw_multimodal/cmu_mosei data/multimodal_cache --version v0.1
+python scripts/multimodal/build_cache.py meld data/raw_multimodal/meld data/multimodal_cache --version v0.1
+```
+
+如果 raw manifest 还不完整，这些命令应返回 JSON 错误并列出缺失文件；这不是失败，而是防止 silent drop。
+
+完整 cache 生成后再跑：
+
+```bash
+python scripts/multimodal/validate_cache.py data/multimodal_cache refcoco v0.1 --splits train val test
+python scripts/multimodal/validate_cache.py data/multimodal_cache cmu_mosei v0.1 --splits train val test
+python scripts/multimodal/validate_cache.py data/multimodal_cache meld v0.1 --splits train val test
+```
+
+## 6. 速度与稳定性建议
+
+- 大文件优先 `aria2c -c -x16 -s16 -k1M`，支持断点续传。
+- Hugging Face 优先 `hf download` + `hf_xet` + `HF_XET_HIGH_PERFORMANCE=1`。
+- 国内网络慢时用 `HF_ENDPOINT=https://hf-mirror.com`，但正式结果归档里要记录是否使用镜像。
+- 下载全部 Visual Genome / COCO 前先 `df -h .`，当前服务器根分区曾接近满载，不建议盲目全量下载。
+- 不要用 test split 生成训练 pseudo-label；不要把 `true_active_operator`、`corruption_strength` 等 hidden/control metadata 放进模型输入。
+
+## 7. 参考来源
+
+- Hugging Face Hub 环境变量与 Xet: https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables
+- MELD 官方下载页: https://affective-meld.github.io/
+- CMU Multimodal SDK: https://github.com/CMU-MultiComp-Lab/CMU-MultimodalSDK
+- MultiBench MOSI/MOSEI processed data 说明: https://github.com/pliang279/MultiBench
+- RefCOCO TFDS manual download 说明: https://www.tensorflow.org/datasets/catalog/ref_coco
+- Flickr30k Entities annotations: https://github.com/BryanPlummer/flickr30k_entities
+- Visual Genome data readme: https://homes.cs.washington.edu/~ranjay/visualgenome/api_readme.html
