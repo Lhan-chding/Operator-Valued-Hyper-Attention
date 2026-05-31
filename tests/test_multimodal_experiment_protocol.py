@@ -903,6 +903,47 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             joined,
         )
 
+    def test_topconf_main_entry_recomputes_public_gate_from_artifacts(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+
+            region_report = _passing_region_text_public_gate_report(tmp_path / "artifacts")
+            region_diagnostics = Path(region_report["evidence_artifacts"]["diagnostics"]["path"])
+            rows = _gate_diagnostic_rows("phrase_region_grounding")
+            rows[0]["public_diagnostics"]["cato_router_load_by_phrase_type"] = {"object": "not-a-number"}
+            region_diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
+            region_report["evidence_artifacts"]["diagnostics"]["sha256"] = file_sha256(region_diagnostics)
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=_complete_controlled_public_entry_report(),
+                region_gate_report=region_report,
+                sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("region_text_public gate artifact recomputation failed", joined)
+        self.assertIn("region-text public diagnostics missing CATO router load by phrase type", joined)
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
@@ -1353,38 +1394,10 @@ def _gate_evidence_artifacts(task: str, artifact_root: Path | None = None) -> di
         robustness = artifact_root / f"{task}_robustness_summary.json"
         raw_metrics = artifact_root / f"{task}_raw_metrics_seed1.jsonl"
         statistics.write_text(
-            json.dumps(
-                {
-                    "main_table": {task: {"test": {"ovha_full": {"mean": 1.0}}}},
-                    "metadata": {"raw_metric_paths": [str(raw_metrics)]},
-                    "per_seed_appendix": [
-                        {
-                            "task": task,
-                            "split": "test",
-                            "model": "ovha_full",
-                            "seed": 1,
-                            "score": 1.0,
-                            "raw_metric_path": str(raw_metrics),
-                        }
-                    ],
-                    "reporting_metadata": {
-                        "per_seed_table": [
-                            {
-                                "task": task,
-                                "split": "test",
-                                "model": "ovha_full",
-                                "seed": 1,
-                                "score": 1.0,
-                                "raw_metric_path": str(raw_metrics),
-                            }
-                        ]
-                    },
-                },
-                sort_keys=True,
-            )
+            json.dumps(_gate_statistics_summary(task, raw_metrics), sort_keys=True)
             + "\n"
         )
-        diagnostics.write_text(json.dumps(_gate_diagnostic_row(task)) + "\n")
+        diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in _gate_diagnostic_rows(task)) + "\n")
         robustness.write_text(json.dumps(_gate_robustness_summary(task), sort_keys=True) + "\n")
         raw_metrics.write_text(json.dumps({"task": task, "seed": 1, "score": 1.0}, sort_keys=True) + "\n")
         return {
@@ -1407,33 +1420,218 @@ def _gate_evidence_artifacts(task: str, artifact_root: Path | None = None) -> di
     }
 
 
-def _gate_diagnostic_row(task: str) -> dict[str, object]:
-    if task == "sentiment_emotion":
-        return {
-            "setting": "clean",
-            "public_diagnostics": {
-                "lrio_rank_entropy_by_modality_pair": {"text_audio": 0.42},
-                "spo_prototype_load_by_emotion_class": {
-                    "negative": {"p0": 0.7, "p1": 0.3},
-                    "positive": {"p0": 0.2, "p1": 0.8},
-                },
-                "rceo_reliability_shift_under_missing_noisy_modality": {"missing_audio": -0.2},
-                "router_load_by_condition": {
-                    "clean": {"TLEO": 0.1, "SPO": 0.3, "LRIO": 0.4, "CATO": 0.2},
-                    "corrupted": {"TLEO": 0.2, "SPO": 0.4, "LRIO": 0.2, "CATO": 0.2},
-                    "missing": {"TLEO": 0.2, "SPO": 0.4, "LRIO": 0.2, "CATO": 0.2},
-                },
-            },
+def _gate_statistics_summary(task: str, raw_metrics: Path) -> dict[str, object]:
+    models = _gate_models_for_task(task)
+    full_score = 0.80 if task == "phrase_region_grounding" else 0.76
+    baseline_score = 0.72 if task == "phrase_region_grounding" else 0.74
+    model_scores = {
+        model: _gate_score_for_model(task, model, full_score=full_score, baseline_score=baseline_score)
+        for model in models
+    }
+    model_rows = {
+        model: {
+            "mean": score,
+            "std": 0.01,
+            "ci95": [score - 0.01, score + 0.01],
+            "seed_count": 3,
+            "per_seed_scores": [score - 0.01, score, score + 0.01],
+            "higher_is_better": True,
         }
-    return {
-        "setting": "clean",
-        "public_diagnostics": {
-            "cato_router_load_by_phrase_type": {"object": 0.7},
-            "no_cato_delta_by_object_size": {"small": 0.12},
-            "no_cato_delta_by_phrase_length": {"short": 0.10},
-            "rceo_reliability_shift_under_blurred_regions": -0.18,
+        for model, score in model_scores.items()
+    }
+    paired = {
+        "common_seed_count": 3,
+        "mean_delta": full_score - baseline_score,
+        "metric_direction": "higher_is_better",
+        "paired_permutation_p": 0.25,
+        "paired_bootstrap_ci95": [0.01, 0.12],
+        "baseline_comparisons": {
+            model: {
+                "common_seed_count": 3,
+                "mean_delta": full_score - score,
+                "metric_direction": "higher_is_better",
+                "paired_permutation_p": 0.25,
+                "paired_bootstrap_ci95": [0.01, 0.12],
+            }
+            for model, score in model_scores.items()
+            if model not in {"ovha_full", "cross_attention_transformer"}
         },
     }
+    per_seed_table = [
+        {
+            "task": task,
+            "split": "test",
+            "model": model,
+            "seed": seed,
+            "score": score + (seed - 2) * 0.01,
+            "raw_metric_path": str(raw_metrics),
+        }
+        for model, score in model_scores.items()
+        for seed in (1, 2, 3)
+    ]
+    return {
+        "main_table": {task: {"test": model_rows}},
+        "paired_tests": {task: {"test": paired}},
+        "metadata": {"raw_metric_paths": [str(raw_metrics)]},
+        "per_seed_appendix": per_seed_table,
+        "reporting_metadata": {
+            "parameter_count": {model: 120000 + index for index, model in enumerate(models)},
+            "training_steps": {model: 1000 for model in models},
+            "frozen_feature_versions": (
+                {"text": "frozen-text-v1", "audio": "frozen-audio-v1", "vision": "frozen-vision-v1"}
+                if task == "sentiment_emotion"
+                else {"text": "frozen-text-v1", "region": "frozen-region-v1"}
+            ),
+            "hardware": {"accelerator": "unit-test-cpu"},
+            "wall_clock_summary": {"wall_clock_hours": 0.17},
+            "seed_count_rationale": "unit-test fixture uses the plan minimum of 3 seeds; production main tables should use 5 seeds",
+            "per_seed_table": per_seed_table,
+        },
+    }
+
+
+def _gate_models_for_task(task: str) -> tuple[str, ...]:
+    if task == "sentiment_emotion":
+        return (
+            "ovha_full",
+            "cross_attention_transformer",
+            "concat_fusion",
+            "tfn_lmf",
+            "mult_style_crossmodal_transformer",
+            "misa_shared_private",
+            "modality_expert_moe",
+            "quality_aware_fusion",
+            "ovha_no_lrio",
+            "ovha_no_spo",
+            "ovha_no_rceo",
+            "ovha_no_evidence_router",
+        )
+    return (
+        "ovha_full",
+        "cross_attention_transformer",
+        "text_only",
+        "region_only",
+        "concat_fusion",
+        "modality_expert_moe",
+        "clip_style_region_text_retrieval",
+        "cato_only",
+        "ovha_no_cato",
+        "ovha_no_rceo",
+        "ovha_no_evidence_router",
+    )
+
+
+def _gate_score_for_model(task: str, model: str, *, full_score: float, baseline_score: float) -> float:
+    if model == "ovha_full":
+        return full_score
+    if model == "cross_attention_transformer":
+        return baseline_score
+    if task == "sentiment_emotion":
+        return {
+            "tfn_lmf": 0.73,
+            "mult_style_crossmodal_transformer": 0.72,
+            "ovha_no_lrio": 0.70,
+            "ovha_no_spo": 0.71,
+            "ovha_no_rceo": 0.68,
+            "ovha_no_evidence_router": 0.69,
+        }.get(model, 0.71)
+    return {
+        "modality_expert_moe": 0.71,
+        "ovha_no_cato": 0.70,
+        "ovha_no_rceo": 0.69,
+        "ovha_no_evidence_router": 0.68,
+    }.get(model, 0.70)
+
+
+def _gate_diagnostic_rows(task: str) -> list[dict[str, object]]:
+    if task == "sentiment_emotion":
+        return [
+            {
+                "setting": "clean",
+                "router_load_by_candidate": {"TLEO": 0.10, "SPO": 0.35, "LRIO": 0.40, "CATO": 0.15},
+                "candidate_diagnostics": {
+                    "LRIO": {"rank_entropy": 0.6},
+                    "SPO": {
+                        "prototype_entropy": 0.5,
+                        "top_prototype_by_class": {"negative": 1, "positive": 4},
+                    },
+                },
+                "public_diagnostics": {
+                    "lrio_rank_entropy_by_modality_pair": {"text_audio": 0.42, "text_vision": 0.37},
+                    "spo_prototype_load_by_emotion_class": {
+                        "negative": {"p0": 0.70, "p1": 0.20, "p2": 0.10},
+                        "positive": {"p0": 0.15, "p1": 0.75, "p2": 0.10},
+                    },
+                    "rceo_reliability_shift_under_missing_noisy_modality": {"missing_audio": -0.18},
+                    "router_load_by_condition": {
+                        "clean": {"TLEO": 0.10, "SPO": 0.35, "LRIO": 0.40, "CATO": 0.15},
+                        "corrupted": {"TLEO": 0.15, "SPO": 0.45, "LRIO": 0.25, "CATO": 0.15},
+                        "missing": {"TLEO": 0.20, "SPO": 0.45, "LRIO": 0.20, "CATO": 0.15},
+                    },
+                },
+            },
+        ]
+    return [
+        _gate_region_diagnostic(
+            "clean",
+            {"CATO": 0.55, "TLEO": 0.20, "SPO": 0.15, "LRIO": 0.10},
+            cato_entropy=0.30,
+            grounding_accuracy=0.74,
+            top_alignment_accuracy=0.72,
+            rceo_reliability=0.90,
+        ),
+        _gate_region_diagnostic(
+            "no_cato",
+            {"CATO": 0.0, "TLEO": 0.40, "SPO": 0.40, "LRIO": 0.20},
+            cato_entropy=0.90,
+            grounding_accuracy=0.52,
+            top_alignment_accuracy=0.20,
+        ),
+        _gate_region_diagnostic(
+            "corrupted_visual",
+            {"CATO": 0.28, "TLEO": 0.30, "SPO": 0.32, "LRIO": 0.10},
+            cato_entropy=0.58,
+            grounding_accuracy=0.61,
+            top_alignment_accuracy=0.56,
+            rceo_reliability=0.55,
+            rceo_corruption_response=0.35,
+        ),
+    ]
+
+
+def _gate_region_diagnostic(
+    setting: str,
+    loads: dict[str, float],
+    *,
+    cato_entropy: float,
+    grounding_accuracy: float,
+    top_alignment_accuracy: float,
+    rceo_reliability: float | None = None,
+    rceo_corruption_response: float | None = None,
+) -> dict[str, object]:
+    candidate_diagnostics: dict[str, object] = {
+        "CATO": {
+            "alignment_entropy": cato_entropy,
+            "grounding_accuracy": grounding_accuracy,
+            "top_alignment_accuracy": top_alignment_accuracy,
+        }
+    }
+    if rceo_corruption_response is not None:
+        candidate_diagnostics["RCEO"] = {"corruption_response": rceo_corruption_response}
+    row: dict[str, object] = {
+        "setting": setting,
+        "router_load_by_candidate": loads,
+        "candidate_diagnostics": candidate_diagnostics,
+        "public_diagnostics": {
+            "cato_router_load_by_phrase_type": {"object_noun_phrase": 0.52, "attribute_phrase": 0.41},
+            "no_cato_delta_by_object_size": {"small": 0.08, "medium": 0.06, "large": 0.04},
+            "no_cato_delta_by_phrase_length": {"short": 0.05, "long": 0.07},
+            "rceo_reliability_shift_under_blurred_regions": -0.22,
+        },
+    }
+    if rceo_reliability is not None:
+        row["rceo_reliability"] = rceo_reliability
+    return row
 
 
 def _gate_robustness_summary(task: str) -> dict[str, object]:
@@ -1442,8 +1640,19 @@ def _gate_robustness_summary(task: str) -> dict[str, object]:
         "task": task,
         "full_model": "ovha_full",
         "baseline_model": baseline,
+        "clean_score": {"ovha_full": 0.75, baseline: 0.75},
+        "corrupted_score": {"ovha_full": 0.69, baseline: 0.63},
+        "relative_drop": {"ovha_full": 0.08, baseline: 0.16},
+        "auc_over_corruption_strength": {"ovha_full": 0.74, baseline: 0.68},
         "full_drop_less_than_baseline": True,
         "rceo_reliability_monotonic": True,
+        "rceo_reliability_shift": -0.25,
+        "rceo_reliability_curve": [
+            {"corruption_strength": 0.0, "mean_reliability": 0.90},
+            {"corruption_strength": 0.5, "mean_reliability": 0.65},
+        ],
+        "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
+        "candidate_loss_shift": {"LRIO": 0.04, "SPO": -0.06},
         "required_stress_coverage": {"passed": True, "reasons": []},
         "required_ablation_degradation": {
             "passed": True,
