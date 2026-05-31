@@ -1356,6 +1356,29 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
                 self.assertNotIn("true_active_operator", str(batch.model_inputs()))
                 self.assertTrue(torch.allclose(batch.hidden["true_router_weights"].sum(dim=-1), torch.ones(2, 4)))
 
+    def test_controlled_mixed_relation_is_query_conditioned_without_hidden_input_leakage(self):
+        import torch
+
+        from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
+            CONTROLLED_OPERATOR_ORDER,
+            ControlledSyntheticMultimodalAdapter,
+        )
+
+        adapter = ControlledSyntheticMultimodalAdapter(seed=123, field_dim=4, output_dim=3)
+        batch = adapter.sample_batch(
+            family="mixed_relation_operator",
+            batch_size=2,
+            query_count=4,
+            device="cpu",
+        )
+
+        relation_code = batch.query.x[..., : len(CONTROLLED_OPERATOR_ORDER)]
+        self.assertEqual(tuple(relation_code.shape), (2, 4, 4))
+        self.assertTrue(torch.equal(relation_code.argmax(dim=-1), batch.hidden["true_active_operator"]))
+        self.assertFalse(torch.equal(batch.query.query_type, batch.hidden["true_active_operator"]))
+        self.assertNotIn("hidden", batch.model_inputs())
+        self.assertNotIn("true_active_operator", str(batch.model_inputs()))
+
     def test_oracle_matrix_true_true_reconstructs_controlled_targets(self):
         import torch
 
