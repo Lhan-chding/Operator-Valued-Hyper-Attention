@@ -72,6 +72,7 @@ PUBLIC_NON_NEGATIVE_METRICS = frozenset(
 )
 PUBLIC_CORRELATION_METRICS = frozenset({"pearson_correlation"})
 PUBLIC_NESTED_PROBABILITY_METRICS = frozenset({"router_load_by_corruption_type"})
+MULTIMODAL_V1_CANDIDATES = ("TLEO", "SPO", "LRIO", "CATO")
 
 
 @dataclass(frozen=True)
@@ -386,7 +387,7 @@ def _validate_public_metric_value(row_name: str, metric: str, value: Any, errors
             errors.append(f"{row_name} public metric {metric} must be non-empty")
             return
         if metric in PUBLIC_NESTED_PROBABILITY_METRICS:
-            _validate_nested_numeric_metric(row_name, metric, value, errors, value_range=(0.0, 1.0))
+            _validate_router_load_by_corruption_type_metric(row_name, value, errors)
             return
         if metric == "rceo_reliability_calibration":
             _validate_rceo_calibration_metric(row_name, value, errors)
@@ -415,6 +416,47 @@ def _validate_rceo_calibration_metric(row_name: str, value: dict[str, Any], erro
     curve = value.get("calibration_curve", value.get("curve"))
     if curve is not None and not isinstance(curve, list):
         errors.append(f"{row_name} public metric rceo_reliability_calibration.calibration_curve must be a list")
+
+
+def _validate_router_load_by_corruption_type_metric(row_name: str, value: dict[str, Any], errors: list[str]) -> None:
+    if not value:
+        errors.append(f"{row_name} public metric router_load_by_corruption_type must be non-empty")
+        return
+    expected = set(MULTIMODAL_V1_CANDIDATES)
+    for corruption_type, loads in value.items():
+        if not str(corruption_type).strip():
+            errors.append(f"{row_name} public metric router_load_by_corruption_type contains empty corruption type")
+            continue
+        metric_name = f"router_load_by_corruption_type.{corruption_type}"
+        if not isinstance(loads, dict) or not loads:
+            errors.append(f"{row_name} public metric {metric_name} must be a non-empty candidate probability map")
+            continue
+
+        total = 0.0
+        complete = True
+        for candidate in MULTIMODAL_V1_CANDIDATES:
+            if candidate not in loads:
+                errors.append(f"{row_name} public metric {metric_name} missing candidate load: {candidate}")
+                complete = False
+                continue
+            numeric = _finite_float(loads.get(candidate))
+            if numeric is None:
+                errors.append(f"{row_name} public metric {metric_name}.{candidate} must be finite")
+                complete = False
+                continue
+            if numeric < 0.0 or numeric > 1.0:
+                errors.append(f"{row_name} public metric {metric_name}.{candidate} must be in [0, 1]")
+                complete = False
+                continue
+            total += numeric
+
+        for candidate in loads:
+            if str(candidate) not in expected:
+                errors.append(f"{row_name} public metric {metric_name} contains non-v1 candidate load: {candidate}")
+                complete = False
+
+        if complete and not math.isclose(total, 1.0, rel_tol=1e-6, abs_tol=1e-6):
+            errors.append(f"{row_name} public metric {metric_name} candidate loads must sum to 1")
 
 
 def _validate_nested_numeric_metric(

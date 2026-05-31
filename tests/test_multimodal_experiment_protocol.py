@@ -2517,7 +2517,10 @@ def _public_metrics_for_task(task: str) -> dict[str, object]:
             "f1": 0.73,
             "missing_modality_performance_drop": 0.08,
             "corruption_robustness_auc": 0.82,
-            "router_load_by_corruption_type": {"missing_audio": 0.45, "audio_noise": 0.42},
+            "router_load_by_corruption_type": {
+                "missing_audio": {"TLEO": 0.20, "SPO": 0.45, "LRIO": 0.15, "CATO": 0.20},
+                "audio_noise": {"TLEO": 0.10, "SPO": 0.25, "LRIO": 0.50, "CATO": 0.15},
+            },
             "lrio_rank_entropy": 0.6,
             "spo_prototype_entropy": 0.5,
             "rceo_reliability_calibration": {

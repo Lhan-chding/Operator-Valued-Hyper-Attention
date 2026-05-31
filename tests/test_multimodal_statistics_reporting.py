@@ -621,7 +621,10 @@ def _sentiment_public_metrics(score: float) -> dict[str, object]:
         "f1": 0.68,
         "missing_modality_performance_drop": 0.04,
         "corruption_robustness_auc": 0.73,
-        "router_load_by_corruption_type": {"audio_noise": {"LRIO": 0.20, "SPO": 0.35}},
+        "router_load_by_corruption_type": {
+            "audio_noise": {"TLEO": 0.10, "SPO": 0.25, "LRIO": 0.50, "CATO": 0.15},
+            "missing_audio": {"TLEO": 0.20, "SPO": 0.45, "LRIO": 0.15, "CATO": 0.20},
+        },
         "lrio_rank_entropy": 0.60,
         "spo_prototype_entropy": 0.50,
         "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
