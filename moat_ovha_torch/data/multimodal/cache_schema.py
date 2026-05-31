@@ -533,11 +533,15 @@ def _validate_failed_sample_manifests(
     splits: tuple[str, ...],
     errors: list[str],
 ) -> None:
+    retained_source_ids_by_split = {
+        split: set(_read_source_ids(layout, split) or [])
+        for split in splits
+    }
     for split in splits:
         path = layout.root / "provenance" / f"failed_samples_{split}.jsonl"
         if not path.exists():
             continue
-        retained_source_ids = set(_read_source_ids(layout, split) or [])
+        retained_source_ids = retained_source_ids_by_split.get(split, set())
         for line_number, line in enumerate(path.read_text().splitlines(), start=1):
             stripped = line.strip()
             if not stripped:
@@ -571,6 +575,15 @@ def _validate_failed_sample_manifests(
                     f"{path.name} source_id must not also appear in retained "
                     f"split source ids: {source_id}"
                 )
+            if isinstance(source_id, str) and source_id:
+                for retained_split, retained_ids in sorted(retained_source_ids_by_split.items()):
+                    if retained_split == split:
+                        continue
+                    if source_id in retained_ids:
+                        errors.append(
+                            f"{path.name} source_id must not also appear in retained "
+                            f"{retained_split} split source ids: {source_id}"
+                        )
 
 
 def _validate_sample_record_manifests(
