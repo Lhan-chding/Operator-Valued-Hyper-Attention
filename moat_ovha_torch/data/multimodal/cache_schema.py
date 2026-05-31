@@ -357,19 +357,13 @@ def _validate_split_manifest_consistency(layout: MultimodalCacheLayout, splits: 
     if not isinstance(payload, dict):
         errors.append("splits.json must be an object keyed by split")
         return
+    split_source_ids = _validate_split_manifest_source_lists(payload, errors)
+    _validate_split_manifest_global_source_disjointness(split_source_ids, errors)
     for split in splits:
-        expected = payload.get(split)
-        if not isinstance(expected, list):
+        expected_source_ids = split_source_ids.get(split)
+        if expected_source_ids is None:
             errors.append(f"splits.json missing source_id list for split: {split}")
             continue
-        invalid_source_ids = [source_id for source_id in expected if not isinstance(source_id, str) or not source_id]
-        if invalid_source_ids:
-            errors.append(f"splits.json {split} source_id entries must be non-empty strings")
-            continue
-        expected_source_ids = list(expected)
-        duplicate_source_ids = sorted({source_id for source_id in expected_source_ids if expected_source_ids.count(source_id) > 1})
-        for source_id in duplicate_source_ids:
-            errors.append(f"splits.json {split} contains duplicate source_id: {source_id}")
         source_path = layout.root / "provenance" / f"source_ids_{split}.txt"
         if not source_path.exists():
             continue
@@ -378,6 +372,43 @@ def _validate_split_manifest_consistency(layout: MultimodalCacheLayout, splits: 
             continue
         if set(expected_source_ids) != set(actual):
             errors.append(f"provenance/source_ids_{split}.txt must match splits.json {split} entries")
+
+
+def _validate_split_manifest_source_lists(payload: dict[str, Any], errors: list[str]) -> dict[str, list[str]]:
+    split_source_ids: dict[str, list[str]] = {}
+    for split, expected in sorted(payload.items()):
+        if not isinstance(split, str) or not split:
+            errors.append("splits.json split names must be non-empty strings")
+            continue
+        if not isinstance(expected, list):
+            continue
+        invalid_source_ids = [source_id for source_id in expected if not isinstance(source_id, str) or not source_id]
+        if invalid_source_ids:
+            errors.append(f"splits.json {split} source_id entries must be non-empty strings")
+            continue
+        expected_source_ids = list(expected)
+        duplicate_source_ids = sorted(
+            {source_id for source_id in expected_source_ids if expected_source_ids.count(source_id) > 1}
+        )
+        for source_id in duplicate_source_ids:
+            errors.append(f"splits.json {split} contains duplicate source_id: {source_id}")
+        split_source_ids[split] = expected_source_ids
+    return split_source_ids
+
+
+def _validate_split_manifest_global_source_disjointness(
+    split_source_ids: dict[str, list[str]],
+    errors: list[str],
+) -> None:
+    seen: dict[str, str] = {}
+    for split, source_ids in sorted(split_source_ids.items()):
+        for source_id in source_ids:
+            previous = seen.get(source_id)
+            if previous is not None and previous != split:
+                errors.append(
+                    f"splits.json source_id appears in multiple splits: {source_id} ({previous}, {split})"
+                )
+            seen[source_id] = split
 
 
 def _validate_feature_parity(layout: MultimodalCacheLayout, data_card: dict[str, Any], errors: list[str]) -> None:
