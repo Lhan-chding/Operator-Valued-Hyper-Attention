@@ -479,8 +479,8 @@ def _summary_reporting_metadata_reasons(
             "reporting metadata missing per_seed_table",
         ]
     reasons: list[str] = []
-    _require_model_metadata(metadata, "parameter_count", models, reasons)
-    _require_model_metadata(metadata, "training_steps", models, reasons)
+    _require_model_metadata(metadata, "parameter_count", models, reasons, require_positive_integer=True)
+    _require_model_metadata(metadata, "training_steps", models, reasons, require_positive_integer=True)
     for key in ("frozen_feature_versions", "hardware", "wall_clock_summary", "per_seed_table"):
         value = metadata.get(key)
         if _is_empty_reporting_value(value):
@@ -536,6 +536,8 @@ def _require_model_metadata(
     key: str,
     models: tuple[str, ...],
     reasons: list[str],
+    *,
+    require_positive_integer: bool = False,
 ) -> None:
     value = metadata.get(key)
     if not isinstance(value, dict) or not value:
@@ -544,6 +546,9 @@ def _require_model_metadata(
     for model in models:
         if model not in value or _is_empty_reporting_value(value.get(model)):
             reasons.append(f"reporting metadata {key} missing model: {model}")
+            continue
+        if require_positive_integer and _positive_integer(value.get(model)) is None:
+            reasons.append(f"reporting metadata {key} must be positive integer for model: {model}")
 
 
 def _is_empty_reporting_value(value: Any) -> bool:
@@ -635,6 +640,19 @@ def _safe_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _positive_integer(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        return int(value) if value.is_integer() and value > 0 else None
+    if isinstance(value, str):
+        text = value.strip()
+        return int(text) if text.isdigit() and int(text) > 0 else None
+    return None
 
 
 def _finite_interval(value: Any) -> tuple[float, float] | None:
