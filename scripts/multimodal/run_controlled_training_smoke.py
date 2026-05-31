@@ -195,6 +195,7 @@ def _run_configured_stage_training(
             )
             continue
         stage_families = _families_for_stage(stage)
+        parameter_scope = _apply_trainable_parameter_scope(model, stage)
         stage_rows: list[dict[str, object]] = []
         for stage_step in range(steps_per_stage):
             family = _family_for_training_step(
@@ -221,6 +222,7 @@ def _run_configured_stage_training(
                 "family": family,
                 "loss_names_observed": sorted(stage_components),
                 "route_override_mode": _route_override_mode(router_weight_override),
+                "trainable_parameter_scope": parameter_scope["trainable_parameter_scope"],
                 "total_loss": _as_float(total_loss),
                 "grad_l2_norm": grad_norm,
                 **{name: _as_float(value) for name, value in stage_components.items()},
@@ -235,6 +237,7 @@ def _run_configured_stage_training(
                 "optimizer_steps": len(stage_rows),
                 "family_schedule_scope": _family_schedule_scope(stage),
                 "route_override_mode": _stage_route_override_mode(stage),
+                **parameter_scope,
                 "mean_total_loss": float(sum(float(row["total_loss"]) for row in stage_rows) / max(len(stage_rows), 1)),
                 "families_seen": sorted({str(row["family"]) for row in stage_rows}),
             }
@@ -291,6 +294,58 @@ def _route_override_mode(router_weight_override: torch.Tensor | None) -> str:
 
 def _stage_route_override_mode(stage: str) -> str:
     return "true_router_weights" if stage == "T2" else "learned_router"
+
+
+def _apply_trainable_parameter_scope(model: MultimodalOVHA, stage: str) -> dict[str, object]:
+    trainable_groups = _trainable_parameter_groups_for_stage(stage)
+    observed_groups: set[str] = set()
+    frozen_groups: set[str] = set()
+    for name, parameter in model.named_parameters():
+        group = _parameter_group_for_name(name)
+        is_trainable = group in trainable_groups
+        parameter.requires_grad_(is_trainable)
+        if is_trainable:
+            observed_groups.add(group)
+        else:
+            frozen_groups.add(group)
+    return {
+        "trainable_parameter_scope": _trainable_parameter_scope_name(stage),
+        "trainable_parameter_groups": sorted(observed_groups),
+        "frozen_parameter_groups": sorted(frozen_groups),
+    }
+
+
+def _trainable_parameter_groups_for_stage(stage: str) -> set[str]:
+    if stage == "T3":
+        return {"joint_router_adapter.router"}
+    return {
+        "candidate_primitives",
+        "evidence_encoder",
+        "joint_router_adapter.hyper_adapter",
+        "joint_router_adapter.router",
+        "memory_encoder",
+        "reliability_prior",
+    }
+
+
+def _trainable_parameter_scope_name(stage: str) -> str:
+    if stage == "T3":
+        return "router_only_warmup"
+    if stage == "T2":
+        return "oracle_router_adapter_candidate_warmup"
+    if stage == "T1":
+        return "candidate_specialist_warmup"
+    if stage == "T4":
+        return "joint_controlled_training"
+    return "full_model"
+
+
+def _parameter_group_for_name(name: str) -> str:
+    if name.startswith("joint_router_adapter.router."):
+        return "joint_router_adapter.router"
+    if name.startswith("joint_router_adapter.hyper_adapter."):
+        return "joint_router_adapter.hyper_adapter"
+    return name.split(".", 1)[0]
 
 
 def _controlled_losses(output: MultimodalOVHAOutput, batch: Any) -> dict[str, torch.Tensor]:
