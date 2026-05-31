@@ -605,6 +605,26 @@ class MultimodalPublicGateTests(unittest.TestCase):
             "\n".join(report["reasons"]),
         )
 
+    def test_public_gate_requires_seed_count_rationale_for_three_seed_main_tables(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["reporting_metadata"].pop("seed_count_rationale", None)
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "reporting metadata seed_count_rationale required when main table uses fewer than 5 seeds",
+            "\n".join(report["reasons"]),
+        )
+
     def test_public_gate_requires_topconf_reporting_metadata_not_only_mean(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
