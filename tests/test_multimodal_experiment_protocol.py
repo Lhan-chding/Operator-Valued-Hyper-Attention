@@ -668,6 +668,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             smoke_baseline_metrics_path = Path(
                 payload["training"]["artifacts"]["smoke_baseline_raw_metrics"]["path"]
             )
+            smoke_robustness_rows_path = Path(payload["training"]["artifacts"]["smoke_robustness_rows"]["path"])
+            smoke_robustness_summary_path = Path(
+                payload["training"]["artifacts"]["smoke_robustness_summary"]["path"]
+            )
             metrics_rows = [json.loads(line) for line in metrics_path.read_text().splitlines() if line.strip()]
             smoke_raw_rows = [
                 json.loads(line) for line in smoke_raw_metrics_path.read_text().splitlines() if line.strip()
@@ -675,6 +679,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             smoke_baseline_rows = [
                 json.loads(line) for line in smoke_baseline_metrics_path.read_text().splitlines() if line.strip()
             ]
+            smoke_robustness_rows = [
+                json.loads(line) for line in smoke_robustness_rows_path.read_text().splitlines() if line.strip()
+            ]
+            smoke_robustness_summary = json.loads(smoke_robustness_summary_path.read_text())
 
         self.assertEqual(len(metrics_rows), 1)
         row = metrics_rows[0]
@@ -707,6 +715,35 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "sentiment_emotion_smoke_proxy_not_topconf_main_table",
             )
             self.assertIn("audio_missing_smoke", baseline_row["public_metrics"]["router_load_by_corruption_type"])
+        self.assertEqual(len(smoke_robustness_rows), 2 * (1 + len(payload["baselines"])))
+        ovha_robustness = [row for row in smoke_robustness_rows if row["model"] == "ovha_full"]
+        self.assertEqual({row["corruption_type"] for row in ovha_robustness}, {"clean_smoke", "audio_missing_smoke"})
+        corrupted = next(row for row in ovha_robustness if row["corruption_type"] == "audio_missing_smoke")
+        self.assertEqual(corrupted["artifact_type"], "public_smoke_robustness_row")
+        self.assertEqual(corrupted["evidence_scope"], "smoke_robustness_preview_only_not_topconf_gate")
+        self.assertTrue(corrupted["not_topconf_main_table"])
+        self.assertEqual(corrupted["missing_modalities"], ["audio"])
+        self.assertGreater(corrupted["corruption_strength"], 0.0)
+        self.assertEqual(set(corrupted["router_load_by_candidate"]), {"TLEO", "SPO", "LRIO", "CATO"})
+        self.assertEqual(set(corrupted["candidate_loss"]), {"TLEO", "SPO", "LRIO", "CATO"})
+        self.assertGreaterEqual(corrupted["rceo_reliability"], 0.0)
+        self.assertLessEqual(corrupted["rceo_reliability"], 1.0)
+        self.assertEqual(smoke_robustness_summary["artifact_type"], "public_smoke_robustness_summary")
+        self.assertEqual(
+            smoke_robustness_summary["evidence_scope"],
+            "smoke_robustness_preview_only_not_topconf_gate",
+        )
+        self.assertTrue(smoke_robustness_summary["not_topconf_main_table"])
+        self.assertEqual(smoke_robustness_summary["source_rows_path"], str(smoke_robustness_rows_path))
+        self.assertEqual(smoke_robustness_summary["full_model"], "ovha_full")
+        self.assertEqual(smoke_robustness_summary["baseline_model"], "cross_attention_transformer")
+        self.assertFalse(smoke_robustness_summary["required_stress_coverage"]["passed"])
+        self.assertIn("missing_audio", smoke_robustness_summary["required_stress_coverage"]["observed"])
+        self.assertGreaterEqual(smoke_robustness_summary["rceo_reliability_calibration"]["bin_count"], 1)
+        self.assertIn(
+            "not valid top-conference robustness evidence",
+            smoke_robustness_summary["evidence_limitations"],
+        )
 
     def test_public_smoke_runner_can_execute_all_config_seeds_for_dev_multiseed_evidence(self):
         if importlib.util.find_spec("torch") is None:
