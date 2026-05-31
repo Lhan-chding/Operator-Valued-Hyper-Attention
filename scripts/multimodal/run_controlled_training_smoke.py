@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 
 import torch
 
+from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
 from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
     CONTROLLED_FAMILY_ACTIVE_OPERATOR,
     CONTROLLED_MULTIMODAL_FAMILIES,
@@ -27,23 +28,29 @@ from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA, Mu
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a real controlled multimodal OVHA training smoke.")
+    parser.add_argument("--config", type=Path)
     parser.add_argument("--output-dim", type=int, default=2)
     parser.add_argument("--field-dim", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--query-count", type=int, default=4)
     parser.add_argument("--steps", type=int, default=12)
+    parser.add_argument("--steps-per-stage", type=int)
     parser.add_argument("--d-model", type=int, default=16)
     parser.add_argument("--memory-tokens", type=int, default=2)
     parser.add_argument("--learning-rate", type=float, default=1e-2)
-    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--seed", type=int)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--artifact-root", type=Path)
     args = parser.parse_args()
 
-    torch.manual_seed(args.seed)
+    config = MultimodalExperimentConfig.from_file(args.config) if args.config else None
+    if config is not None and config.task_type not in {"controlled_multimodal", "controlled_relation_operator"}:
+        raise ValueError("run_controlled_training_smoke.py only accepts controlled multimodal configs")
+    seed = int(args.seed if args.seed is not None else (config.seeds[0] if config is not None else 7))
+    torch.manual_seed(seed)
     device = torch.device(args.device)
     adapter = ControlledSyntheticMultimodalAdapter(
-        seed=args.seed + 4,
+        seed=seed + 4,
         output_dim=args.output_dim,
         field_dim=args.field_dim,
     )
@@ -58,58 +65,40 @@ def main() -> int:
     before = _evaluate_task_losses(model, adapter, args, device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
-    loss_history: list[dict[str, object]] = []
-    max_grad_norm = 0.0
-    model.train()
-    for step in range(args.steps):
-        family = CONTROLLED_MULTIMODAL_FAMILIES[step % len(CONTROLLED_MULTIMODAL_FAMILIES)]
-        batch = adapter.sample_batch(
-            family=family,
-            batch_size=args.batch_size,
-            query_count=args.query_count,
-            device=str(device),
-        )
-        optimizer.zero_grad(set_to_none=True)
-        output = model(batch)
-        losses = _controlled_losses(output, batch)
-        losses["total_loss"].backward()
-        grad_norm = _grad_l2_norm(model)
-        max_grad_norm = max(max_grad_norm, grad_norm)
-        optimizer.step()
-        loss_history.append(
-            {
-                "step": step + 1,
-                "family": family,
-                "task_loss": _as_float(losses["task_loss"]),
-                "router_ce_true_active_operator": _as_float(losses["router_ce_true_active_operator"]),
-                "candidate_oracle_mse": _as_float(losses["candidate_oracle_mse"]),
-                "total_loss": _as_float(losses["total_loss"]),
-                "grad_l2_norm": grad_norm,
-            }
-        )
+    train_result = _run_training(model, optimizer, adapter, args, device, config)
 
     after = _evaluate_task_losses(model, adapter, args, device)
     parameter_l2_delta = torch.linalg.vector_norm(_parameter_vector(model) - initial_parameters).item()
-    rows = _controlled_rows(model, adapter, args, device)
+    rows = _controlled_rows(
+        model,
+        adapter,
+        args,
+        device,
+        training_steps=int(train_result["optimizer_steps"]),
+        config_name=config.name if config is not None else None,
+    )
     evidence_artifacts = _write_evidence_artifacts(args.artifact_root, rows) if args.artifact_root else None
     mean_before = before["mean_task_loss"]
     mean_after = after["mean_task_loss"]
-    ok = bool(parameter_l2_delta > 0.0 and max_grad_norm > 0.0 and mean_after < mean_before)
+    ok = bool(parameter_l2_delta > 0.0 and train_result["max_grad_norm"] > 0.0 and mean_after < mean_before)
     payload = {
         "ok": ok,
         "mode": "trained_smoke",
         "training": {
+            "config_name": config.name if config is not None else None,
+            "validated_training_stages": list(config.training_stages) if config is not None else [],
             "optimizer": "AdamW",
-            "optimizer_steps": args.steps,
+            "optimizer_steps": train_result["optimizer_steps"],
             "learning_rate": args.learning_rate,
-            "seed": args.seed,
+            "seed": seed,
             "mean_task_loss_before": mean_before,
             "mean_task_loss_after": mean_after,
             "task_loss_by_family_before": before["task_loss_by_family"],
             "task_loss_by_family_after": after["task_loss_by_family"],
             "parameter_l2_delta": float(parameter_l2_delta),
-            "max_grad_norm": max_grad_norm,
-            "loss_history": loss_history,
+            "max_grad_norm": train_result["max_grad_norm"],
+            "stage_history": train_result["stage_history"],
+            "loss_history": train_result["loss_history"],
         },
         "rows": rows,
         "controlled_report": build_controlled_report(rows, evidence_artifacts=evidence_artifacts),
@@ -118,7 +107,147 @@ def main() -> int:
     return 0 if ok else 2
 
 
+def _run_training(
+    model: MultimodalOVHA,
+    optimizer: torch.optim.Optimizer,
+    adapter: ControlledSyntheticMultimodalAdapter,
+    args: argparse.Namespace,
+    device: torch.device,
+    config: MultimodalExperimentConfig | None,
+) -> dict[str, object]:
+    model.train()
+    if config is None:
+        return _run_flat_training(model, optimizer, adapter, args, device)
+    return _run_configured_stage_training(model, optimizer, adapter, args, device, config)
+
+
+def _run_flat_training(
+    model: MultimodalOVHA,
+    optimizer: torch.optim.Optimizer,
+    adapter: ControlledSyntheticMultimodalAdapter,
+    args: argparse.Namespace,
+    device: torch.device,
+) -> dict[str, object]:
+    loss_history: list[dict[str, object]] = []
+    max_grad_norm = 0.0
+    for step in range(args.steps):
+        family = CONTROLLED_MULTIMODAL_FAMILIES[step % len(CONTROLLED_MULTIMODAL_FAMILIES)]
+        batch = _sample(adapter, family, args, device)
+        optimizer.zero_grad(set_to_none=True)
+        output = model(batch)
+        components = _controlled_loss_components(output, batch)
+        total_loss = components["task_loss"] + 0.1 * components["router_ce_true_active_operator"] + 0.1 * components["candidate_oracle_mse"]
+        total_loss.backward()
+        grad_norm = _grad_l2_norm(model)
+        max_grad_norm = max(max_grad_norm, grad_norm)
+        optimizer.step()
+        loss_history.append(
+            {
+                "step": step + 1,
+                "family": family,
+                "task_loss": _as_float(components["task_loss"]),
+                "router_ce_true_active_operator": _as_float(components["router_ce_true_active_operator"]),
+                "candidate_oracle_mse": _as_float(components["candidate_oracle_mse"]),
+                "total_loss": _as_float(total_loss),
+                "grad_l2_norm": grad_norm,
+            }
+        )
+    return {
+        "optimizer_steps": int(args.steps),
+        "max_grad_norm": max_grad_norm,
+        "stage_history": [],
+        "loss_history": loss_history,
+    }
+
+
+def _run_configured_stage_training(
+    model: MultimodalOVHA,
+    optimizer: torch.optim.Optimizer,
+    adapter: ControlledSyntheticMultimodalAdapter,
+    args: argparse.Namespace,
+    device: torch.device,
+    config: MultimodalExperimentConfig,
+) -> dict[str, object]:
+    steps_per_stage = int(args.steps_per_stage or max(1, args.steps))
+    loss_history: list[dict[str, object]] = []
+    stage_history: list[dict[str, object]] = []
+    max_grad_norm = 0.0
+    optimizer_steps = 0
+    for stage in config.training_stages:
+        configured_losses = tuple((config.losses_by_stage or {}).get(stage, ()))
+        if stage == "T0":
+            stage_history.append(
+                {
+                    "stage": stage,
+                    "loss_names_configured": list(configured_losses),
+                    "loss_names_observed": ["cache_validation"],
+                    "optimizer_steps": 0,
+                    "policy": "controlled synthetic in-memory batch generation validated before optimizer stages",
+                }
+            )
+            continue
+        stage_rows: list[dict[str, object]] = []
+        for _ in range(steps_per_stage):
+            family = CONTROLLED_MULTIMODAL_FAMILIES[optimizer_steps % len(CONTROLLED_MULTIMODAL_FAMILIES)]
+            batch = _sample(adapter, family, args, device)
+            optimizer.zero_grad(set_to_none=True)
+            output = model(batch)
+            components = _controlled_loss_components(output, batch)
+            stage_components = {name: components[name] for name in configured_losses if name in components}
+            total_loss = _stage_total_loss(stage_components, output)
+            total_loss.backward()
+            grad_norm = _grad_l2_norm(model)
+            max_grad_norm = max(max_grad_norm, grad_norm)
+            optimizer.step()
+            optimizer_steps += 1
+            step_row = {
+                "step": optimizer_steps,
+                "stage": stage,
+                "family": family,
+                "loss_names_observed": sorted(stage_components),
+                "total_loss": _as_float(total_loss),
+                "grad_l2_norm": grad_norm,
+                **{name: _as_float(value) for name, value in stage_components.items()},
+            }
+            stage_rows.append(step_row)
+            loss_history.append(step_row)
+        stage_history.append(
+            {
+                "stage": stage,
+                "loss_names_configured": list(configured_losses),
+                "loss_names_observed": sorted({name for row in stage_rows for name in row["loss_names_observed"]}),
+                "optimizer_steps": len(stage_rows),
+                "mean_total_loss": float(sum(float(row["total_loss"]) for row in stage_rows) / max(len(stage_rows), 1)),
+                "families_seen": sorted({str(row["family"]) for row in stage_rows}),
+            }
+        )
+    return {
+        "optimizer_steps": optimizer_steps,
+        "max_grad_norm": max_grad_norm,
+        "stage_history": stage_history,
+        "loss_history": loss_history,
+    }
+
+
+def _stage_total_loss(stage_components: dict[str, torch.Tensor], output: MultimodalOVHAOutput) -> torch.Tensor:
+    if not stage_components:
+        return output.y_hat.sum() * 0.0
+    return torch.stack([value for value in stage_components.values()]).sum()
+
+
 def _controlled_losses(output: MultimodalOVHAOutput, batch: Any) -> dict[str, torch.Tensor]:
+    components = _controlled_loss_components(output, batch)
+    return {
+        "task_loss": components["task_loss"],
+        "router_ce_true_active_operator": components["router_ce_true_active_operator"],
+        "candidate_oracle_mse": components["candidate_oracle_mse"],
+        "total_loss": components["task_loss"]
+        + 0.1 * components["router_ce_true_active_operator"]
+        + 0.1 * components["candidate_oracle_mse"],
+    }
+
+
+def _controlled_loss_components(output: MultimodalOVHAOutput, batch: Any) -> dict[str, torch.Tensor]:
     active = batch.hidden["true_active_operator"]
     router_ce = torch.nn.functional.cross_entropy(
         output.router_logits.reshape(-1, output.router_logits.shape[-1]),
@@ -128,9 +257,15 @@ def _controlled_losses(output: MultimodalOVHAOutput, batch: Any) -> dict[str, to
     task_loss = _task_loss(output.y_hat, batch)
     return {
         "task_loss": task_loss,
+        "candidate_individual_loss": (output.candidate_values - batch.target_y.unsqueeze(-2)).square().mean(),
         "router_ce_true_active_operator": router_ce,
         "candidate_oracle_mse": candidate_oracle_mse,
-        "total_loss": task_loss + 0.1 * router_ce + 0.1 * candidate_oracle_mse,
+        "adapter_kl_true_params": _adapter_true_param_loss(output, batch),
+        "cato_alignment_ce": _candidate_oracle_loss(output, batch, "CATO"),
+        "lrio_rank_kl": _candidate_oracle_loss(output, batch, "LRIO"),
+        "spo_prototype_kl": _candidate_oracle_loss(output, batch, "SPO"),
+        "tleo_lengthscale_huber": _tleo_lengthscale_loss(output, batch),
+        "rceo_reliability_huber": _rceo_reliability_loss(output, batch),
     }
 
 
@@ -144,12 +279,7 @@ def _evaluate_task_losses(
     losses: dict[str, float] = {}
     with torch.no_grad():
         for family in CONTROLLED_MULTIMODAL_FAMILIES:
-            batch = adapter.sample_batch(
-                family=family,
-                batch_size=args.batch_size,
-                query_count=args.query_count,
-                device=str(device),
-            )
+            batch = _sample(adapter, family, args, device)
             output = model(batch)
             losses[family] = _as_float(_task_loss(output.y_hat, batch))
     return {
@@ -163,17 +293,15 @@ def _controlled_rows(
     adapter: ControlledSyntheticMultimodalAdapter,
     args: argparse.Namespace,
     device: torch.device,
+    *,
+    training_steps: int,
+    config_name: str | None = None,
 ) -> list[dict[str, object]]:
     model.eval()
     rows: list[dict[str, object]] = []
     with torch.no_grad():
         for family in CONTROLLED_MULTIMODAL_FAMILIES:
-            batch = adapter.sample_batch(
-                family=family,
-                batch_size=args.batch_size,
-                query_count=args.query_count,
-                device=str(device),
-            )
+            batch = _sample(adapter, family, args, device)
             output = model(batch)
             oracle_report = evaluate_oracle_matrix(
                 batch,
@@ -189,7 +317,9 @@ def _controlled_rows(
                 diagnostics=_row_diagnostics(output, batch),
             )
             row["training_mode"] = "trained_smoke"
-            row["training_steps"] = int(args.steps)
+            row["training_steps"] = int(training_steps)
+            if config_name is not None:
+                row["training_config_name"] = config_name
             row["learned_task_loss"] = _as_float(_task_loss(output.y_hat, batch))
             rows.append(row)
     return rows
@@ -212,6 +342,46 @@ def _task_loss(prediction: torch.Tensor, batch: Any) -> torch.Tensor:
     return ((prediction - batch.target_y).square() * mask).sum() / mask.sum().clamp_min(1.0)
 
 
+def _candidate_oracle_loss(output: MultimodalOVHAOutput, batch: Any, candidate_name: str) -> torch.Tensor:
+    index = ("TLEO", "SPO", "LRIO", "CATO").index(candidate_name)
+    return (output.candidate_values[..., index, :] - batch.hidden["true_candidate_values"][..., index, :]).square().mean()
+
+
+def _adapter_true_param_loss(output: MultimodalOVHAOutput, batch: Any) -> torch.Tensor:
+    hidden_params = (batch.hidden or {}).get("true_adapter_params", {}).get("params_by_operator", {})
+    detail = output.diagnostics.get("adapter_params_detail", {})
+    losses: list[torch.Tensor] = []
+    for operator, params in hidden_params.items():
+        operator_detail = detail.get(operator, {})
+        for key, true_value in params.items():
+            predicted = operator_detail.get(f"{key}_mean")
+            if predicted is None:
+                continue
+            true_mean = true_value.to(device=predicted.device, dtype=predicted.dtype).mean()
+            losses.append(torch.nn.functional.smooth_l1_loss(predicted, true_mean))
+    if not losses:
+        return output.y_hat.sum() * 0.0
+    return torch.stack(losses).sum()
+
+
+def _tleo_lengthscale_loss(output: MultimodalOVHAOutput, batch: Any) -> torch.Tensor:
+    predicted = output.diagnostics.get("adapter_params_detail", {}).get("TLEO", {}).get("lengthscale_mean")
+    true_lengthscale = (batch.hidden or {}).get("true_lengthscale")
+    if predicted is None or true_lengthscale is None:
+        return _candidate_oracle_loss(output, batch, "TLEO")
+    true_mean = true_lengthscale.to(device=predicted.device, dtype=predicted.dtype).mean()
+    return torch.nn.functional.smooth_l1_loss(predicted, true_mean)
+
+
+def _rceo_reliability_loss(output: MultimodalOVHAOutput, batch: Any) -> torch.Tensor:
+    true_reliability = (batch.hidden or {}).get("true_reliability")
+    if output.reliability_prior is None or true_reliability is None:
+        return output.y_hat.sum() * 0.0
+    predicted = output.reliability_prior.modality_reliability.mean(dim=-1, keepdim=True)
+    target = true_reliability.to(device=predicted.device, dtype=predicted.dtype).reshape(predicted.shape[0], -1).mean(dim=-1, keepdim=True)
+    return torch.nn.functional.smooth_l1_loss(predicted, target)
+
+
 def _router_accuracy(output: MultimodalOVHAOutput, batch: Any) -> float:
     predicted = output.router_weights.argmax(dim=-1)
     active = batch.hidden["true_active_operator"]
@@ -229,6 +399,20 @@ def _grad_l2_norm(model: MultimodalOVHA) -> float:
         if param.grad is not None:
             total += float(param.grad.detach().square().sum().cpu())
     return float(total**0.5)
+
+
+def _sample(
+    adapter: ControlledSyntheticMultimodalAdapter,
+    family: str,
+    args: argparse.Namespace,
+    device: torch.device,
+):
+    return adapter.sample_batch(
+        family=family,
+        batch_size=args.batch_size,
+        query_count=args.query_count,
+        device=str(device),
+    )
 
 
 def _write_evidence_artifacts(artifact_root: Path, rows: list[dict[str, object]]) -> dict[str, object]:
@@ -272,6 +456,8 @@ def _diagnostics_row(row: dict[str, object]) -> dict[str, object]:
     ):
         if key in row:
             diagnostics[key] = row[key]
+    if "training_config_name" in row:
+        diagnostics["training_config_name"] = row["training_config_name"]
     return diagnostics
 
 
