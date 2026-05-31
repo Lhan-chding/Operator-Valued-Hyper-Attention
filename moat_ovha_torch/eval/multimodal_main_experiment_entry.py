@@ -27,6 +27,7 @@ from moat_ovha_torch.eval.multimodal_public_gates import (
     evaluate_region_text_gate,
     evaluate_sentiment_gate,
 )
+from moat_ovha_torch.eval.multimodal_robustness import DEFAULT_REQUIRED_STRESS_TARGETS
 from moat_ovha_torch.eval.multimodal_statistics import validate_public_summary
 
 
@@ -975,6 +976,14 @@ def _validate_robustness_stress_coverage(label: str, coverage: Mapping[str, Any]
     if required is None or not required:
         errors.append(f"{label} gate robustness_summary required_stress_coverage must list required stress targets")
         return
+    canonical_required = set(DEFAULT_REQUIRED_STRESS_TARGETS)
+    missing_canonical = sorted(canonical_required - required)
+    if missing_canonical:
+        errors.append(
+            f"{label} gate robustness_summary required_stress_coverage "
+            "required missing canonical Step 6 stress targets: "
+            + ", ".join(missing_canonical)
+        )
     missing = sorted(required - observed)
     if missing:
         errors.append(
