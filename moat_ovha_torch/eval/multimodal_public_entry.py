@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import hashlib
 import math
+from pathlib import Path
 import re
 from typing import Any
 
@@ -35,7 +37,12 @@ class PublicEntryValidationReport:
     warnings: list[str]
 
 
-def validate_public_entry_requirements(task_type: str, controlled_report: dict[str, Any] | None) -> PublicEntryValidationReport:
+def validate_public_entry_requirements(
+    task_type: str,
+    controlled_report: dict[str, Any] | None,
+    *,
+    require_artifact_files: bool = False,
+) -> PublicEntryValidationReport:
     errors: list[str] = []
     warnings: list[str] = []
     if controlled_report is None:
@@ -63,7 +70,11 @@ def validate_public_entry_requirements(task_type: str, controlled_report: dict[s
             errors.append("controlled report go_no_go.reasons must be empty when public entry flags are true")
 
     _require_complete_controlled_report(controlled_report, errors)
-    _require_controlled_evidence_artifacts(controlled_report.get("evidence_artifacts"), errors)
+    _require_controlled_evidence_artifacts(
+        controlled_report.get("evidence_artifacts"),
+        errors,
+        require_artifact_files=require_artifact_files,
+    )
 
     gates = controlled_report.get("gate_table", {})
     if task_type in REGION_TEXT_TASK_TYPES:
@@ -151,7 +162,12 @@ def _require_complete_controlled_report(controlled_report: dict[str, Any], error
             errors.append(f"controlled report required gate did not pass: {gate_name}")
 
 
-def _require_controlled_evidence_artifacts(evidence: Any, errors: list[str]) -> None:
+def _require_controlled_evidence_artifacts(
+    evidence: Any,
+    errors: list[str],
+    *,
+    require_artifact_files: bool,
+) -> None:
     if not isinstance(evidence, Mapping):
         errors.append("controlled report evidence_artifacts is required")
         return
@@ -165,18 +181,42 @@ def _require_controlled_evidence_artifacts(evidence: Any, errors: list[str]) -> 
         if artifact is None:
             errors.append(f"controlled report evidence_artifacts missing artifact: {artifact_name}")
             continue
-        _validate_artifact_descriptor(artifact_name, artifact, errors)
+        _validate_artifact_descriptor(
+            artifact_name,
+            artifact,
+            errors,
+            require_artifact_files=require_artifact_files,
+        )
 
 
-def _validate_artifact_descriptor(artifact_name: str, artifact: Any, errors: list[str]) -> None:
+def _validate_artifact_descriptor(
+    artifact_name: str,
+    artifact: Any,
+    errors: list[str],
+    *,
+    require_artifact_files: bool,
+) -> None:
     if not isinstance(artifact, Mapping):
         errors.append(f"controlled report evidence_artifacts {artifact_name} must include path and sha256")
         return
-    if not _non_empty_text(artifact.get("path")):
+    path_value = artifact.get("path")
+    if not _non_empty_text(path_value):
         errors.append(f"controlled report evidence_artifacts {artifact_name}.path must be a non-empty string")
     sha256 = artifact.get("sha256")
     if not isinstance(sha256, str) or not _SHA256_HEX_RE.fullmatch(sha256):
         errors.append(f"controlled report evidence_artifacts {artifact_name}.sha256 must be lowercase SHA-256")
+        return
+    if not require_artifact_files or not _non_empty_text(path_value):
+        return
+    path = Path(path_value)
+    if not path.exists():
+        errors.append(f"controlled report evidence_artifacts {artifact_name}.path does not exist")
+        return
+    if not path.is_file():
+        errors.append(f"controlled report evidence_artifacts {artifact_name}.path must point to a file")
+        return
+    if _sha256(path) != sha256:
+        errors.append(f"controlled report evidence_artifacts {artifact_name}.sha256 does not match file content")
 
 
 def _require_family_oracle_evidence(family: str, row: dict[str, Any], errors: list[str]) -> None:
@@ -214,3 +254,11 @@ def _finite_float(value: Any) -> float | None:
 
 def _non_empty_text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

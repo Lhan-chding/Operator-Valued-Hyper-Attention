@@ -46,7 +46,11 @@ def main() -> int:
         )
         return 2
     controlled_report = json.loads(args.controlled_report.read_text()) if args.controlled_report else None
-    entry_report = validate_public_entry_requirements(config.task_type, controlled_report)
+    entry_report = validate_public_entry_requirements(
+        config.task_type,
+        controlled_report,
+        require_artifact_files=True,
+    )
     if not entry_report.ok:
         print(
             json.dumps(
