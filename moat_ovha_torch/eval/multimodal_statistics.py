@@ -363,6 +363,9 @@ def _validate_paired_delta_consistency(
         errors.append(f"{task}/{split} paired_tests metric_direction disagrees with main_table higher_is_better")
         return
     expected_deltas = _expected_paired_deltas(summary, task, split, full_model, baseline_model, higher_is_better)
+    observed_common_seed_count = _safe_int(values.get("common_seed_count"))
+    if observed_common_seed_count != len(expected_deltas):
+        errors.append(f"{task}/{split} paired_tests common_seed_count disagrees with per_seed_appendix")
     if not expected_deltas:
         return
     expected_mean = _mean(expected_deltas)
