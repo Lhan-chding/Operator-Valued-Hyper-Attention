@@ -424,6 +424,50 @@ hf download reeha-parkar/cmu-mosei-comp-seq \
   --local-dir-use-symlinks False
 ```
 
+CMU SDK 下载完成后，把 computational sequences 显式转成 `stage_cmu_sentiment_raw.py` 需要的 `.npy` 输入。下面的四个 `.csd` 文件名需要按你实际下载目录替换；不要让脚本自动猜特征文件：
+
+```bash
+TEXT_FEATURE_CSD=data/raw_multimodal/_downloads/cmu_sdk/cmu_mosei/replace_with_text_feature.csd
+AUDIO_FEATURE_CSD=data/raw_multimodal/_downloads/cmu_sdk/cmu_mosei/replace_with_audio_feature.csd
+VISUAL_FEATURE_CSD=data/raw_multimodal/_downloads/cmu_sdk/cmu_mosei/replace_with_visual_feature.csd
+LABELS_CSD=data/raw_multimodal/_downloads/cmu_sdk/cmu_mosei/replace_with_labels.csd
+
+python scripts/multimodal/extract_cmu_sdk_stage_inputs.py \
+  cmu_mosei \
+  data/raw_multimodal/_downloads/cmu_mosei_stage_inputs \
+  --splits data/raw_multimodal/_downloads/cmu_mosei_splits.json \
+  --text-sequence "$TEXT_FEATURE_CSD" \
+  --audio-sequence "$AUDIO_FEATURE_CSD" \
+  --visual-sequence "$VISUAL_FEATURE_CSD" \
+  --label-sequence "$LABELS_CSD" \
+  --temporal-policy mean \
+  --sentiment-column 0 \
+  --emotion-columns 1: \
+  --license-tag cmu-multimodal-sdk \
+  --preprocessing-version cmu-mosei-cmu-sdk-mean-v0.1
+```
+
+`--temporal-policy strict` 要求每个样本的 sequence shape 完全一致；`mean` 会做 utterance-level mean pooling，适合先打通 public acceptance / smoke，不应直接包装成最终顶会主表的强特征方案。
+
+然后把 stage inputs 写成本仓库 raw manifest：
+
+```bash
+python scripts/multimodal/stage_cmu_sentiment_raw.py \
+  cmu_mosei \
+  data/raw_multimodal/cmu_mosei \
+  --splits data/raw_multimodal/_downloads/cmu_mosei_stage_inputs/cmu_mosei_splits.json \
+  --text-features data/raw_multimodal/_downloads/cmu_mosei_stage_inputs/cmu_mosei_text_features.npy \
+  --audio-features data/raw_multimodal/_downloads/cmu_mosei_stage_inputs/cmu_mosei_audio_features.npy \
+  --visual-features data/raw_multimodal/_downloads/cmu_mosei_stage_inputs/cmu_mosei_visual_features.npy \
+  --sentiment-labels data/raw_multimodal/_downloads/cmu_mosei_stage_inputs/cmu_mosei_sentiment.npy \
+  --emotion-labels data/raw_multimodal/_downloads/cmu_mosei_stage_inputs/cmu_mosei_emotion.npy \
+  --feature-version text=cmu-mosei-cmu-sdk-mean-v0.1:text \
+  --feature-version audio=cmu-mosei-cmu-sdk-mean-v0.1:audio \
+  --feature-version vision=cmu-mosei-cmu-sdk-mean-v0.1:vision \
+  --license-tag cmu-multimodal-sdk \
+  --preprocessing-version cmu-mosei-cmu-sdk-mean-v0.1
+```
+
 ### 4.2 MELD
 
 MELD 官方页面提供两个下载入口，其中一个就是 Hugging Face `declare-lab/MELD`。
