@@ -112,6 +112,44 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("annotations/phrase_regions.json", "\n".join(payload["errors"]))
         self.assertNotIn("Traceback", result.stderr)
 
+    def test_build_cache_cli_rejects_partial_cache_initialization_when_writer_is_unimplemented(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_root = tmp_path / "raw"
+            cache_root = tmp_path / "cache"
+            for relative in (
+                "annotations/instances.json",
+                "annotations/refs.json",
+                "features/text_features.npy",
+                "features/region_features.npy",
+                "splits.json",
+            ):
+                path = raw_root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture\n")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "refcoco",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("partial cache initialization is forbidden", payload["policy"])
+        self.assertIn("RefCOCO cache writing requires", "\n".join(payload["errors"]))
+        self.assertFalse((cache_root / "refcoco" / "v0.1" / "data_card.json").exists())
+        self.assertNotIn("Traceback", result.stderr)
+
     def test_controlled_true_adapter_param_contract_matches_v1_protocol(self):
         from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
             CONTROLLED_FAMILY_ACTIVE_OPERATOR,
