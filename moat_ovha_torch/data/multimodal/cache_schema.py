@@ -381,6 +381,7 @@ def _validate_split_manifest_source_lists(payload: dict[str, Any], errors: list[
             errors.append("splits.json split names must be non-empty strings")
             continue
         if not isinstance(expected, list):
+            errors.append(f"splits.json {split} must be a source_id list")
             continue
         invalid_source_ids = [source_id for source_id in expected if not isinstance(source_id, str) or not source_id]
         if invalid_source_ids:
