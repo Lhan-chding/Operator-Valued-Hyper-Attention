@@ -1673,6 +1673,7 @@ def _write_minimal_sentiment_cache(
             record = {
                 "source_id": source_id,
                 "split": split,
+                "original_split": split,
                 "raw_ref": f"raw://{source_id}",
                 "license_tag": "test-license",
             }
@@ -1729,6 +1730,7 @@ def _write_sample_records(root: Path, split: str, source_ids: list[str], *, mode
         record = {
             "source_id": "unlisted-source" if mode == "source_id_mismatch" else source_id,
             "split": "val" if mode == "split_mismatch" else split,
+            "original_split": split,
             "raw_ref": f"raw://{source_id}",
             "license_tag": "test-license",
         }
