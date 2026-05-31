@@ -207,6 +207,7 @@ class MultimodalControlledReportingTests(unittest.TestCase):
                 "score": 0.80,
                 "rceo_reliability": 0.90,
                 "router_load_by_candidate": {"CATO": 0.60, "SPO": 0.10, "TLEO": 0.20, "LRIO": 0.10},
+                "candidate_loss": {"CATO": 0.10, "SPO": 0.24, "TLEO": 0.20, "LRIO": 0.18},
             },
             {
                 "model": "ovha_full",
@@ -215,6 +216,7 @@ class MultimodalControlledReportingTests(unittest.TestCase):
                 "score": 0.70,
                 "rceo_reliability": 0.65,
                 "router_load_by_candidate": {"CATO": 0.40, "SPO": 0.25, "TLEO": 0.25, "LRIO": 0.10},
+                "candidate_loss": {"CATO": 0.22, "SPO": 0.18, "TLEO": 0.21, "LRIO": 0.19},
             },
             {
                 "model": "cross_attention_transformer",
@@ -271,6 +273,8 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertTrue(summary["rceo_reliability_monotonic"])
         self.assertEqual(summary["rceo_reliability_shift"], -0.25)
         self.assertLess(summary["operator_load_shift"]["CATO"], 0.0)
+        self.assertEqual(summary["candidate_loss_shift"]["CATO"], 0.12)
+        self.assertEqual(summary["candidate_loss_shift"]["SPO"], -0.06)
         self.assertIn("auc_over_corruption_strength", summary)
         self.assertTrue(summary["required_ablation_degradation"]["passed"], summary["required_ablation_degradation"]["reasons"])
 
