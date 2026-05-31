@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import hashlib
 import json
+from pathlib import Path
 import re
 from typing import Any
 
@@ -162,15 +164,38 @@ def _validate_artifact_descriptor(label: str, artifact_name: str, artifact: Any,
     if not isinstance(artifact, Mapping):
         errors.append(f"{label} gate evidence_artifacts {artifact_name} must include path and sha256")
         return
-    if not _non_empty_text(artifact.get("path")):
+    path_value = artifact.get("path")
+    if not _non_empty_text(path_value):
         errors.append(f"{label} gate evidence_artifacts {artifact_name}.path must be a non-empty string")
+        artifact_path = None
+    else:
+        artifact_path = Path(path_value)
     sha256 = artifact.get("sha256")
     if not isinstance(sha256, str) or not _SHA256_HEX_RE.fullmatch(sha256):
         errors.append(f"{label} gate evidence_artifacts {artifact_name}.sha256 must be lowercase SHA-256")
+        return
+    if artifact_path is None:
+        return
+    if not artifact_path.exists():
+        errors.append(f"{label} gate evidence_artifacts {artifact_name}.path does not exist")
+        return
+    if not artifact_path.is_file():
+        errors.append(f"{label} gate evidence_artifacts {artifact_name}.path must point to a file")
+        return
+    if _sha256(artifact_path) != sha256:
+        errors.append(f"{label} gate evidence_artifacts {artifact_name}.sha256 does not match file content")
 
 
 def _non_empty_text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _validate_all_cache_targets(

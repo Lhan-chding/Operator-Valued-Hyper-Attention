@@ -477,8 +477,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
 
             report = validate_topconf_main_experiment_entry(
                 controlled_report=_complete_controlled_public_entry_report(),
-                region_gate_report=_passing_region_text_public_gate_report(),
-                sentiment_gate_report=_passing_sentiment_public_gate_report(),
+                region_gate_report=_passing_region_text_public_gate_report(tmp_path / "artifacts"),
+                sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
                 cache_targets={
                     "refcoco": CacheValidationTarget(
                         layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
@@ -504,14 +504,15 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp:
-            cache_root = Path(tmp) / "cache"
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
             _write_valid_refcoco_public_cache(cache_root)
             _write_valid_cmu_mosei_public_cache(cache_root)
 
             report = validate_topconf_main_experiment_entry(
                 controlled_report=_complete_controlled_public_entry_report(),
-                region_gate_report=_passing_region_text_public_gate_report(),
-                sentiment_gate_report=_passing_sentiment_public_gate_report(),
+                region_gate_report=_passing_region_text_public_gate_report(tmp_path / "artifacts"),
+                sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
                 cache_targets={
                     "refcoco": CacheValidationTarget(
                         layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
@@ -1166,7 +1167,7 @@ def _complete_controlled_family_row(*, rceo: bool = False) -> dict[str, object]:
     return row
 
 
-def _passing_region_text_public_gate_report() -> dict[str, object]:
+def _passing_region_text_public_gate_report(artifact_root: Path | None = None) -> dict[str, object]:
     return {
         "name": "region_text_public",
         "passed": True,
@@ -1184,11 +1185,11 @@ def _passing_region_text_public_gate_report() -> dict[str, object]:
             "rceo_reliability_calibrated": {"passed": True},
         },
         "reasons": [],
-        "evidence_artifacts": _gate_evidence_artifacts("phrase_region_grounding"),
+        "evidence_artifacts": _gate_evidence_artifacts("phrase_region_grounding", artifact_root),
     }
 
 
-def _passing_sentiment_public_gate_report() -> dict[str, object]:
+def _passing_sentiment_public_gate_report(artifact_root: Path | None = None) -> dict[str, object]:
     return {
         "name": "sentiment_emotion_public",
         "passed": True,
@@ -1208,11 +1209,32 @@ def _passing_sentiment_public_gate_report() -> dict[str, object]:
             "rceo_reliability_calibrated": {"passed": True},
         },
         "reasons": [],
-        "evidence_artifacts": _gate_evidence_artifacts("sentiment_emotion"),
+        "evidence_artifacts": _gate_evidence_artifacts("sentiment_emotion", artifact_root),
     }
 
 
-def _gate_evidence_artifacts(task: str) -> dict[str, object]:
+def _gate_evidence_artifacts(task: str, artifact_root: Path | None = None) -> dict[str, object]:
+    if artifact_root is not None:
+        from moat_ovha_torch.data.multimodal.cache_schema import file_sha256
+
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        statistics = artifact_root / f"{task}_statistics_summary.json"
+        diagnostics = artifact_root / f"{task}_diagnostics.jsonl"
+        robustness = artifact_root / f"{task}_robustness_summary.json"
+        raw_metrics = artifact_root / f"{task}_raw_metrics_seed1.jsonl"
+        statistics.write_text(json.dumps({"task": task, "artifact": "statistics_summary"}, sort_keys=True) + "\n")
+        diagnostics.write_text(json.dumps({"task": task, "artifact": "diagnostics"}) + "\n")
+        robustness.write_text(json.dumps({"task": task, "artifact": "robustness_summary"}, sort_keys=True) + "\n")
+        raw_metrics.write_text(json.dumps({"task": task, "seed": 1, "score": 1.0}, sort_keys=True) + "\n")
+        return {
+            "task": task,
+            "split": "test",
+            "generated_by": "scripts/multimodal/evaluate_public_gates.py",
+            "statistics_summary": {"path": str(statistics), "sha256": file_sha256(statistics)},
+            "diagnostics": {"path": str(diagnostics), "sha256": file_sha256(diagnostics)},
+            "robustness_summary": {"path": str(robustness), "sha256": file_sha256(robustness)},
+            "raw_metrics": [{"path": str(raw_metrics), "sha256": file_sha256(raw_metrics)}],
+        }
     return {
         "task": task,
         "split": "test",
