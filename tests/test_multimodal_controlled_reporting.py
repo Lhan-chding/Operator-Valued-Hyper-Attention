@@ -503,6 +503,37 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("missing robustness stress family: audio_quality", joined)
         self.assertIn("missing robustness stress family: hard_negative_mismatch", joined)
 
+    def test_robustness_summary_requires_each_plan_stress_transform(self):
+        from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+        rows = [
+            _stress_row("missing_modality", missing_modalities=["text"]),
+            _stress_row("missing_modality", missing_modalities=["vision"]),
+            _stress_row("missing_modality", missing_modalities=["audio"]),
+            _stress_row("image_blur"),
+            _stress_row("audio_noise"),
+            _stress_row("text_token_mask"),
+            _stress_row("hard_negative_mismatch", mismatch_source_id="other-sample"),
+            _stress_row("temporal_shift", temporal_shift_sec=1.2),
+        ]
+
+        summary = summarize_robustness_rows(
+            rows,
+            full_model="ovha_full",
+            baseline_model="cross_attention_transformer",
+            temporal_data=True,
+        )
+
+        self.assertFalse(summary["required_stress_coverage"]["passed"])
+        joined = "\n".join(summary["required_stress_coverage"]["reasons"])
+        self.assertIn("missing robustness stress target: image_crop", joined)
+        self.assertIn("missing robustness stress target: image_occlusion", joined)
+        self.assertIn("missing robustness stress target: audio_masking", joined)
+        self.assertIn("missing robustness stress target: text_paraphrase", joined)
+        self.assertIn("missing robustness stress target: hard_negative_caption_mismatch", joined)
+        self.assertIn("missing robustness stress target: hard_negative_region_mismatch", joined)
+        self.assertIn("missing robustness stress target: hard_negative_audio_mismatch", joined)
+
     def test_robustness_summary_accepts_plan_stress_metadata_coverage(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 
