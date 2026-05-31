@@ -220,6 +220,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
             "baseline_names": ["text_only", "cross_attention_transformer"],
             "eval_episode_count": 16,
+            "require_public_alignment_labels": True,
             "losses_by_stage": {
                 "T0": ["cache_validation"],
                 "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss"],
@@ -265,6 +266,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
             "baseline_names": list(baseline_names_for_task("phrase_region_grounding")) + ["GroundingDINO"],
             "eval_episode_count": 16,
+            "require_public_alignment_labels": True,
             "losses_by_stage": {
                 "T0": ["cache_validation"],
                 "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss"],

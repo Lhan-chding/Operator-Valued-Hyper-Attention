@@ -111,6 +111,7 @@ class MultimodalExperimentConfig:
         if self.robustness_corruptions:
             _validate_robustness_corruptions(self.robustness_corruptions)
         _validate_embedded_training_protocol(self)
+        _validate_public_alignment_label_contract(self)
         missing = missing_required_baselines(self.task_type, self.baseline_names)
         if missing:
             raise ValueError(f"missing required same-feature baselines: {', '.join(missing)}")
@@ -148,6 +149,14 @@ def _validate_embedded_training_protocol(config: MultimodalExperimentConfig) -> 
     )
     if not report.ok:
         raise ValueError("; ".join(report.errors))
+
+
+def _validate_public_alignment_label_contract(config: MultimodalExperimentConfig) -> None:
+    if config.robustness_corruptions or config.task_type not in REGION_TEXT_TASK_TYPES:
+        return
+    t5_losses = tuple((config.losses_by_stage or {}).get("T5", ()))
+    if "public_alignment_ce" in t5_losses and not config.require_public_alignment_labels:
+        raise ValueError("region-text public_alignment_ce requires require_public_alignment_labels=true")
 
 
 def _validate_robustness_corruptions(robustness_corruptions: tuple[str, ...]) -> None:
