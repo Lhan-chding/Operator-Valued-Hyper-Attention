@@ -34,6 +34,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "scripts" / "multimodal" / "extract_cmu_sdk_stage_inputs.py",
             ROOT / "scripts" / "multimodal" / "inspect_cmu_sdk_sequences.py",
             ROOT / "scripts" / "multimodal" / "write_cmu_sdk_splits.py",
+            ROOT / "scripts" / "multimodal" / "check_public_data_readiness.py",
         ]
         for path in expected:
             with self.subTest(path=path):
@@ -1110,6 +1111,112 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(payload["split_counts"], {"test": 1, "train": 1, "val": 1})
         self.assertTrue(payload["sequence_validation"]["ok"])
         self.assertEqual(splits, {"test": ["mosei-test-1"], "train": ["mosei-train-1"], "val": ["mosei-val-1"]})
+
+    def test_public_data_readiness_cli_reports_missing_steps_without_blocking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "check_public_data_readiness.py"),
+                    "--datasets",
+                    "refcoco",
+                    "cmu_mosei",
+                    "--download-root",
+                    str(tmp_path / "downloads"),
+                    "--raw-root-base",
+                    str(tmp_path / "raw"),
+                    "--cache-root",
+                    str(tmp_path / "cache"),
+                    "--controlled-report",
+                    str(tmp_path / "controlled_report.json"),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        joined_commands = "\n".join(payload["next_commands"])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["mode"], "public_data_readiness")
+        self.assertFalse(payload["datasets"]["refcoco"]["ok"])
+        self.assertFalse(payload["datasets"]["cmu_mosei"]["ok"])
+        self.assertIn("scripts/multimodal/bootstrap_public_downloads.py", joined_commands)
+        self.assertIn("scripts/multimodal/build_refcoco_stage_records.py", joined_commands)
+        self.assertIn("scripts/multimodal/write_cmu_sdk_splits.py", joined_commands)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_public_data_readiness_cli_points_valid_caches_to_acceptance(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_root_base = tmp_path / "raw"
+            cache_root = tmp_path / "cache"
+            controlled_report = tmp_path / "controlled_report.json"
+            controlled_report.write_text(json.dumps({"ok": True}, sort_keys=True) + "\n")
+            _write_refcoco_raw_fixture(raw_root_base / "refcoco")
+            _write_cmu_mosei_raw_fixture(raw_root_base / "cmu_mosei")
+            for dataset_name in ("refcoco", "cmu_mosei"):
+                build_result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                        dataset_name,
+                        str(raw_root_base / dataset_name),
+                        str(cache_root),
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(build_result.returncode, 0, build_result.stdout + build_result.stderr)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "check_public_data_readiness.py"),
+                    "--datasets",
+                    "refcoco",
+                    "cmu_mosei",
+                    "--download-root",
+                    str(tmp_path / "downloads"),
+                    "--raw-root-base",
+                    str(raw_root_base),
+                    "--cache-root",
+                    str(cache_root),
+                    "--controlled-report",
+                    str(controlled_report),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            ref_validation = validate_cache_layout(
+                MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                splits=("train", "val", "test"),
+            )
+            cmu_validation = validate_cache_layout(
+                MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                splits=("train", "val", "test"),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(ref_validation.ok, ref_validation.errors)
+        self.assertTrue(cmu_validation.ok, cmu_validation.errors)
+        payload = json.loads(result.stdout)
+        joined_commands = "\n".join(payload["next_commands"])
+        self.assertTrue(payload["ok"], payload)
+        self.assertTrue(payload["datasets"]["refcoco"]["phases"]["cache"]["ok"])
+        self.assertTrue(payload["datasets"]["cmu_mosei"]["phases"]["cache"]["ok"])
+        self.assertIn("scripts/multimodal/accept_public_data.py", joined_commands)
+        self.assertIn("configs/multimodal_refcoco_public_smoke.json", joined_commands)
+        self.assertIn("configs/multimodal_cmu_mosei_public_smoke.json", joined_commands)
 
     def test_build_cache_cli_writes_valid_meld_cache_from_dialogue_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
