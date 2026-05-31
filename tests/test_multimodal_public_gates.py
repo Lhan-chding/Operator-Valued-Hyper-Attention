@@ -126,6 +126,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
                 "required_stress_coverage": {"passed": True, "reasons": []},
                 "required_ablation_degradation": {"passed": True, "reasons": []},
+                "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
             },
             task="sentiment_emotion",
             split="test",
@@ -1061,6 +1062,7 @@ def _passing_sentiment_robustness() -> dict[str, object]:
         "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
         "required_stress_coverage": {"passed": True, "reasons": []},
         "required_ablation_degradation": {"passed": True, "reasons": []},
+        "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
     }
 
 

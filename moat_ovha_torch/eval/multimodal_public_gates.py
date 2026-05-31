@@ -374,19 +374,22 @@ def _robustness_passes(summary: dict[str, Any]) -> dict[str, Any]:
     ablations_pass = bool(ablations.get("passed"))
     coverage = summary.get("required_stress_coverage", {})
     coverage_pass = bool(coverage.get("passed"))
+    operator_load_shift_reasons = _operator_load_shift_reasons(summary.get("operator_load_shift"))
     passed = (
         bool(summary.get("full_drop_less_than_baseline"))
         and bool(summary.get("rceo_reliability_monotonic"))
         and ablations_pass
         and coverage_pass
+        and not operator_load_shift_reasons
     )
     ablation_reasons = "; ".join(str(reason) for reason in ablations.get("reasons", ()) if reason)
     coverage_reasons = "; ".join(str(reason) for reason in coverage.get("reasons", ()) if reason)
     reason_parts = [
-        "robustness summary does not show lower drop, monotonic RCEO reliability, and required ablation degradation",
+        "robustness summary does not show lower drop, monotonic RCEO reliability, required ablation degradation, and coherent operator load shift",
     ]
     if not coverage_pass:
         reason_parts.append("robustness stress family coverage missing")
+    reason_parts.extend(operator_load_shift_reasons)
     if ablation_reasons:
         reason_parts.append(ablation_reasons)
     if coverage_reasons:
@@ -395,6 +398,26 @@ def _robustness_passes(summary: dict[str, Any]) -> dict[str, Any]:
         "passed": passed,
         "reason": "; ".join(reason_parts) if not passed else "",
     }
+
+
+def _operator_load_shift_reasons(value: Any, *, minimum_abs_shift: float = 0.05) -> list[str]:
+    if not isinstance(value, dict) or not value:
+        return ["robustness operator load shift missing"]
+    shifts: list[float] = []
+    for candidate, raw_shift in value.items():
+        if _is_empty_reporting_value(candidate):
+            return ["robustness operator load shift candidate names must be non-empty"]
+        shift = _finite_float(raw_shift)
+        if shift is None:
+            return ["robustness operator load shift values must be finite numbers"]
+        shifts.append(shift)
+    has_decrease = any(shift <= -minimum_abs_shift for shift in shifts)
+    has_increase = any(shift >= minimum_abs_shift for shift in shifts)
+    if not (has_decrease and has_increase):
+        return [
+            "robustness operator load shift must include both decreased and increased finite candidate loads",
+        ]
+    return []
 
 
 def _model_mean(summary: dict[str, Any], task: str, split: str, model: str) -> float | None:
