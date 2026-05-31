@@ -205,7 +205,8 @@ def _run_configured_stage_training(
             )
             batch = _sample(adapter, family, args, device)
             optimizer.zero_grad(set_to_none=True)
-            output = model(batch)
+            router_weight_override = _router_weight_override_for_stage(stage, batch)
+            output = model(batch, router_weight_override=router_weight_override)
             components = _controlled_loss_components(output, batch)
             stage_components = {name: components[name] for name in configured_losses if name in components}
             total_loss = _stage_total_loss(stage_components, output)
@@ -219,6 +220,7 @@ def _run_configured_stage_training(
                 "stage": stage,
                 "family": family,
                 "loss_names_observed": sorted(stage_components),
+                "route_override_mode": _route_override_mode(router_weight_override),
                 "total_loss": _as_float(total_loss),
                 "grad_l2_norm": grad_norm,
                 **{name: _as_float(value) for name, value in stage_components.items()},
@@ -232,6 +234,7 @@ def _run_configured_stage_training(
                 "loss_names_observed": sorted({name for row in stage_rows for name in row["loss_names_observed"]}),
                 "optimizer_steps": len(stage_rows),
                 "family_schedule_scope": _family_schedule_scope(stage),
+                "route_override_mode": _stage_route_override_mode(stage),
                 "mean_total_loss": float(sum(float(row["total_loss"]) for row in stage_rows) / max(len(stage_rows), 1)),
                 "families_seen": sorted({str(row["family"]) for row in stage_rows}),
             }
@@ -272,6 +275,22 @@ def _family_schedule_scope(stage: str) -> str:
     if stage == "T1":
         return "single_candidate_specialist_warmup"
     return "full_controlled_family_coverage"
+
+
+def _router_weight_override_for_stage(stage: str, batch: Any) -> torch.Tensor | None:
+    if stage != "T2":
+        return None
+    hidden = batch.hidden or {}
+    override = hidden.get("true_router_weights")
+    return override if isinstance(override, torch.Tensor) else None
+
+
+def _route_override_mode(router_weight_override: torch.Tensor | None) -> str:
+    return "true_router_weights" if router_weight_override is not None else "learned_router"
+
+
+def _stage_route_override_mode(stage: str) -> str:
+    return "true_router_weights" if stage == "T2" else "learned_router"
 
 
 def _controlled_losses(output: MultimodalOVHAOutput, batch: Any) -> dict[str, torch.Tensor]:

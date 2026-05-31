@@ -55,7 +55,12 @@ class MultimodalOVHA(nn.Module):
         self.joint_router_adapter = MultimodalJointRouterAdapter(d_model=d_model, candidate_names=candidate_names)
         self.candidate_primitives = make_candidate_bank(d_model=d_model, output_dim=output_dim)
 
-    def forward(self, batch: MultimodalEpisodeBatch) -> MultimodalOVHAOutput:
+    def forward(
+        self,
+        batch: MultimodalEpisodeBatch,
+        *,
+        router_weight_override: torch.Tensor | None = None,
+    ) -> MultimodalOVHAOutput:
         batch.model_inputs()
         evidence = self.evidence_encoder(batch)
         memory_bank = self.memory_encoder(evidence.global_features)
@@ -74,7 +79,8 @@ class MultimodalOVHA(nn.Module):
         batch_size, q_count = batch.target_y.shape[0], batch.target_y.shape[1]
         assert_stackable(candidate_outputs, batch_size, q_count, self.output_dim)
         candidate_values = stack_candidate_values(candidate_outputs)
-        y_hat = (router_output.weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
+        router_weights = _effective_router_weights(router_output.weights, router_weight_override)
+        y_hat = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
         candidate_losses = _candidate_losses(candidate_outputs, batch.target_y, batch.target_mask)
         diagnostics = {
             **router_output.diagnostics,
@@ -89,11 +95,15 @@ class MultimodalOVHA(nn.Module):
             "candidate_diagnostics": _candidate_diagnostics(candidate_outputs, candidate_losses, reliability),
             "stackability_passed": True,
             "reliability": reliability.diagnostics if reliability is not None else {},
+            "router_override": {
+                "applied": router_weight_override is not None,
+                "source": "training_only_supplied_weights" if router_weight_override is not None else "learned_router",
+            },
         }
         return MultimodalOVHAOutput(
             y_hat=y_hat,
             candidate_values=candidate_values,
-            router_weights=router_output.weights,
+            router_weights=router_weights,
             router_logits=router_output.logits,
             router_logit_parts=router_output.logit_parts,
             candidate_outputs=candidate_outputs,
@@ -101,6 +111,15 @@ class MultimodalOVHA(nn.Module):
             diagnostics=diagnostics,
             evidence=evidence,
         )
+
+
+def _effective_router_weights(
+    learned_weights: torch.Tensor,
+    router_weight_override: torch.Tensor | None,
+) -> torch.Tensor:
+    if router_weight_override is None:
+        return learned_weights
+    return router_weight_override.to(device=learned_weights.device, dtype=learned_weights.dtype)
 
 
 def _candidate_losses(
