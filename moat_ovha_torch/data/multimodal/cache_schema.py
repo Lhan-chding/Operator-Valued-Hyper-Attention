@@ -239,6 +239,14 @@ def _validate_checksum_coverage(
             continue
         if relative not in checksums:
             errors.append(f"checksums.json missing hash for required artifact: {relative}")
+    for path in sorted(layout.root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = str(path.relative_to(layout.root))
+        if relative == CHECKSUM_MANIFEST_NAME:
+            continue
+        if relative not in checksums:
+            errors.append(f"checksums.json missing hash for cache artifact: {relative}")
 
 
 def _checksum_artifact_path(layout: MultimodalCacheLayout, relative: str, errors: list[str]) -> Path | None:
