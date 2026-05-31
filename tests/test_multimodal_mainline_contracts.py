@@ -18,13 +18,40 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "base.py",
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "controlled_synthetic.py",
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "refcoco.py",
+            ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "flickr30k_entities.py",
+            ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "visual_genome.py",
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "cmu_mosei.py",
+            ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "meld.py",
             ROOT / "moat_ovha_torch" / "models" / "multimodal" / "ovha_multimodal.py",
             ROOT / "scripts" / "multimodal" / "validate_cache.py",
         ]
         for path in expected:
             with self.subTest(path=path):
                 self.assertTrue(path.exists(), path)
+
+    def test_step1_public_dataset_adapters_export_and_fail_fast_on_missing_raw(self):
+        from moat_ovha_torch.data.multimodal.adapters import (
+            CMUMOSEIAdapter,
+            Flickr30kEntitiesAdapter,
+            MELDAdapter,
+            MissingMultimodalDataError,
+            RefCOCOAdapter,
+            VisualGenomeAdapter,
+        )
+
+        adapters = (
+            RefCOCOAdapter(),
+            Flickr30kEntitiesAdapter(),
+            VisualGenomeAdapter(),
+            CMUMOSEIAdapter(),
+            MELDAdapter(),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_root = Path(tmp)
+            for adapter in adapters:
+                with self.subTest(adapter=adapter.name):
+                    with self.assertRaises(MissingMultimodalDataError):
+                        adapter.discover_raw(raw_root)
 
     def test_pde_feasibility_note_uses_non_main_claim_framing(self):
         note = (ROOT / "reports" / "pdebench_architecture_feasibility_note.md").read_text()
