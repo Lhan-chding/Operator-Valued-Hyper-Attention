@@ -199,6 +199,45 @@ python scripts/multimodal/build_cache.py \
 }
 ```
 
+RefCOCO / phrase-region grounding 同理。拿到按同一 sample 顺序排列的 text / region frozen features 和 phrase-region records 后，先 stage raw manifest：
+
+```bash
+python scripts/multimodal/stage_refcoco_raw.py \
+  refcoco \
+  data/raw_multimodal/refcoco \
+  --splits data/raw_multimodal/_downloads/refcoco_splits.json \
+  --records data/raw_multimodal/_downloads/refcoco_phrase_region_records.json \
+  --text-features data/raw_multimodal/_downloads/refcoco_text_features.npy \
+  --region-features data/raw_multimodal/_downloads/refcoco_region_features.npy \
+  --license-tag refcoco-coco2014 \
+  --preprocessing-version refcoco-frozen-features-v0.1
+
+python scripts/multimodal/build_cache.py \
+  refcoco \
+  data/raw_multimodal/refcoco \
+  data/multimodal_cache \
+  --version v0.1
+```
+
+`--records` 至少需要这些字段：
+
+```json
+{
+  "records": [
+    {
+      "source_id": "image123::caption0::phrase4",
+      "image_id": "image123",
+      "caption_id": "caption0",
+      "phrase_span": {"start": 3, "end": 6},
+      "region_box": [0.1, 0.2, 0.7, 0.9],
+      "target_region_index": 1,
+      "candidate_region_source": "detector-or-annotation-version",
+      "box_coordinate_convention": "xyxy_normalized"
+    }
+  ]
+}
+```
+
 ## 3. Region-text grounding 数据
 
 ### 3.1 RefCOCO / RefCOCO+ / RefCOCOg
