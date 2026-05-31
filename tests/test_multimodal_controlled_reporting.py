@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -850,6 +851,67 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertTrue(all("active_operator" not in row for row in diagnostics_rows))
         self.assertIn("oracle_matrix", diagnostics_rows[0])
         self.assertIn("stackability_passed", diagnostics_rows[0])
+
+    def test_controlled_training_smoke_runs_real_optimizer_steps_and_artifacts(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for controlled training smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact_root = Path(tmp) / "controlled_training_artifacts"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "run_controlled_training_smoke.py"),
+                    "--steps",
+                    "6",
+                    "--batch-size",
+                    "2",
+                    "--query-count",
+                    "4",
+                    "--d-model",
+                    "16",
+                    "--artifact-root",
+                    str(artifact_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            artifacts = payload["controlled_report"]["evidence_artifacts"]
+            controlled_rows_path = Path(artifacts["controlled_rows"]["path"])
+            diagnostics_report_path = Path(artifacts["diagnostics_report"]["path"])
+            controlled_rows = [
+                json.loads(line)
+                for line in controlled_rows_path.read_text().splitlines()
+                if line.strip()
+            ]
+            diagnostics_rows = [
+                json.loads(line)
+                for line in diagnostics_report_path.read_text().splitlines()
+                if line.strip()
+            ]
+
+        training = payload["training"]
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "trained_smoke")
+        self.assertEqual(training["optimizer_steps"], 6)
+        self.assertEqual(len(training["loss_history"]), 6)
+        self.assertGreater(training["parameter_l2_delta"], 0.0)
+        self.assertGreater(training["max_grad_norm"], 0.0)
+        self.assertLess(training["mean_task_loss_after"], training["mean_task_loss_before"])
+        self.assertEqual(len(payload["rows"]), 6)
+        self.assertEqual(len(controlled_rows), 6)
+        self.assertEqual(len(diagnostics_rows), 6)
+        self.assertIn("go_no_go", payload["controlled_report"])
+        self.assertEqual(artifacts["generated_by"], "scripts/multimodal/run_controlled_training_smoke.py")
+        self.assertNotEqual(artifacts["controlled_rows"]["sha256"], artifacts["diagnostics_report"]["sha256"])
+        self.assertTrue(all(row["training_mode"] == "trained_smoke" for row in controlled_rows))
+        self.assertTrue(all(row["artifact_type"] == "controlled_training_diagnostics" for row in diagnostics_rows))
+        self.assertTrue(all("active_operator" not in row for row in diagnostics_rows))
 
 
 def _row(
