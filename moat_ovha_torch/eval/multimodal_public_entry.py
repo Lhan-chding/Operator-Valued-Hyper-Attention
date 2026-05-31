@@ -110,6 +110,8 @@ def _require_complete_controlled_report(controlled_report: dict[str, Any], error
     for family in CONTROLLED_REQUIRED_FAMILIES:
         if not isinstance(families.get(family), dict):
             errors.append(f"controlled report missing controlled family: {family}")
+    for family in sorted(set(families) - set(CONTROLLED_REQUIRED_FAMILIES)):
+        errors.append(f"controlled report contains unknown controlled family: {family}")
 
     gates = controlled_report.get("gate_table")
     if not isinstance(gates, dict):
