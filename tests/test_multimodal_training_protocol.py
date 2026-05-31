@@ -391,6 +391,24 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("hidden loss is controlled-only", "\n".join(payload["errors"]))
 
+    def test_training_protocol_cli_accepts_robustness_smoke_config(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "multimodal" / "validate_training_plan.py"),
+                str(ROOT / "configs" / "multimodal_robustness_smoke.json"),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["errors"], [])
+
 
 def _valid_adapter_params() -> dict[str, list[str]]:
     return {
