@@ -53,6 +53,25 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                     with self.assertRaises(MissingMultimodalDataError):
                         adapter.discover_raw(raw_root)
 
+    def test_build_cache_cli_registers_step1_dataset_adapters(self):
+        module = _load_script_module(ROOT / "scripts" / "multimodal" / "build_cache.py")
+
+        self.assertEqual(
+            set(module.ADAPTERS),
+            {
+                "controlled_multimodal",
+                "refcoco",
+                "flickr30k_entities",
+                "visual_genome",
+                "cmu_mosei",
+                "meld",
+            },
+        )
+        self.assertEqual(module._modalities_for("visual_genome"), ["text", "region"])
+        self.assertEqual(module._tasks_for("visual_genome"), ["phrase_region_grounding"])
+        self.assertEqual(module._modalities_for("meld"), ["text", "audio", "vision"])
+        self.assertEqual(module._tasks_for("meld"), ["sentiment_regression", "emotion_classification"])
+
     def test_pde_feasibility_note_uses_non_main_claim_framing(self):
         note = (ROOT / "reports" / "pdebench_architecture_feasibility_note.md").read_text()
 
@@ -554,6 +573,15 @@ def _field(torch, offset):
         quality=torch.ones(2, 6, 1),
         attrs=None,
     )
+
+
+def _load_script_module(path: Path):
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 class _Shape:
