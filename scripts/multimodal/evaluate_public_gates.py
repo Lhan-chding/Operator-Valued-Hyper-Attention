@@ -6,6 +6,7 @@ from collections.abc import Mapping
 import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -15,6 +16,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate, evaluate_sentiment_gate
+
+
+_SHA256_HEX_RE = re.compile(r"^[a-f0-9]{64}$")
+_TOPCONF_REQUIRED_ARTIFACTS = ("statistics_summary", "diagnostics", "robustness_summary", "robustness_rows")
 
 
 def main() -> int:
@@ -67,6 +72,10 @@ def main() -> int:
         task=args.task,
         split=args.split,
     )
+    evidence_errors = _topconf_evidence_errors(report["evidence_artifacts"])
+    if report["passed"] and evidence_errors:
+        report["passed"] = False
+        report["reasons"] = [*report.get("reasons", []), *evidence_errors]
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["passed"] else 2
 
@@ -113,6 +122,36 @@ def _artifact_descriptor(path: Path) -> dict[str, str]:
         "path": str(path),
         "sha256": _sha256(path) if path.exists() else "",
     }
+
+
+def _topconf_evidence_errors(evidence: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for artifact_name in _TOPCONF_REQUIRED_ARTIFACTS:
+        artifact = evidence.get(artifact_name)
+        if not isinstance(artifact, Mapping):
+            errors.append(f"top-conference gate evidence missing required artifact: {artifact_name}")
+            continue
+        errors.extend(_artifact_descriptor_errors(artifact_name, artifact))
+    raw_metrics = evidence.get("raw_metrics")
+    if not isinstance(raw_metrics, list) or not raw_metrics:
+        errors.append("top-conference gate evidence raw_metrics must be a non-empty list")
+    elif all(isinstance(artifact, Mapping) for artifact in raw_metrics):
+        for index, artifact in enumerate(raw_metrics):
+            errors.extend(_artifact_descriptor_errors(f"raw_metrics[{index}]", artifact))
+    else:
+        errors.append("top-conference gate evidence raw_metrics entries must include path and sha256")
+    return errors
+
+
+def _artifact_descriptor_errors(artifact_name: str, artifact: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    path = artifact.get("path")
+    if not _non_empty_text(path):
+        errors.append(f"top-conference gate evidence {artifact_name}.path must be a non-empty string")
+    sha256 = artifact.get("sha256")
+    if not isinstance(sha256, str) or _SHA256_HEX_RE.fullmatch(sha256) is None:
+        errors.append(f"top-conference gate evidence {artifact_name}.sha256 must be lowercase SHA-256")
+    return errors
 
 
 def _sha256(path: Path) -> str:
