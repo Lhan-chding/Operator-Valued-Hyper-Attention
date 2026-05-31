@@ -388,6 +388,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             payload = json.loads(result.stdout)
             smoke_payload_path = artifact_root / "public_acceptance_smoke_payload.json"
+            smoke_payload_exists = smoke_payload_path.exists()
 
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["mode"], "public_data_acceptance")
@@ -398,7 +399,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(payload["phases"]["public_smoke"]["ok"], True)
         self.assertEqual(payload["phases"]["public_smoke"]["optimizer_steps"], 1)
         self.assertEqual(payload["phases"]["public_smoke"]["eval_smoke_rows"], 1)
-        self.assertTrue(smoke_payload_path.exists())
+        self.assertTrue(smoke_payload_exists)
 
     def test_public_entry_requires_controlled_go_no_go_report(self):
         from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
