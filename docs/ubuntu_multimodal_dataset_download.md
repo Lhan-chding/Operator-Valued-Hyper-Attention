@@ -31,8 +31,8 @@ python -m pip install -U \
 系统工具：
 
 ```bash
-sudo apt-get update
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+sudo NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive apt-get update
+sudo NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive apt-get install -y \
   aria2 git git-lfs unzip p7zip-full pigz zstd ffmpeg libsndfile1
 git lfs install
 ```
@@ -52,6 +52,26 @@ export HF_HUB_ETAG_TIMEOUT=30
 ```bash
 export HF_ENDPOINT=https://hf-mirror.com
 ```
+
+如果要减少手工复制错误，优先用仓库脚本生成 Ubuntu 下载脚本。它只生成脚本，不会在本机直接启动下载；先 `bash -n` 检查，再在 Ubuntu 数据主机上执行：
+
+```bash
+cd ~/work/Operator-Valued-Hyper-Attention
+source .venv/bin/activate
+
+python scripts/multimodal/bootstrap_public_downloads.py \
+  --datasets refcoco cmu_mosei \
+  --repo-root "$PWD" \
+  --download-root data/raw_multimodal/_downloads \
+  --include-system-packages \
+  --use-hf-mirror \
+  --output /tmp/ovha_public_downloads.sh
+
+bash -n /tmp/ovha_public_downloads.sh
+bash /tmp/ovha_public_downloads.sh
+```
+
+如果不用 Hugging Face 镜像，去掉 `--use-hf-mirror`。如果已经装好系统包，去掉 `--include-system-packages`。
 
 ## 2. 建议目录
 
