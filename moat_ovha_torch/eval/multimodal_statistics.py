@@ -28,13 +28,14 @@ def summarize_public_results(
     main_table: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
     for (task, split, model), group_rows in grouped.items():
         scores = [float(row["score"]) for row in sorted(group_rows, key=lambda row: int(row["seed"]))]
+        higher_is_better = _raw_metric_direction(group_rows, task, split, model)
         main_table.setdefault(task, {}).setdefault(split, {})[model] = {
             "mean": _mean(scores),
             "std": _std(scores),
             "ci95": _ci95(scores),
             "seed_count": len({int(row["seed"]) for row in group_rows}),
             "per_seed_scores": scores,
-            "higher_is_better": bool(group_rows[0].get("higher_is_better", True)),
+            "higher_is_better": higher_is_better,
         }
 
     paired_tests: dict[str, dict[str, dict[str, Any]]] = {}
@@ -146,6 +147,26 @@ def _validate_metric_direction_consistency(
         directions.add(higher_is_better)
     if len(directions) > 1:
         errors.append(f"{task}/{split} higher_is_better must be consistent across models")
+
+
+def _raw_metric_direction(
+    rows: list[dict[str, Any]],
+    task: str,
+    split: str,
+    model: str,
+) -> bool:
+    directions: set[bool] = set()
+    for row in rows:
+        row_name = f"{task}/{split}/{model}/seed={row.get('seed', '?')}"
+        if "higher_is_better" not in row:
+            raise ValueError(f"{row_name} higher_is_better missing")
+        higher_is_better = row["higher_is_better"]
+        if not isinstance(higher_is_better, bool):
+            raise ValueError(f"{row_name} higher_is_better must be boolean")
+        directions.add(higher_is_better)
+    if len(directions) != 1:
+        raise ValueError(f"{task}/{split}/{model} higher_is_better must be consistent across seeds")
+    return next(iter(directions))
 
 
 def _metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:

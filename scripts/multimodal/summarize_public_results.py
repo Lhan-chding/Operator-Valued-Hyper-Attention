@@ -25,7 +25,11 @@ def main() -> int:
         for line in handle:
             if line.strip():
                 rows.append(json.loads(line))
-    summary = summarize_public_results(rows, full_model=args.full_model, baseline_model=args.baseline_model)
+    try:
+        summary = summarize_public_results(rows, full_model=args.full_model, baseline_model=args.baseline_model)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     validation = validate_public_summary(summary)
     payload = {
         **summary,
