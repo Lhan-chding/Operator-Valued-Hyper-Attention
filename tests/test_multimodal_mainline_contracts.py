@@ -117,28 +117,13 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             tmp_path = Path(tmp)
             raw_root = tmp_path / "raw"
             cache_root = tmp_path / "cache"
-            for relative in (
-                "features/text_features.npy",
-                "features/audio_features.npy",
-                "features/visual_features.npy",
-                "labels/sentiment.npy",
-                "labels/emotion.npy",
-                "metadata/utterances.json",
-                "metadata/dialogues.json",
-                "metadata/feature_versions.json",
-                "metadata/missing_modality_mask.npy",
-                "metadata/corruption_transforms.json",
-                "splits.json",
-            ):
-                path = raw_root / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("fixture\n")
+            raw_root.mkdir(parents=True, exist_ok=True)
 
             result = subprocess.run(
                 [
                     sys.executable,
                     str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
-                    "cmu_mosei",
+                    "controlled_multimodal",
                     str(raw_root),
                     str(cache_root),
                 ],
@@ -152,8 +137,8 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertFalse(payload["ok"])
         self.assertIn("partial cache initialization is forbidden", payload["policy"])
-        self.assertIn("CMU-MOSEI cache writing requires", "\n".join(payload["errors"]))
-        self.assertFalse((cache_root / "cmu_mosei" / "v0.1" / "data_card.json").exists())
+        self.assertIn("controlled synthetic cache writing is intentionally explicit", "\n".join(payload["errors"]))
+        self.assertFalse((cache_root / "controlled_multimodal" / "v0.1" / "data_card.json").exists())
         self.assertNotIn("Traceback", result.stderr)
 
     def test_build_cache_cli_writes_valid_refcoco_cache_from_raw_manifest(self):
@@ -192,6 +177,45 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertTrue(checksums_exists)
         self.assertTrue(sample_records_exists)
         self.assertTrue(alignment_pairs_exists)
+
+    def test_build_cache_cli_writes_valid_cmu_mosei_cache_from_raw_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_root = tmp_path / "raw"
+            cache_root = tmp_path / "cache"
+            _write_cmu_mosei_raw_fixture(raw_root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "cmu_mosei",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            layout = MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1")
+            validation = validate_cache_layout(layout, splits=("train", "val", "test"))
+            checksums_exists = (layout.root / "checksums.json").exists()
+            sample_records_exists = (layout.root / "provenance" / "sample_records_train.jsonl").exists()
+            missing_mask_exists = (layout.root / "supervision" / "missing_modality_mask_test.npy").exists()
+            corruption_exists = (layout.root / "supervision" / "corruption_val.parquet").exists()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["policy"], "cache built and validated")
+        self.assertTrue(validation.ok, validation.errors)
+        self.assertTrue(checksums_exists)
+        self.assertTrue(sample_records_exists)
+        self.assertTrue(missing_mask_exists)
+        self.assertTrue(corruption_exists)
 
     def test_controlled_true_adapter_param_contract_matches_v1_protocol(self):
         from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
@@ -1065,6 +1089,55 @@ def _write_refcoco_raw_fixture(raw_root: Path) -> None:
     (raw_root / "annotations" / "instances.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
     (raw_root / "features" / "text_features.npy").write_text("fixture text features\n")
     (raw_root / "features" / "region_features.npy").write_text("fixture region features\n")
+
+
+def _write_cmu_mosei_raw_fixture(raw_root: Path) -> None:
+    for folder in ("features", "labels", "metadata"):
+        (raw_root / folder).mkdir(parents=True, exist_ok=True)
+    split_source_ids = {
+        "train": ["mosei-train-1"],
+        "val": ["mosei-val-1"],
+        "test": ["mosei-test-1"],
+    }
+    (raw_root / "splits.json").write_text(json.dumps(split_source_ids, sort_keys=True) + "\n")
+    records = []
+    for split, source_ids in split_source_ids.items():
+        for source_id in source_ids:
+            records.append(
+                {
+                    "source_id": source_id,
+                    "split": split,
+                    "original_split": split,
+                    "raw_ref": f"cmu-mosei://{source_id}",
+                    "license_tag": "fixture-license",
+                    "preprocessing_version": "fixture-sentiment-preprocess-v1",
+                    "utterance_id": source_id,
+                    "dialogue_id": f"dialogue-{split}",
+                    "transcript_source": "official_transcript",
+                }
+            )
+    (raw_root / "metadata" / "utterances.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
+    (raw_root / "metadata" / "dialogues.json").write_text(json.dumps({"records": []}, sort_keys=True) + "\n")
+    (raw_root / "metadata" / "feature_versions.json").write_text(
+        json.dumps(
+            {
+                "text": "fixture-text-v1",
+                "audio": "fixture-audio-v1",
+                "vision": "fixture-vision-v1",
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    (raw_root / "metadata" / "missing_modality_mask.npy").write_text("fixture missing modality mask\n")
+    (raw_root / "metadata" / "corruption_transforms.json").write_text(
+        json.dumps({"version": "fixture-corruption-v1"}, sort_keys=True) + "\n"
+    )
+    (raw_root / "features" / "text_features.npy").write_text("fixture text features\n")
+    (raw_root / "features" / "audio_features.npy").write_text("fixture audio features\n")
+    (raw_root / "features" / "visual_features.npy").write_text("fixture visual features\n")
+    (raw_root / "labels" / "sentiment.npy").write_text("fixture sentiment labels\n")
+    (raw_root / "labels" / "emotion.npy").write_text("fixture emotion labels\n")
 
 
 class _Shape:
