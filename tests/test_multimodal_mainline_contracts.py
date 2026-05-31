@@ -326,7 +326,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                 )
                 self.assertEqual(required_true_adapter_param_keys_for_family(family), expected)
 
-    def test_public_dataset_adapters_expose_cache_required_supervision_shards(self):
+    def test_public_dataset_adapters_expose_formal_cache_shard_paths(self):
         from moat_ovha_torch.data.multimodal.adapters import (
             CMUMOSEIAdapter,
             CMUMOSIAdapter,
@@ -341,20 +341,47 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             cache_root = Path(tmp)
             for adapter in (RefCOCOAdapter(), Flickr30kEntitiesAdapter(), VisualGenomeAdapter()):
                 with self.subTest(adapter=adapter.name):
+                    fields = adapter.extract_token_fields({"cache_root": cache_root}, "train")
+                    self.assertEqual(fields["text"].x_path, cache_root / "token_fields" / "text_train.npy")
+                    self.assertEqual(fields["text"].pos_path, cache_root / "positions" / "text_pos_train.npy")
+                    self.assertEqual(fields["text"].mask_path, cache_root / "masks" / "text_mask_train.npy")
+                    self.assertEqual(fields["region"].x_path, cache_root / "token_fields" / "region_train.npy")
+                    self.assertEqual(fields["region"].pos_path, cache_root / "positions" / "region_pos_train.npy")
+                    self.assertEqual(fields["region"].mask_path, cache_root / "masks" / "region_mask_train.npy")
                     supervision = adapter.extract_supervision({"cache_root": cache_root}, "train")
-                    self.assertEqual(supervision.alignment_pairs_path, cache_root / "alignment_pairs_train.parquet")
-                    self.assertEqual(supervision.bbox_targets_path, cache_root / "bbox_targets_train.npy")
-                    self.assertEqual(supervision.region_targets_path, cache_root / "region_targets_train.npy")
+                    self.assertEqual(
+                        supervision.alignment_pairs_path,
+                        cache_root / "supervision" / "alignment_pairs_train.parquet",
+                    )
+                    self.assertEqual(supervision.bbox_targets_path, cache_root / "supervision" / "bbox_targets_train.npy")
+                    self.assertEqual(supervision.region_targets_path, cache_root / "supervision" / "region_targets_train.npy")
 
             for adapter in (CMUMOSEIAdapter(), CMUMOSIAdapter(), MELDAdapter(), IEMOCAPAdapter()):
                 with self.subTest(adapter=adapter.name):
+                    fields = adapter.extract_token_fields({"cache_root": cache_root}, "train")
+                    for modality in ("text", "audio", "vision"):
+                        self.assertEqual(
+                            fields[modality].x_path,
+                            cache_root / "token_fields" / f"{modality}_train.npy",
+                        )
+                        self.assertEqual(
+                            fields[modality].pos_path,
+                            cache_root / "positions" / f"{modality}_pos_train.npy",
+                        )
+                        self.assertEqual(
+                            fields[modality].mask_path,
+                            cache_root / "masks" / f"{modality}_mask_train.npy",
+                        )
                     supervision = adapter.extract_supervision({"cache_root": cache_root}, "train")
-                    self.assertEqual(supervision.task_label_path, cache_root / "sentiment_train.npy")
+                    self.assertEqual(supervision.task_label_path, cache_root / "supervision" / "task_labels_train.npy")
                     self.assertEqual(
                         supervision.modality_missing_mask_path,
-                        cache_root / "missing_modality_mask_train.npy",
+                        cache_root / "supervision" / "missing_modality_mask_train.npy",
                     )
-                    self.assertEqual(supervision.corruption_metadata_path, cache_root / "corruption_train.parquet")
+                    self.assertEqual(
+                        supervision.corruption_metadata_path,
+                        cache_root / "supervision" / "corruption_train.parquet",
+                    )
 
     def test_public_dataset_adapters_use_dataset_specific_raw_manifests(self):
         from moat_ovha_torch.data.multimodal.adapters import (
