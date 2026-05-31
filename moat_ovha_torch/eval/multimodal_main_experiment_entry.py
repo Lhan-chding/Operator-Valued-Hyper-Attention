@@ -173,6 +173,10 @@ def _require_gate_evidence_artifacts(label: str, evidence: Any, errors: list[str
             raw_metric_paths,
             errors,
         )
+    if "diagnostics" in artifact_paths:
+        _validate_diagnostics_artifact_content(label, artifact_paths["diagnostics"], errors)
+    if "robustness_summary" in artifact_paths:
+        _validate_robustness_artifact_content(label, artifact_paths["robustness_summary"], errors)
 
 
 def _validate_artifact_descriptor(label: str, artifact_name: str, artifact: Any, errors: list[str]) -> Path | None:
@@ -272,6 +276,136 @@ def _resolve_artifact_path(value: str, *, base_dir: Path) -> Path:
     if not path.is_absolute():
         path = base_dir / path
     return path.resolve()
+
+
+def _validate_diagnostics_artifact_content(label: str, path: Path, errors: list[str]) -> None:
+    rows = _read_jsonl_artifact(label, "diagnostics", path, errors)
+    if not rows:
+        errors.append(f"{label} gate diagnostics artifact must contain JSONL rows")
+        return
+    public_payloads = [row.get("public_diagnostics") for row in rows if isinstance(row.get("public_diagnostics"), Mapping)]
+    if label == "region_text_public":
+        _require_any_public_payload_key(
+            label,
+            public_payloads,
+            "cato_router_load_by_phrase_type",
+            "CATO router load by phrase type",
+            errors,
+        )
+        _require_any_public_payload_key(
+            label,
+            public_payloads,
+            "no_cato_delta_by_object_size",
+            "no-CATO delta by object size",
+            errors,
+        )
+        _require_any_public_payload_key(
+            label,
+            public_payloads,
+            "no_cato_delta_by_phrase_length",
+            "no-CATO delta by phrase length",
+            errors,
+        )
+        _require_any_public_payload_key(
+            label,
+            public_payloads,
+            "rceo_reliability_shift_under_blurred_regions",
+            "RCEO reliability shift under blurred regions",
+            errors,
+        )
+    elif label == "sentiment_emotion_public":
+        _require_any_public_payload_key(
+            label,
+            public_payloads,
+            "lrio_rank_entropy_by_modality_pair",
+            "LRIO rank entropy by modality pair",
+            errors,
+        )
+        _require_any_public_payload_key(
+            label,
+            public_payloads,
+            "spo_prototype_load_by_emotion_class",
+            "SPO prototype load by emotion class",
+            errors,
+        )
+        _require_any_public_payload_key(
+            label,
+            public_payloads,
+            "rceo_reliability_shift_under_missing_noisy_modality",
+            "RCEO reliability shift under missing/noisy modality",
+            errors,
+        )
+        _require_any_public_payload_key(
+            label,
+            public_payloads,
+            "router_load_by_condition",
+            "router load by clean/corrupted/missing split",
+            errors,
+        )
+
+
+def _read_jsonl_artifact(label: str, artifact_name: str, path: Path, errors: list[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    try:
+        with path.open() as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    errors.append(f"{label} gate {artifact_name} line {line_number} must be valid JSON: {exc}")
+                    continue
+                if not isinstance(payload, dict):
+                    errors.append(f"{label} gate {artifact_name} line {line_number} must be a JSON object")
+                    continue
+                rows.append(payload)
+    except OSError as exc:
+        errors.append(f"{label} gate {artifact_name} artifact could not be read: {exc}")
+    return rows
+
+
+def _require_any_public_payload_key(
+    label: str,
+    payloads: list[Any],
+    key: str,
+    description: str,
+    errors: list[str],
+) -> None:
+    if any(_non_empty_public_value(payload.get(key)) for payload in payloads if isinstance(payload, Mapping)):
+        return
+    errors.append(f"{label} gate diagnostics missing {description}")
+
+
+def _non_empty_public_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, (str, list, tuple, dict, set)):
+        return bool(value)
+    return True
+
+
+def _validate_robustness_artifact_content(label: str, path: Path, errors: list[str]) -> None:
+    try:
+        summary = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"{label} gate robustness_summary must be valid JSON: {exc}")
+        return
+    if not isinstance(summary, Mapping):
+        errors.append(f"{label} gate robustness_summary must be a JSON object")
+        return
+    if summary.get("full_drop_less_than_baseline") is not True:
+        errors.append(f"{label} gate robustness_summary does not show lower full-model drop")
+    if summary.get("rceo_reliability_monotonic") is not True:
+        errors.append(f"{label} gate robustness_summary missing monotonic RCEO reliability")
+    coverage = summary.get("required_stress_coverage")
+    if not isinstance(coverage, Mapping) or coverage.get("passed") is not True:
+        errors.append(f"{label} gate robustness_summary missing required stress coverage pass")
+    ablation = summary.get("required_ablation_degradation")
+    if not isinstance(ablation, Mapping) or ablation.get("passed") is not True:
+        errors.append(f"{label} gate robustness_summary missing required ablation degradation pass")
+    if not isinstance(summary.get("rceo_reliability_calibration"), Mapping):
+        errors.append(f"{label} gate robustness_summary missing RCEO reliability calibration")
 
 
 def _non_empty_text(value: Any) -> bool:

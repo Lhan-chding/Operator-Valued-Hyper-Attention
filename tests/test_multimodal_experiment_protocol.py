@@ -1384,8 +1384,8 @@ def _gate_evidence_artifacts(task: str, artifact_root: Path | None = None) -> di
             )
             + "\n"
         )
-        diagnostics.write_text(json.dumps({"task": task, "artifact": "diagnostics"}) + "\n")
-        robustness.write_text(json.dumps({"task": task, "artifact": "robustness_summary"}, sort_keys=True) + "\n")
+        diagnostics.write_text(json.dumps(_gate_diagnostic_row(task)) + "\n")
+        robustness.write_text(json.dumps(_gate_robustness_summary(task), sort_keys=True) + "\n")
         raw_metrics.write_text(json.dumps({"task": task, "seed": 1, "score": 1.0}, sort_keys=True) + "\n")
         return {
             "task": task,
@@ -1404,6 +1404,61 @@ def _gate_evidence_artifacts(task: str, artifact_root: Path | None = None) -> di
         "diagnostics": {"path": f"artifacts/{task}_diagnostics.jsonl", "sha256": "b" * 64},
         "robustness_summary": {"path": f"artifacts/{task}_robustness_summary.json", "sha256": "c" * 64},
         "raw_metrics": [{"path": f"artifacts/{task}_raw_metrics_seed1.jsonl", "sha256": "d" * 64}],
+    }
+
+
+def _gate_diagnostic_row(task: str) -> dict[str, object]:
+    if task == "sentiment_emotion":
+        return {
+            "setting": "clean",
+            "public_diagnostics": {
+                "lrio_rank_entropy_by_modality_pair": {"text_audio": 0.42},
+                "spo_prototype_load_by_emotion_class": {
+                    "negative": {"p0": 0.7, "p1": 0.3},
+                    "positive": {"p0": 0.2, "p1": 0.8},
+                },
+                "rceo_reliability_shift_under_missing_noisy_modality": {"missing_audio": -0.2},
+                "router_load_by_condition": {
+                    "clean": {"TLEO": 0.1, "SPO": 0.3, "LRIO": 0.4, "CATO": 0.2},
+                    "corrupted": {"TLEO": 0.2, "SPO": 0.4, "LRIO": 0.2, "CATO": 0.2},
+                    "missing": {"TLEO": 0.2, "SPO": 0.4, "LRIO": 0.2, "CATO": 0.2},
+                },
+            },
+        }
+    return {
+        "setting": "clean",
+        "public_diagnostics": {
+            "cato_router_load_by_phrase_type": {"object": 0.7},
+            "no_cato_delta_by_object_size": {"small": 0.12},
+            "no_cato_delta_by_phrase_length": {"short": 0.10},
+            "rceo_reliability_shift_under_blurred_regions": -0.18,
+        },
+    }
+
+
+def _gate_robustness_summary(task: str) -> dict[str, object]:
+    baseline = "cross_attention_transformer"
+    return {
+        "task": task,
+        "full_model": "ovha_full",
+        "baseline_model": baseline,
+        "full_drop_less_than_baseline": True,
+        "rceo_reliability_monotonic": True,
+        "required_stress_coverage": {"passed": True, "reasons": []},
+        "required_ablation_degradation": {
+            "passed": True,
+            "reasons": [],
+            "value": {"ovha_no_rceo": 0.10, "ovha_no_evidence_router": 0.08},
+        },
+        "rceo_reliability_calibration": {
+            "ece": 0.05,
+            "bin_count": 3,
+            "calibration_curve": [
+                {"bin": 0, "mean_confidence": 0.2, "observed_accuracy": 0.18},
+                {"bin": 1, "mean_confidence": 0.5, "observed_accuracy": 0.48},
+                {"bin": 2, "mean_confidence": 0.8, "observed_accuracy": 0.78},
+            ],
+        },
     }
 
 
