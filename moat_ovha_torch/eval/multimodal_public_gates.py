@@ -655,6 +655,7 @@ def _summary_reporting_metadata_reasons(
     reasons.extend(_frozen_feature_versions_reasons(metadata.get("frozen_feature_versions"), task))
     reasons.extend(_hardware_metadata_reasons(metadata.get("hardware")))
     reasons.extend(_wall_clock_summary_reasons(metadata.get("wall_clock_summary")))
+    reasons.extend(_seed_count_rationale_reasons(metadata, models, main_models))
     per_seed_table = metadata.get("per_seed_table")
     if isinstance(per_seed_table, list):
         reasons.extend(_reporting_per_seed_table_reasons(per_seed_table, models, main_models))
@@ -697,6 +698,22 @@ def _wall_clock_summary_reasons(value: Any) -> list[str]:
     hours = _finite_float(value.get("wall_clock_hours"))
     if hours is None or hours <= 0.0:
         return ["reporting metadata wall_clock_summary must include positive wall_clock_hours"]
+    return []
+
+
+def _seed_count_rationale_reasons(
+    metadata: dict[str, Any],
+    models: tuple[str, ...],
+    main_models: Any,
+) -> list[str]:
+    if not isinstance(main_models, dict):
+        return []
+    uses_under_five_seeds = any(3 <= _seed_count(main_models.get(model, {})) < 5 for model in models)
+    if not uses_under_five_seeds:
+        return []
+    rationale = metadata.get("seed_count_rationale")
+    if not isinstance(rationale, str) or not rationale.strip():
+        return ["reporting metadata seed_count_rationale required when main table uses fewer than 5 seeds"]
     return []
 
 

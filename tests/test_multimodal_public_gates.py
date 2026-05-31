@@ -1055,6 +1055,10 @@ def _summary(
                 for seed in range(1, seed_count + 1)
             ],
         }
+        if seed_count < 5:
+            summary["reporting_metadata"]["seed_count_rationale"] = (
+                "unit-test fixture uses the plan minimum of 3 seeds; production main tables should use 5 seeds"
+            )
     return summary
 
 
