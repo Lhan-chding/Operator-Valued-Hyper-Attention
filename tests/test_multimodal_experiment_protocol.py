@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -541,6 +542,61 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertFalse(payload["ok"])
         self.assertIn("controlled go/no-go report is required", "\n".join(payload["errors"]))
+
+    def test_public_smoke_runner_runs_real_train_smoke_after_entry_validation(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for public training smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "public_training_artifacts"
+            _write_valid_refcoco_public_cache(cache_root)
+            controlled_report_path = tmp_path / "controlled_report.json"
+            controlled_report_path.write_text(
+                json.dumps(_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"), sort_keys=True) + "\n"
+            )
+            command = [
+                sys.executable,
+                str(ROOT / "scripts" / "multimodal" / "run_public_smoke.py"),
+                str(ROOT / "configs" / "multimodal_refcoco_public_smoke.json"),
+                "--cache-root",
+                str(cache_root),
+                "--controlled-report",
+                str(controlled_report_path),
+                "--train-smoke-steps",
+                "1",
+                "--train-split",
+                "train",
+                "--artifact-root",
+                str(artifact_root),
+            ]
+            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            metrics_path = Path(payload["training"]["artifacts"]["metrics"]["path"])
+            metrics_rows = [json.loads(line) for line in metrics_path.read_text().splitlines() if line.strip()]
+
+        training = payload["training"]
+        stages = {stage["stage"]: stage for stage in training["stage_history"]}
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "public_trained_smoke")
+        self.assertEqual(training["config_name"], "multimodal_refcoco_public_smoke")
+        self.assertEqual(training["train_split"], "train")
+        self.assertEqual(training["validated_training_stages"], ["T0", "T5"])
+        self.assertEqual(training["optimizer_steps"], 1)
+        self.assertGreater(training["parameter_l2_delta"], 0.0)
+        self.assertGreater(training["max_grad_norm"], 0.0)
+        self.assertEqual(stages["T0"]["loss_names_observed"], ["cache_validation"])
+        self.assertEqual(stages["T0"]["optimizer_steps"], 0)
+        self.assertEqual(
+            stages["T5"]["loss_names_observed"],
+            ["candidate_individual_loss", "public_alignment_ce", "task_loss"],
+        )
+        self.assertEqual(len(metrics_rows), 1)
+        self.assertEqual(metrics_rows[0]["stage"], "T5")
+        self.assertEqual(metrics_rows[0]["split"], "train")
 
     def test_public_smoke_runner_rejects_unverified_controlled_artifact_descriptors(self):
         with tempfile.TemporaryDirectory() as tmp:
