@@ -43,6 +43,7 @@ def main() -> int:
     parser.add_argument("--cache-root", type=Path)
     parser.add_argument("--controlled-report", type=Path)
     parser.add_argument("--train-smoke-steps", type=int, default=0)
+    parser.add_argument("--train-baseline-smoke-steps", type=int, default=0)
     parser.add_argument("--train-all-config-seeds", action="store_true")
     parser.add_argument("--train-split", default="train")
     parser.add_argument("--eval-smoke-split")
@@ -262,11 +263,14 @@ def _run_public_training_smoke(
                 }
             )
             eval_baseline_history.extend(
-                _public_smoke_baseline_history_rows(
+                _public_baseline_history_rows(
                     config,
-                    eval_batch,
+                    train_batch=batch,
+                    eval_batch=eval_batch,
                     seed=seed,
-                    training_steps=int(args.train_smoke_steps),
+                    ovha_training_steps=int(args.train_smoke_steps),
+                    baseline_training_steps=int(args.train_baseline_smoke_steps),
+                    learning_rate=float(args.learning_rate),
                     hardware=_hardware_metadata(device, seed_elapsed_seconds),
                     seed_count_rationale=_seed_count_rationale(args.train_all_config_seeds),
                 )
@@ -311,6 +315,11 @@ def _run_public_training_smoke(
         "eval_smoke_split": args.eval_smoke_split,
         "eval_smoke_rows": len(eval_history),
         "eval_smoke_baseline_rows": len(eval_baseline_history),
+        "baseline_smoke_training_steps": int(args.train_baseline_smoke_steps),
+        "baseline_optimizer_steps": sum(int(row.get("baseline_optimizer_steps", 0)) for row in eval_baseline_history),
+        "baseline_training_status": (
+            "trained_smoke" if int(args.train_baseline_smoke_steps) > 0 else "not_trained"
+        ),
         "stage_history": [
             {
                 "stage": "T0",
@@ -788,6 +797,40 @@ def _preview_baseline_model(rows: list[dict[str, object]]) -> str:
     return "cross_attention_transformer"
 
 
+def _public_baseline_history_rows(
+    config: MultimodalExperimentConfig,
+    *,
+    train_batch: MultimodalEpisodeBatch,
+    eval_batch: MultimodalEpisodeBatch,
+    seed: int,
+    ovha_training_steps: int,
+    baseline_training_steps: int,
+    learning_rate: float,
+    hardware: dict[str, object],
+    seed_count_rationale: str,
+) -> list[dict[str, object]]:
+    if baseline_training_steps <= 0:
+        return _public_smoke_baseline_history_rows(
+            config,
+            eval_batch,
+            seed=seed,
+            training_steps=ovha_training_steps,
+            hardware=hardware,
+            seed_count_rationale=seed_count_rationale,
+        )
+    return _public_trained_baseline_history_rows(
+        config,
+        train_batch=train_batch,
+        eval_batch=eval_batch,
+        seed=seed,
+        ovha_training_steps=ovha_training_steps,
+        baseline_training_steps=baseline_training_steps,
+        learning_rate=learning_rate,
+        hardware=hardware,
+        seed_count_rationale=seed_count_rationale,
+    )
+
+
 def _public_smoke_baseline_history_rows(
     config: MultimodalExperimentConfig,
     batch: MultimodalEpisodeBatch,
@@ -836,6 +879,86 @@ def _public_smoke_baseline_history_rows(
     return rows
 
 
+def _public_trained_baseline_history_rows(
+    config: MultimodalExperimentConfig,
+    *,
+    train_batch: MultimodalEpisodeBatch,
+    eval_batch: MultimodalEpisodeBatch,
+    seed: int,
+    ovha_training_steps: int,
+    baseline_training_steps: int,
+    learning_rate: float,
+    hardware: dict[str, object],
+    seed_count_rationale: str,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for baseline_name in config.baseline_names:
+        train_inputs = _same_feature_probe_inputs(str(baseline_name), train_batch)
+        eval_inputs = _same_feature_probe_inputs(str(baseline_name), eval_batch)
+        target_dim = int(train_batch.target_y.shape[-1])
+        generator = torch.Generator(device=train_inputs.device)
+        generator.manual_seed(int(seed) + _stable_baseline_seed_offset(str(baseline_name)))
+        model = torch.nn.Linear(int(train_inputs.shape[-1]), target_dim).to(train_inputs.device)
+        with torch.no_grad():
+            model.weight.uniform_(-0.02, 0.02, generator=generator)
+            model.bias.uniform_(-0.02, 0.02, generator=generator)
+        initial_parameters = _linear_parameter_vector(model)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+        max_grad_norm = 0.0
+        final_train_loss = 0.0
+        model.train()
+        for _ in range(int(baseline_training_steps)):
+            optimizer.zero_grad(set_to_none=True)
+            prediction = _expand_baseline_prediction(model(train_inputs), train_batch)
+            loss = _task_loss(prediction, train_batch)
+            loss.backward()
+            max_grad_norm = max(max_grad_norm, _linear_grad_l2_norm(model))
+            optimizer.step()
+            final_train_loss = _as_float(loss)
+        parameter_delta = float(torch.linalg.vector_norm(_linear_parameter_vector(model) - initial_parameters).item())
+        model.eval()
+        with torch.no_grad():
+            eval_prediction = _expand_baseline_prediction(model(eval_inputs), eval_batch)
+            task_loss = _task_loss(eval_prediction, eval_batch)
+        rows.append(
+            {
+                "dataset": config.dataset_name,
+                "task": config.task_type,
+                "model": str(baseline_name),
+                "stage": "T5_eval_baseline_trained_smoke",
+                "split": eval_batch.split,
+                "seed": seed,
+                "metric_name": "heldout_task_loss_smoke",
+                "score": _as_float(task_loss),
+                "higher_is_better": False,
+                "parameter_count": _linear_parameter_count(model),
+                "training_steps": int(baseline_training_steps),
+                "ovha_reference_training_steps": ovha_training_steps,
+                "frozen_feature_extractor_version": dict(eval_batch.provenance.feature_extractor_version),
+                "hardware": dict(hardware),
+                "label_provenance": _label_provenance_for_batch(eval_batch),
+                "seed_count_rationale": seed_count_rationale,
+                "baseline_protocol": "trainable_same_feature_linear_probe_smoke",
+                "training_status": "trained_smoke",
+                "same_feature_source": True,
+                "baseline_optimizer_steps": int(baseline_training_steps),
+                "baseline_parameter_l2_delta": parameter_delta,
+                "baseline_grad_l2_norm": max_grad_norm,
+                "baseline_train_loss_final": final_train_loss,
+                "public_metrics": _public_smoke_metrics(
+                    config,
+                    eval_batch,
+                    prediction=eval_prediction,
+                    candidate_loss={"CATO": task_loss},
+                    router_load_by_candidate=_probe_router_load_by_candidate(str(baseline_name)),
+                    router_entropy=torch.zeros((), dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device),
+                ),
+                "public_metrics_scope": _public_metrics_scope(config),
+            }
+        )
+    return rows
+
+
 def _same_feature_probe_prediction(model_name: str, batch: MultimodalEpisodeBatch) -> torch.Tensor:
     target_dim = int(batch.target_y.shape[-1])
     modality_names = _probe_modalities_for_model(model_name, tuple(batch.fields))
@@ -851,6 +974,45 @@ def _same_feature_probe_prediction(model_name: str, batch: MultimodalEpisodeBatc
         base = torch.stack(vectors, dim=0).mean(dim=0).to(dtype=batch.target_y.dtype, device=batch.target_y.device)
     query_count = int(batch.target_y.shape[1])
     return base.unsqueeze(1).expand(-1, query_count, -1).contiguous()
+
+
+def _same_feature_probe_inputs(model_name: str, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    modality_names = _probe_modalities_for_model(model_name, tuple(batch.fields))
+    vectors = [
+        _masked_field_mean(batch.fields[modality])
+        for modality in modality_names
+        if modality in batch.fields
+    ]
+    if not vectors:
+        batch_size = int(batch.target_y.shape[0])
+        return torch.zeros(batch_size, 1, dtype=batch.target_y.dtype, device=batch.target_y.device)
+    return torch.cat(vectors, dim=-1).to(dtype=batch.target_y.dtype, device=batch.target_y.device)
+
+
+def _expand_baseline_prediction(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    query_count = int(batch.target_y.shape[1])
+    return prediction.unsqueeze(1).expand(-1, query_count, -1).contiguous()
+
+
+def _linear_parameter_count(model: torch.nn.Module) -> int:
+    return int(sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad))
+
+
+def _linear_parameter_vector(model: torch.nn.Module) -> torch.Tensor:
+    parts = [parameter.detach().reshape(-1).cpu() for parameter in model.parameters() if parameter.requires_grad]
+    return torch.cat(parts) if parts else torch.zeros(0)
+
+
+def _linear_grad_l2_norm(model: torch.nn.Module) -> float:
+    total = 0.0
+    for parameter in model.parameters():
+        if parameter.grad is not None:
+            total += float(parameter.grad.detach().square().sum().cpu())
+    return float(total**0.5)
+
+
+def _stable_baseline_seed_offset(model_name: str) -> int:
+    return sum((index + 1) * ord(character) for index, character in enumerate(model_name))
 
 
 def _probe_modalities_for_model(model_name: str, available: tuple[str, ...]) -> tuple[str, ...]:
@@ -1109,6 +1271,10 @@ def _public_smoke_baseline_raw_metric_rows(
             "baseline_protocol": str(row["baseline_protocol"]),
             "training_status": str(row["training_status"]),
             "same_feature_source": bool(row["same_feature_source"]),
+            "baseline_optimizer_steps": int(row.get("baseline_optimizer_steps", 0)),
+            "baseline_parameter_l2_delta": float(row.get("baseline_parameter_l2_delta", 0.0)),
+            "baseline_grad_l2_norm": float(row.get("baseline_grad_l2_norm", 0.0)),
+            "baseline_train_loss_final": float(row.get("baseline_train_loss_final", 0.0)),
             "public_metrics": dict(row["public_metrics"]),
             "public_metrics_scope": str(row["public_metrics_scope"]),
             "raw_metric_path": str(raw_metric_path),
