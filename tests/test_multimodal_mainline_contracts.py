@@ -1443,6 +1443,40 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
         )
         self.assertNotIn("true_active_operator", str(batch.model_inputs()))
 
+    def test_controlled_spo_and_lrio_have_non_degenerate_adapter_truth(self):
+        import torch
+
+        from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import ControlledSyntheticMultimodalAdapter
+
+        adapter = ControlledSyntheticMultimodalAdapter(seed=123, field_dim=4, output_dim=3)
+        spo_batch = adapter.sample_batch(
+            family="spo_global_prototype",
+            batch_size=2,
+            query_count=4,
+            device="cpu",
+        )
+        lrio_batch = adapter.sample_batch(
+            family="lrio_low_rank_interaction",
+            batch_size=2,
+            query_count=4,
+            device="cpu",
+        )
+
+        self.assertGreater(float(spo_batch.hidden["true_prototype_logits"].abs().mean()), 0.0)
+        self.assertGreater(float(lrio_batch.hidden["true_rank_logits"].abs().mean()), 0.0)
+        self.assertTrue(
+            torch.equal(
+                spo_batch.hidden["true_adapter_params"]["params_by_operator"]["SPO"]["prototype_logits_shift"],
+                spo_batch.hidden["true_prototype_logits"],
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                lrio_batch.hidden["true_adapter_params"]["params_by_operator"]["LRIO"]["rank_logits"],
+                lrio_batch.hidden["true_rank_logits"],
+            )
+        )
+
     def test_oracle_matrix_true_true_reconstructs_controlled_targets(self):
         import torch
 
