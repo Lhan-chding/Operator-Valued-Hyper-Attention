@@ -71,12 +71,16 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
     for task, splits in main_table.items():
         for split, models in splits.items():
             _validate_required_same_feature_baselines(str(task), str(split), models, errors)
+            _validate_metric_direction_consistency(str(task), str(split), models, errors)
+            if not isinstance(models, dict):
+                continue
             for model, values in models.items():
-                if values.get("seed_count", 0) < 3:
-                    errors.append(f"{task}/{split}/{model} must report at least 3 seeds, not best seed only")
-                for key in ("mean", "std", "ci95"):
-                    if key not in values:
-                        errors.append(f"{task}/{split}/{model} missing {key}")
+                if isinstance(values, dict):
+                    if values.get("seed_count", 0) < 3:
+                        errors.append(f"{task}/{split}/{model} must report at least 3 seeds, not best seed only")
+                    for key in ("mean", "std", "ci95"):
+                        if key not in values:
+                            errors.append(f"{task}/{split}/{model} missing {key}")
                 _validate_main_table_model_row(summary, str(task), str(split), str(model), values, errors)
     if not summary.get("paired_tests"):
         errors.append("paired_tests missing; main deltas require paired permutation/bootstrap evidence")
@@ -118,6 +122,30 @@ def _validate_required_same_feature_baselines(
     for baseline in required_baselines:
         if baseline not in models:
             errors.append(f"statistics summary missing required same-feature baseline: {baseline}")
+
+
+def _validate_metric_direction_consistency(
+    task: str,
+    split: str,
+    models: Any,
+    errors: list[str],
+) -> None:
+    if not isinstance(models, dict):
+        return
+    directions: set[bool] = set()
+    for model, values in models.items():
+        if not isinstance(values, dict):
+            continue
+        if "higher_is_better" not in values:
+            errors.append(f"{task}/{split}/{model} missing higher_is_better")
+            continue
+        higher_is_better = values["higher_is_better"]
+        if not isinstance(higher_is_better, bool):
+            errors.append(f"{task}/{split}/{model} higher_is_better must be boolean")
+            continue
+        directions.add(higher_is_better)
+    if len(directions) > 1:
+        errors.append(f"{task}/{split} higher_is_better must be consistent across models")
 
 
 def _metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
