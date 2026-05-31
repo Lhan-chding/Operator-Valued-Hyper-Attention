@@ -503,6 +503,31 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
                     joined,
                 )
 
+    def test_cache_validator_rejects_hidden_metadata_shard_path_under_declared_modality(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+            )
+            hidden_relative = "token_fields/text_true_active_operator_train.npy"
+            (layout.root / hidden_relative).write_text("hidden active operator tokens\n")
+            _rewrite_token_manifest_path(layout.root, "train", "text", "x", hidden_relative)
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "token_fields/manifest_train.json entry for text.x must not reference "
+            "controlled or hidden metadata: token_fields/text_true_active_operator_train.npy",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_duplicate_data_card_tasks(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -1382,6 +1407,13 @@ def _write_token_field_manifest(
             entry.pop("pos")
         manifest[modality] = entry
     (root / "token_fields" / f"manifest_{split}.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
+
+
+def _rewrite_token_manifest_path(root: Path, split: str, modality: str, key: str, relative: str) -> None:
+    manifest_path = root / "token_fields" / f"manifest_{split}.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest[modality][key] = relative
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
 
 
 def _write_hidden_metadata_token_shards(root: Path, modality: str) -> None:
