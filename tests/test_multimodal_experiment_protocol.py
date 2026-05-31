@@ -2356,90 +2356,119 @@ def _gate_region_diagnostic(
 
 
 def _gate_robustness_summary(task: str) -> dict[str, object]:
-    baseline = "cross_attention_transformer"
-    stress_targets = [
-        "audio_masking",
-        "audio_noise",
-        "hard_negative_audio_mismatch",
-        "hard_negative_caption_mismatch",
-        "hard_negative_region_mismatch",
-        "image_blur",
-        "image_crop",
-        "image_occlusion",
-        "missing_audio",
-        "missing_text",
-        "missing_vision",
-        "text_paraphrase",
-        "text_token_mask",
-    ]
-    return {
-        "task": task,
-        "full_model": "ovha_full",
-        "baseline_model": baseline,
-        "clean_score": {"ovha_full": 0.75, baseline: 0.75},
-        "corrupted_score": {"ovha_full": 0.69, baseline: 0.63},
-        "relative_drop": {"ovha_full": 0.08, baseline: 0.16},
-        "auc_over_corruption_strength": {"ovha_full": 0.74, baseline: 0.68},
-        "full_drop_less_than_baseline": True,
-        "rceo_reliability_monotonic": True,
-        "rceo_reliability_shift": -0.25,
-        "rceo_reliability_curve": [
-            {"corruption_strength": 0.0, "mean_reliability": 0.90},
-            {"corruption_strength": 0.5, "mean_reliability": 0.65},
-        ],
-        "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
-        "candidate_loss_shift": {"LRIO": 0.04, "SPO": -0.06},
-        "required_stress_coverage": {
-            "passed": True,
-            "reasons": [],
-            "observed": stress_targets,
-            "required": stress_targets,
-            "condition": "robustness rows must cover every required Step 6 stress target",
-        },
-        "required_ablation_degradation": {
-            "passed": True,
-            "reasons": [],
-            "value": {"ovha_no_rceo": 0.10, "ovha_no_evidence_router": 0.08},
-        },
-        "rceo_reliability_calibration": {
-            "ece": 0.05,
-            "bin_count": 3,
-            "calibration_curve": [
-                {"bin": 0, "mean_confidence": 0.2, "observed_accuracy": 0.18},
-                {"bin": 1, "mean_confidence": 0.5, "observed_accuracy": 0.48},
-                {"bin": 2, "mean_confidence": 0.8, "observed_accuracy": 0.78},
-            ],
-        },
-    }
+    from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+    summary = summarize_robustness_rows(
+        _gate_robustness_rows(),
+        full_model="ovha_full",
+        baseline_model="cross_attention_transformer",
+    )
+    summary["task"] = task
+    return summary
 
 
 def _gate_robustness_rows() -> list[dict[str, object]]:
-    return [
+    rows = [
         {
             "model": "ovha_full",
             "corruption_type": "image_blur",
             "corruption_strength": 0.0,
             "score": 0.75,
             "rceo_reliability": 0.90,
+            "rceo_observed_reliability": 0.88,
+            "router_load_by_candidate": {"TLEO": 0.20, "SPO": 0.20, "LRIO": 0.40, "CATO": 0.20},
+            "candidate_loss": {"TLEO": 0.12, "SPO": 0.20, "LRIO": 0.26, "CATO": 0.18},
         },
         {
             "model": "ovha_full",
             "corruption_type": "image_blur",
-            "corruption_strength": 0.5,
-            "score": 0.69,
+            "corruption_strength": 0.25,
+            "score": 0.72,
             "rceo_reliability": 0.65,
+            "rceo_observed_reliability": 0.63,
+            "router_load_by_candidate": {"TLEO": 0.18, "SPO": 0.28, "LRIO": 0.32, "CATO": 0.22},
+            "candidate_loss": {"TLEO": 0.13, "SPO": 0.17, "LRIO": 0.28, "CATO": 0.19},
+        },
+    ]
+    for stress in _canonical_stress_rows():
+        rows.append(
+            {
+                **stress,
+                "model": "ovha_full",
+                "corruption_strength": 0.5,
+                "score": 0.69,
+                "rceo_reliability": 0.45,
+                "rceo_observed_reliability": 0.43,
+                "router_load_by_candidate": {"TLEO": 0.18, "SPO": 0.40, "LRIO": 0.20, "CATO": 0.22},
+                "candidate_loss": {"TLEO": 0.14, "SPO": 0.14, "LRIO": 0.31, "CATO": 0.19},
+            }
+        )
+    rows.extend(
+        [
+            {
+                "model": "cross_attention_transformer",
+                "corruption_type": "image_blur",
+                "corruption_strength": 0.0,
+                "score": 0.75,
+            },
+            {
+                "model": "cross_attention_transformer",
+                "corruption_type": "image_blur",
+                "corruption_strength": 0.5,
+                "score": 0.63,
+            },
+            {
+                "model": "ovha_no_rceo",
+                "corruption_type": "image_blur",
+                "corruption_strength": 0.0,
+                "score": 0.74,
+            },
+            {
+                "model": "ovha_no_rceo",
+                "corruption_type": "image_blur",
+                "corruption_strength": 0.5,
+                "score": 0.58,
+            },
+            {
+                "model": "ovha_no_evidence_router",
+                "corruption_type": "image_blur",
+                "corruption_strength": 0.0,
+                "score": 0.74,
+            },
+            {
+                "model": "ovha_no_evidence_router",
+                "corruption_type": "image_blur",
+                "corruption_strength": 0.5,
+                "score": 0.57,
+            },
+        ]
+    )
+    return rows
+
+
+def _canonical_stress_rows() -> list[dict[str, object]]:
+    return [
+        {"corruption_type": "missing_modality", "missing_modalities": ["text"]},
+        {"corruption_type": "missing_modality", "missing_modalities": ["vision"]},
+        {"corruption_type": "missing_modality", "missing_modalities": ["audio"]},
+        {"corruption_type": "image_blur"},
+        {"corruption_type": "image_crop"},
+        {"corruption_type": "image_occlusion"},
+        {"corruption_type": "audio_noise"},
+        {"corruption_type": "audio_masking"},
+        {"corruption_type": "text_token_mask"},
+        {"corruption_type": "text_paraphrase"},
+        {
+            "corruption_type": "hard_negative_caption_mismatch",
+            "mismatch_source_id": "other-caption",
         },
         {
-            "model": "cross_attention_transformer",
-            "corruption_type": "image_blur",
-            "corruption_strength": 0.0,
-            "score": 0.75,
+            "corruption_type": "hard_negative_region_mismatch",
+            "mismatch_source_id": "other-region",
         },
         {
-            "model": "cross_attention_transformer",
-            "corruption_type": "image_blur",
-            "corruption_strength": 0.5,
-            "score": 0.63,
+            "corruption_type": "hard_negative_audio_mismatch",
+            "mismatch_source_id": "other-audio",
         },
     ]
 

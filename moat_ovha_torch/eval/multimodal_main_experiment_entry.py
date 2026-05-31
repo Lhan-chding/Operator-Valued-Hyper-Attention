@@ -27,7 +27,7 @@ from moat_ovha_torch.eval.multimodal_public_gates import (
     evaluate_region_text_gate,
     evaluate_sentiment_gate,
 )
-from moat_ovha_torch.eval.multimodal_robustness import DEFAULT_REQUIRED_STRESS_TARGETS
+from moat_ovha_torch.eval.multimodal_robustness import DEFAULT_REQUIRED_STRESS_TARGETS, summarize_robustness_rows
 from moat_ovha_torch.eval.multimodal_statistics import validate_public_summary
 
 
@@ -766,8 +766,11 @@ def _validate_recomputed_public_gate(
     summary = _read_json_artifact(label, "statistics_summary", artifact_paths["statistics_summary"], errors)
     diagnostics = _read_jsonl_artifact(label, "diagnostics", artifact_paths["diagnostics"], errors)
     robustness = _read_json_artifact(label, "robustness_summary", artifact_paths["robustness_summary"], errors)
+    robustness_rows = _read_jsonl_artifact(label, "robustness_rows", artifact_paths["robustness_rows"], errors)
     if summary is None or robustness is None:
         return None
+    if robustness_rows:
+        _validate_robustness_summary_matches_rows(label, robustness, robustness_rows, errors)
 
     if label == "region_text_public":
         recomputed = evaluate_region_text_gate(
@@ -801,6 +804,97 @@ def _validate_recomputed_public_gate(
         else:
             errors.extend(f"{label} gate artifact recomputation failed: {reason}" for reason in reasons)
     return recomputed
+
+
+def _validate_robustness_summary_matches_rows(
+    label: str,
+    supplied_summary: Mapping[str, Any],
+    rows: list[dict[str, Any]],
+    errors: list[str],
+) -> None:
+    full_model = str(supplied_summary.get("full_model") or "ovha_full")
+    baseline_model = str(supplied_summary.get("baseline_model") or "cross_attention_transformer")
+    recomputed = summarize_robustness_rows(rows, full_model=full_model, baseline_model=baseline_model)
+    for field in (
+        "clean_score",
+        "corrupted_score",
+        "relative_drop",
+        "auc_over_corruption_strength",
+        "full_drop_less_than_baseline",
+        "rceo_reliability_monotonic",
+        "rceo_reliability_shift",
+        "rceo_reliability_curve",
+        "operator_load_shift",
+        "candidate_loss_shift",
+        "required_stress_coverage",
+        "required_ablation_degradation",
+        "rceo_reliability_calibration",
+    ):
+        if field not in recomputed:
+            continue
+        if field not in supplied_summary:
+            errors.append(f"{label} gate robustness_summary.{field} missing but present in robustness_rows recomputation")
+            continue
+        _validate_robustness_value_matches_rows(
+            label,
+            f"robustness_summary.{field}",
+            supplied_summary.get(field),
+            recomputed.get(field),
+            errors,
+        )
+
+
+def _validate_robustness_value_matches_rows(
+    label: str,
+    field_path: str,
+    supplied_value: Any,
+    recomputed_value: Any,
+    errors: list[str],
+) -> None:
+    if isinstance(recomputed_value, Mapping):
+        if not isinstance(supplied_value, Mapping):
+            errors.append(f"{label} gate {field_path} disagrees with robustness_rows recomputation")
+            return
+        for key in sorted(set(supplied_value) | set(recomputed_value)):
+            next_path = f"{field_path}.{key}"
+            if key not in recomputed_value:
+                errors.append(f"{label} gate {next_path} not present in robustness_rows recomputation")
+            elif key not in supplied_value:
+                errors.append(f"{label} gate {next_path} missing but present in robustness_rows recomputation")
+            else:
+                _validate_robustness_value_matches_rows(
+                    label,
+                    next_path,
+                    supplied_value.get(key),
+                    recomputed_value.get(key),
+                    errors,
+                )
+        return
+    if isinstance(recomputed_value, (list, tuple)):
+        if not isinstance(supplied_value, (list, tuple)) or len(supplied_value) != len(recomputed_value):
+            errors.append(f"{label} gate {field_path} disagrees with robustness_rows recomputation")
+            return
+        for index, (supplied_item, recomputed_item) in enumerate(zip(supplied_value, recomputed_value)):
+            _validate_robustness_value_matches_rows(
+                label,
+                f"{field_path}[{index}]",
+                supplied_item,
+                recomputed_item,
+                errors,
+            )
+        return
+    if isinstance(supplied_value, bool) or isinstance(recomputed_value, bool):
+        if supplied_value is not recomputed_value:
+            errors.append(f"{label} gate {field_path} disagrees with robustness_rows recomputation")
+        return
+    supplied_number = _finite_float(supplied_value)
+    recomputed_number = _finite_float(recomputed_value)
+    if supplied_number is not None and recomputed_number is not None:
+        if not math.isclose(supplied_number, recomputed_number, rel_tol=1e-9, abs_tol=1e-9):
+            errors.append(f"{label} gate {field_path} disagrees with robustness_rows recomputation")
+        return
+    if supplied_value != recomputed_value:
+        errors.append(f"{label} gate {field_path} disagrees with robustness_rows recomputation")
 
 
 def _validate_public_gate_report_matches_artifacts(
