@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import json
 from typing import Any
 
 from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
-from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+from moat_ovha_torch.eval.multimodal_public_entry import (
+    REGION_TEXT_TASK_TYPES,
+    SENTIMENT_EMOTION_TASK_TYPES,
+    validate_public_entry_requirements,
+)
 
 
 REGION_TEXT_TOPCONF_CHECKS = (
@@ -99,6 +104,8 @@ def _validate_all_cache_targets(
     if not isinstance(cache_targets, Mapping) or not cache_targets:
         errors.append("at least one data cache validation target is required for top-conference main experiments")
         return
+    observed_region_text_cache = False
+    observed_sentiment_cache = False
     for name, target in sorted(cache_targets.items()):
         if not isinstance(target, CacheValidationTarget):
             errors.append(f"data cache validation target must be CacheValidationTarget: {name}")
@@ -110,4 +117,25 @@ def _validate_all_cache_targets(
         if not report.ok:
             errors.append(f"data cache validation failed for {name}")
             errors.extend(report.errors)
+        else:
+            tasks = _cache_data_card_tasks(target.layout)
+            observed_region_text_cache = observed_region_text_cache or bool(tasks & REGION_TEXT_TASK_TYPES)
+            observed_sentiment_cache = observed_sentiment_cache or bool(tasks & SENTIMENT_EMOTION_TASK_TYPES)
         warnings.extend(f"{name}: {warning}" for warning in report.warnings)
+    if not observed_region_text_cache:
+        errors.append("top-conference main experiments require at least one region-text data cache")
+    if not observed_sentiment_cache:
+        errors.append("top-conference main experiments require at least one sentiment/emotion data cache")
+
+
+def _cache_data_card_tasks(layout: MultimodalCacheLayout) -> set[str]:
+    try:
+        payload = json.loads((layout.root / "data_card.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return set()
+    if not isinstance(payload, dict):
+        return set()
+    tasks = payload.get("tasks")
+    if not isinstance(tasks, list):
+        return set()
+    return {str(task) for task in tasks if str(task).strip()}

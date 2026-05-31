@@ -495,6 +495,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cache_root = Path(tmp) / "cache"
             _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
 
             report = validate_topconf_main_experiment_entry(
                 controlled_report=_complete_controlled_public_entry_report(),
@@ -503,6 +504,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 cache_targets={
                     "refcoco": CacheValidationTarget(
                         layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
                         splits=("val", "test"),
                     ),
                 },
@@ -739,6 +744,100 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
         (root / "supervision" / f"corruption_{split}.parquet").write_text("placeholder corruption metadata\n")
         manifest = {}
         for modality in ("text", "region"):
+            x_path = root / "token_fields" / f"{modality}_{split}.npy"
+            pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
+            mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
+            x_path.write_text("placeholder token field\n")
+            pos_path.write_text("placeholder positions\n")
+            mask_path.write_text("placeholder mask\n")
+            manifest[modality] = {
+                "x": str(x_path.relative_to(root)),
+                "pos": str(pos_path.relative_to(root)),
+                "mask": str(mask_path.relative_to(root)),
+            }
+        (root / "masks" / f"text_mask_{split}.npy").write_text("placeholder mask\n")
+        (root / "token_fields" / f"manifest_{split}.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
+    checksums = {}
+    for path in required_cache_files(layout, splits=("val", "test")):
+        if path.exists():
+            checksums[str(path.relative_to(root))] = file_sha256(path)
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            checksums.setdefault(str(path.relative_to(root)), file_sha256(path))
+    (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
+
+
+def _write_valid_cmu_mosei_public_cache(cache_root: Path) -> None:
+    from moat_ovha_torch.data.multimodal.cache_schema import (
+        MultimodalCacheLayout,
+        default_data_card,
+        file_sha256,
+        required_cache_files,
+    )
+
+    layout = MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1")
+    root = layout.root
+    for folder in ("masks", "positions", "provenance", "supervision", "token_fields"):
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    data_card = default_data_card(
+        "cmu_mosei",
+        "v0.1",
+        ["text", "audio", "vision"],
+        ["sentiment_emotion"],
+    )
+    data_card["metadata_availability"] = {"speaker_id": False}
+    (root / "data_card.json").write_text(json.dumps(data_card, sort_keys=True) + "\n")
+    (root / "splits.json").write_text(json.dumps({"val": ["val-utt"], "test": ["test-utt"]}, sort_keys=True) + "\n")
+    (root / "samples.parquet").write_text("placeholder sentiment samples\n")
+    feature_versions = {
+        "text": "frozen-text-v1",
+        "audio": "frozen-audio-v1",
+        "vision": "frozen-vision-v1",
+        "baselines": {
+            "cross_attention_transformer": {
+                "text": "frozen-text-v1",
+                "audio": "frozen-audio-v1",
+                "vision": "frozen-vision-v1",
+            },
+            "ovha_full": {
+                "text": "frozen-text-v1",
+                "audio": "frozen-audio-v1",
+                "vision": "frozen-vision-v1",
+            },
+        },
+    }
+    (root / "provenance" / "feature_versions.json").write_text(json.dumps(feature_versions, sort_keys=True) + "\n")
+    (root / "provenance" / "pseudo_label_versions.json").write_text(
+        json.dumps({"generated_from_splits": ["train"], "version": "test-pseudo-v1"}, sort_keys=True) + "\n"
+    )
+    for split in ("val", "test"):
+        source_id = f"{split}-utt"
+        (root / "provenance" / f"source_ids_{split}.txt").write_text(f"{source_id}\n")
+        (root / "provenance" / f"sample_records_{split}.jsonl").write_text(
+            json.dumps(
+                {
+                    "source_id": source_id,
+                    "split": split,
+                    "original_split": split,
+                    "raw_ref": f"raw://{source_id}",
+                    "license_tag": "test-license",
+                    "preprocessing_version": "sentiment-preprocess-v1",
+                    "utterance_id": source_id,
+                    "dialogue_id": f"dialogue-{split}",
+                    "transcript_source": "official_transcript",
+                    "missing_modality_mask_ref": f"supervision/missing_modality_mask_{split}.npy",
+                    "corruption_metadata_ref": f"supervision/corruption_{split}.parquet",
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        (root / "provenance" / f"failed_samples_{split}.jsonl").write_text("")
+        (root / "supervision" / f"task_labels_{split}.npy").write_text("placeholder sentiment labels\n")
+        (root / "supervision" / f"missing_modality_mask_{split}.npy").write_text("placeholder missing mask\n")
+        (root / "supervision" / f"corruption_{split}.parquet").write_text("placeholder corruption metadata\n")
+        manifest = {}
+        for modality in ("text", "audio", "vision"):
             x_path = root / "token_fields" / f"{modality}_{split}.npy"
             pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
             mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
