@@ -194,6 +194,13 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn('"adapter_params_detail": _adapter_param_details(', model_source)
         self.assertNotIn("diagnostics[name] = {}", model_source)
 
+    def test_stackability_guard_source_checks_candidate_feature_batch_query_axes(self):
+        operator_source = (ROOT / "moat_ovha_torch" / "models" / "multimodal" / "operator_bank.py").read_text()
+
+        self.assertIn("out.feature.shape", operator_source)
+        self.assertIn("(batch_size, q_count)", operator_source)
+        self.assertIn("Candidate {name} feature returned", operator_source)
+
     def test_cache_schema_requires_data_card_checksums_and_provenance(self):
         from moat_ovha_torch.data.multimodal.cache_schema import (
             MultimodalCacheLayout,
