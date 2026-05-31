@@ -484,6 +484,22 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertAlmostEqual(summary["rceo_reliability_shift"], -0.30)
         self.assertTrue(summary["rceo_reliability_monotonic"])
 
+    def test_robustness_summary_aggregates_auc_by_corruption_strength(self):
+        from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+        rows = [
+            _robustness_row("ovha_full", 0.0, 0.50, reliability=0.90),
+            _robustness_row("ovha_full", 0.0, 1.00, reliability=0.90),
+            _robustness_row("ovha_full", 0.5, 0.00, reliability=0.65),
+            _robustness_row("ovha_full", 0.5, 1.00, reliability=0.65),
+        ]
+
+        summary = summarize_robustness_rows(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+
+        self.assertAlmostEqual(summary["clean_score"]["ovha_full"], 0.75)
+        self.assertAlmostEqual(summary["corrupted_score"]["ovha_full"], 0.50)
+        self.assertAlmostEqual(summary["auc_over_corruption_strength"]["ovha_full"], 0.625)
+
     def test_robustness_summary_requires_plan_stress_family_coverage(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 
