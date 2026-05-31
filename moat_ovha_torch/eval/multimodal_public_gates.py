@@ -19,6 +19,12 @@ def evaluate_region_text_gate(
 ) -> dict[str, Any]:
     checks = {
         "full_beats_same_feature_baseline": _full_beats_baseline(statistics_summary, task, split, full_model, baseline_model),
+        "full_beats_required_strong_baselines": _full_beats_required_strong_baselines(
+            statistics_summary,
+            task,
+            split,
+            full_model,
+        ),
         "no_cato_drops": _ablation_drop(statistics_summary, task, split, full_model, no_cato_score, "no-CATO"),
         "cato_router_load_high": _router_load_high(diagnostics_rows, "CATO", minimum=0.35),
         "alignment_entropy_improves": _entropy_improves(diagnostics_rows, "CATO", "alignment_entropy"),
@@ -112,6 +118,40 @@ def _ablation_drop(
         "value": improvement,
         "reason": f"{ablation_name} ablation does not drop" if not passed else "",
     }
+
+
+def _full_beats_required_strong_baselines(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    full_model: str,
+) -> dict[str, Any]:
+    full = _model_mean(summary, task, split, full_model)
+    if full is None:
+        return {"passed": False, "reason": "full model score missing"}
+    higher_is_better = _higher_is_better(summary, task, split, full_model)
+    reasons: list[str] = []
+    values: dict[str, float] = {}
+    for baseline_model in _required_strong_baselines_for_gate(task):
+        baseline = _model_mean(summary, task, split, baseline_model)
+        if baseline is None:
+            reasons.append(f"required same-feature baseline missing: {baseline_model}")
+            continue
+        improvement = _directional_improvement(full, baseline, higher_is_better)
+        values[baseline_model] = improvement
+        if improvement <= 0.0:
+            reasons.append(f"full model does not beat required same-feature baseline: {baseline_model}")
+    return {
+        "passed": not reasons,
+        "value": values,
+        "reason": "; ".join(reasons),
+    }
+
+
+def _required_strong_baselines_for_gate(task: str) -> tuple[str, ...]:
+    if task == "phrase_region_grounding":
+        return ("modality_expert_moe",)
+    return ()
 
 
 def _router_load_high(rows: list[dict[str, Any]], candidate: str, minimum: float) -> dict[str, Any]:
