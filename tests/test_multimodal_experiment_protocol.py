@@ -945,6 +945,49 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("region_text_public gate artifact recomputation failed", joined)
         self.assertIn("region-text public diagnostics missing CATO router load by phrase type", joined)
 
+    def test_topconf_main_entry_recomputes_controlled_report_from_artifacts(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+
+            controlled_report = _complete_controlled_public_entry_report(tmp_path / "controlled_artifacts")
+            controlled_rows = Path(controlled_report["evidence_artifacts"]["controlled_rows"]["path"])
+            rows = [json.loads(line) for line in controlled_rows.read_text().splitlines() if line.strip()]
+            for row in rows:
+                if row["family"] == "mixed_relation_operator":
+                    row["router_accuracy"] = 0.10
+            controlled_rows.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
+            controlled_report["evidence_artifacts"]["controlled_rows"]["sha256"] = file_sha256(controlled_rows)
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=controlled_report,
+                region_gate_report=_passing_region_text_public_gate_report(tmp_path / "artifacts"),
+                sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("controlled report artifact recomputation failed", joined)
+        self.assertIn("controlled report required gate did not pass: Router gate", joined)
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
@@ -1271,7 +1314,38 @@ def _valid_adapter_params() -> dict[str, list[str]]:
     }
 
 
-def _complete_controlled_public_entry_report() -> dict[str, object]:
+def _complete_controlled_public_entry_report(artifact_root: Path | None = None) -> dict[str, object]:
+    if artifact_root is not None:
+        from moat_ovha_torch.data.multimodal.cache_schema import file_sha256
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        controlled_rows = artifact_root / "controlled_multimodal_rows.jsonl"
+        diagnostics_report = artifact_root / "controlled_multimodal_diagnostics.jsonl"
+        rows = _complete_controlled_rows()
+        controlled_rows.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
+        diagnostics_report.write_text(
+            "\n".join(
+                json.dumps(
+                    {
+                        "family": row["family"],
+                        "stackability_passed": row["stackability_passed"],
+                        "oracle_matrix": row["oracle_matrix"],
+                    },
+                    sort_keys=True,
+                )
+                for row in rows
+            )
+            + "\n"
+        )
+        evidence_artifacts = {
+            "task": "controlled_multimodal",
+            "generated_by": "scripts/multimodal/summarize_controlled_report.py",
+            "controlled_rows": {"path": str(controlled_rows), "sha256": file_sha256(controlled_rows)},
+            "diagnostics_report": {"path": str(diagnostics_report), "sha256": file_sha256(diagnostics_report)},
+        }
+        return build_controlled_report(rows, evidence_artifacts=evidence_artifacts)
+
     required_gates = (
         "Stackability",
         "TLEO collapse",
@@ -1292,16 +1366,13 @@ def _complete_controlled_public_entry_report() -> dict[str, object]:
             "no-RCEO ablation": {"passed": True},
         }
     )
+    rows_by_family = {
+        row["family"]: {key: value for key, value in row.items() if key != "family"}
+        for row in _complete_controlled_rows()
+    }
     return {
         "oracle_matrix_cells": ("learned_learned", "true_learned", "learned_true", "true_true"),
-        "families": {
-            "tleo_local_evidence": _complete_controlled_family_row(),
-            "spo_global_prototype": _complete_controlled_family_row(),
-            "lrio_low_rank_interaction": _complete_controlled_family_row(),
-            "cato_alignment_transport": _complete_controlled_family_row(),
-            "rceo_reliability_corruption": _complete_controlled_family_row(rceo=True),
-            "mixed_relation_operator": _complete_controlled_family_row(),
-        },
+        "families": rows_by_family,
         "gate_table": gate_table,
         "go_no_go": {"controlled_multimodal_passed": True, "enter_public_multimodal": True},
         "evidence_artifacts": _controlled_evidence_artifacts(),
@@ -1317,8 +1388,51 @@ def _controlled_evidence_artifacts() -> dict[str, object]:
     }
 
 
+def _complete_controlled_rows() -> list[dict[str, object]]:
+    rows = [
+        {"family": "tleo_local_evidence", **_complete_controlled_family_row()},
+        {
+            "family": "spo_global_prototype",
+            **_complete_controlled_family_row(),
+            "prototype_kl_delta": 0.12,
+        },
+        {
+            "family": "lrio_low_rank_interaction",
+            **_complete_controlled_family_row(),
+            "rank_logits_kl_delta": 0.13,
+            "no_lrio_delta": 0.14,
+        },
+        {
+            "family": "cato_alignment_transport",
+            **_complete_controlled_family_row(),
+            "alignment_entropy_delta": 0.15,
+            "alignment_topk_delta": 0.16,
+        },
+        {
+            "family": "rceo_reliability_corruption",
+            **_complete_controlled_family_row(rceo=True),
+            "rceo_reliability_monotonic": True,
+            "rceo_router_load_shift": 0.17,
+            "rceo_reliability_curve": [
+                {"corruption_strength": 0.0, "mean_reliability": 0.90},
+                {"corruption_strength": 0.5, "mean_reliability": 0.65},
+            ],
+            "no_rceo_delta": 0.18,
+        },
+        {
+            "family": "mixed_relation_operator",
+            **_complete_controlled_family_row(),
+            "router_accuracy": 0.86,
+            "no_lrio_delta": 0.19,
+            "no_rceo_delta": 0.20,
+        },
+    ]
+    return rows
+
+
 def _complete_controlled_family_row(*, rceo: bool = False) -> dict[str, object]:
     row = {
+        "stackability_passed": True,
         "oracle_matrix": {
             "learned_learned": {"loss": 0.1},
             "true_learned": {"loss": 0.1},
@@ -1333,6 +1447,8 @@ def _complete_controlled_family_row(*, rceo: bool = False) -> dict[str, object]:
         "no_reliability_prior_delta": 0.1,
         "memory_only_router_delta": 0.1,
         "evidence_only_router_delta": 0.1,
+        "no_operator_memory_delta": 0.1,
+        "no_hyper_adapter_delta": 0.1,
     }
     if rceo:
         row["rceo_prior_effect"] = 0.1
