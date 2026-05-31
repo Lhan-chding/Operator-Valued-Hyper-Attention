@@ -133,6 +133,32 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
         self.assertIn("dynamic_sinkhorn_epsilon", "\n".join(report.errors))
         self.assertIn("repair_variance", "\n".join(report.errors))
 
+    def test_v1_adapter_params_require_exact_candidate_param_sets(self):
+        from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
+
+        params = _valid_adapter_params()
+        params["LRIO"] = ["rank_logits", "scale", "bias"]
+        params["SPO"] = list(params["SPO"]) + ["scale"]
+        report = validate_training_protocol(
+            {
+                "task_type": "controlled_multimodal",
+                "training_stages": ["T0", "T1", "T2", "T3", "T4"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T1": ["task_loss"],
+                    "T2": ["task_loss"],
+                    "T3": ["task_loss"],
+                    "T4": ["task_loss"],
+                },
+                "adapter_params_by_candidate": params,
+            }
+        )
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("adapter params for LRIO missing required v1 param: interaction_temperature", joined)
+        self.assertIn("adapter params for SPO contains duplicate v1 param: scale", joined)
+
     def test_training_protocol_cli_returns_json_and_nonzero_on_violation(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bad_plan.json"
