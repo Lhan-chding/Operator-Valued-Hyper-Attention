@@ -73,6 +73,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                             "top_prototype_by_class": {"negative": 1, "positive": 4},
                         },
                     },
+                    "public_diagnostics": _sentiment_public_diagnostics(),
                 }
             ],
             ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
@@ -130,6 +131,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                             "top_prototype_by_class": {"negative": 1, "positive": 4},
                         },
                     },
+                    "public_diagnostics": _sentiment_public_diagnostics(),
                 }
             ],
             ablation_scores={"ovha_no_lrio": 0.52, "ovha_no_spo": 0.50, "ovha_no_rceo": 0.54},
@@ -1403,8 +1405,33 @@ def _passing_sentiment_diagnostics() -> list[dict[str, object]]:
                     "top_prototype_by_class": {"negative": 1, "positive": 4},
                 },
             },
+            "public_diagnostics": _sentiment_public_diagnostics(),
         }
     ]
+
+
+def _sentiment_public_diagnostics() -> dict[str, object]:
+    return {
+        "lrio_rank_entropy_by_modality_pair": {
+            "text_audio": 0.42,
+            "text_vision": 0.37,
+            "audio_vision": 0.33,
+        },
+        "spo_prototype_load_by_emotion_class": {
+            "negative": {"p0": 0.70, "p1": 0.20, "p2": 0.10},
+            "positive": {"p0": 0.15, "p1": 0.75, "p2": 0.10},
+            "neutral": {"p0": 0.20, "p1": 0.25, "p2": 0.55},
+        },
+        "rceo_reliability_shift_under_missing_noisy_modality": {
+            "missing_audio": -0.18,
+            "noisy_vision": -0.12,
+        },
+        "router_load_by_condition": {
+            "clean": {"TLEO": 0.10, "SPO": 0.35, "LRIO": 0.40, "CATO": 0.15},
+            "corrupted": {"TLEO": 0.15, "SPO": 0.45, "LRIO": 0.25, "CATO": 0.15},
+            "missing": {"TLEO": 0.20, "SPO": 0.45, "LRIO": 0.20, "CATO": 0.15},
+        },
+    }
 
 
 def _passing_sentiment_robustness() -> dict[str, object]:
@@ -1504,6 +1531,22 @@ def _diagnostic(
         "setting": setting,
         "router_load_by_candidate": loads,
         "candidate_diagnostics": candidate_diagnostics,
+        "public_diagnostics": {
+            "cato_router_load_by_phrase_type": {
+                "object_noun_phrase": 0.52,
+                "attribute_phrase": 0.41,
+            },
+            "no_cato_delta_by_object_size": {
+                "small": 0.08,
+                "medium": 0.06,
+                "large": 0.04,
+            },
+            "no_cato_delta_by_phrase_length": {
+                "short": 0.05,
+                "long": 0.07,
+            },
+            "rceo_reliability_shift_under_blurred_regions": -0.22,
+        },
     }
     if rceo_reliability is not None:
         row["rceo_reliability"] = rceo_reliability

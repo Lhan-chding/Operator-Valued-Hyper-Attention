@@ -43,6 +43,7 @@ def evaluate_region_text_gate(
         ),
         "grounding_accuracy_improves_with_entropy": _grounding_accuracy_improves_with_entropy(diagnostics_rows),
         "rceo_visual_stress_router_shift": _rceo_visual_stress_router_shift(diagnostics_rows),
+        "step14_public_diagnostics": _region_text_public_diagnostics_present(diagnostics_rows),
         "rceo_reliability_calibrated": _rceo_reliability_calibrated(robustness),
         "robustness_passes": _robustness_passes(
             robustness,
@@ -82,6 +83,7 @@ def evaluate_sentiment_gate(
         "lrio_rank_entropy_present": _candidate_diag_positive(diagnostics_rows, "LRIO", "rank_entropy"),
         "spo_prototype_entropy_present": _candidate_diag_positive(diagnostics_rows, "SPO", "prototype_entropy"),
         "spo_top_prototype_differentiates": _spo_top_prototype_differentiates(diagnostics_rows),
+        "step14_public_diagnostics": _sentiment_public_diagnostics_present(diagnostics_rows),
         "rceo_reliability_calibrated": _rceo_reliability_calibrated(robustness_summary),
         "robustness_passes": _robustness_passes(
             robustness_summary,
@@ -430,6 +432,121 @@ def _calibration_bin_value(row: dict[str, Any], keys: tuple[str, ...]) -> float 
         if key in row:
             return _finite_float(row.get(key))
     return None
+
+
+def _region_text_public_diagnostics_present(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    diagnostics = _public_diagnostic_payloads(rows)
+    reasons: list[str] = []
+    if not any(_finite_probability_values(payload.get("cato_router_load_by_phrase_type")) for payload in diagnostics):
+        reasons.append("region-text public diagnostics missing CATO router load by phrase type")
+    if not any(_finite_non_negative_breakdown(payload.get("no_cato_delta_by_object_size")) for payload in diagnostics):
+        reasons.append("region-text public diagnostics missing no-CATO delta by object size")
+    if not any(_finite_non_negative_breakdown(payload.get("no_cato_delta_by_phrase_length")) for payload in diagnostics):
+        reasons.append("region-text public diagnostics missing no-CATO delta by phrase length")
+    if not any(_finite_negative_shift(payload.get("rceo_reliability_shift_under_blurred_regions")) for payload in diagnostics):
+        reasons.append("region-text public diagnostics missing RCEO reliability shift under blurred regions")
+    return {
+        "passed": not reasons,
+        "reason": "; ".join(reasons),
+    }
+
+
+def _sentiment_public_diagnostics_present(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    diagnostics = _public_diagnostic_payloads(rows)
+    reasons: list[str] = []
+    if not any(_finite_non_negative_breakdown(payload.get("lrio_rank_entropy_by_modality_pair")) for payload in diagnostics):
+        reasons.append("sentiment public diagnostics missing LRIO rank entropy by modality pair")
+    if not any(_prototype_load_map_differentiates(payload.get("spo_prototype_load_by_emotion_class")) for payload in diagnostics):
+        reasons.append("sentiment public diagnostics missing SPO prototype load by emotion class")
+    if not any(
+        _finite_missing_or_noisy_shift_breakdown(payload.get("rceo_reliability_shift_under_missing_noisy_modality"))
+        for payload in diagnostics
+    ):
+        reasons.append("sentiment public diagnostics missing RCEO reliability shift under missing/noisy modality")
+    if not any(_router_load_by_condition_valid(payload.get("router_load_by_condition")) for payload in diagnostics):
+        reasons.append("sentiment public diagnostics missing router load by clean/corrupted/missing split")
+    return {
+        "passed": not reasons,
+        "reason": "; ".join(reasons),
+    }
+
+
+def _public_diagnostic_payloads(rows: list[dict[str, Any]]) -> list[Mapping[str, Any]]:
+    return [
+        payload
+        for row in rows
+        for payload in (row.get("public_diagnostics"),)
+        if isinstance(payload, Mapping)
+    ]
+
+
+def _finite_probability_values(value: Any) -> bool:
+    if not isinstance(value, Mapping) or not value:
+        return False
+    for name, raw_value in value.items():
+        if _is_empty_reporting_value(name):
+            return False
+        numeric = _finite_float(raw_value)
+        if numeric is None or numeric < 0.0 or numeric > 1.0:
+            return False
+    return True
+
+
+def _finite_non_negative_breakdown(value: Any) -> bool:
+    if not isinstance(value, Mapping) or not value:
+        return False
+    has_positive = False
+    for name, raw_value in value.items():
+        if _is_empty_reporting_value(name):
+            return False
+        numeric = _finite_float(raw_value)
+        if numeric is None or numeric < 0.0:
+            return False
+        has_positive = has_positive or numeric > 0.0
+    return has_positive
+
+
+def _finite_negative_shift(value: Any, *, minimum_abs_shift: float = 0.01) -> bool:
+    numeric = _finite_float(value)
+    return numeric is not None and numeric <= -minimum_abs_shift
+
+
+def _finite_missing_or_noisy_shift_breakdown(value: Any) -> bool:
+    if not isinstance(value, Mapping) or not value:
+        return False
+    has_required_condition = False
+    for name, raw_value in value.items():
+        text = str(name).strip().lower()
+        if not text:
+            return False
+        numeric = _finite_float(raw_value)
+        if numeric is None:
+            return False
+        if ("missing" in text or "noisy" in text or "noise" in text) and numeric < 0.0:
+            has_required_condition = True
+    return has_required_condition
+
+
+def _router_load_by_condition_valid(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    normalized = {str(key).strip().lower(): payload for key, payload in value.items()}
+    required_conditions = ("clean", "corrupted", "missing")
+    if any(condition not in normalized for condition in required_conditions):
+        return False
+    return all(_candidate_probability_map_valid(normalized[condition]) for condition in required_conditions)
+
+
+def _candidate_probability_map_valid(value: Any, *, tolerance: float = 1e-6) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    total = 0.0
+    for candidate in ("TLEO", "SPO", "LRIO", "CATO"):
+        numeric = _finite_float(value.get(candidate))
+        if numeric is None or numeric < 0.0 or numeric > 1.0:
+            return False
+        total += numeric
+    return math.isclose(total, 1.0, rel_tol=tolerance, abs_tol=tolerance)
 
 
 def _entropy_improves(rows: list[dict[str, Any]], candidate: str, key: str) -> dict[str, Any]:
