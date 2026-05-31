@@ -1502,6 +1502,31 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
             )
         )
 
+    def test_controlled_cato_target_is_generated_from_true_alignment_pairs(self):
+        import torch
+
+        from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
+            CONTROLLED_OPERATOR_ORDER,
+            ControlledSyntheticMultimodalAdapter,
+        )
+
+        output_dim = 3
+        batch = ControlledSyntheticMultimodalAdapter(seed=123, field_dim=4, output_dim=output_dim).sample_batch(
+            family="cato_alignment_transport",
+            batch_size=2,
+            query_count=4,
+            device="cpu",
+        )
+        cato_index = CONTROLLED_OPERATOR_ORDER.index("CATO")
+        region_index = batch.hidden["true_alignment_pairs"][..., 1].unsqueeze(-1).expand(-1, -1, batch.fields["region"].x.shape[-1])
+        aligned_region = torch.gather(batch.fields["region"].x, dim=1, index=region_index)
+        scales = torch.linspace(0.5, 1.5, output_dim).view(1, 1, output_dim)
+        expected_cato = aligned_region.mean(dim=-1, keepdim=True) * scales
+
+        self.assertTrue(torch.allclose(batch.query.x, aligned_region, atol=1e-6))
+        self.assertTrue(torch.allclose(batch.hidden["true_candidate_values"][..., cato_index, :], expected_cato))
+        self.assertTrue(torch.allclose(batch.target_y, expected_cato))
+
     def test_rceo_reliability_prior_reinforces_evidence_operator_prior(self):
         import torch
 
