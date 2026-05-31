@@ -569,6 +569,35 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertIn("data_card.json operator_supervision missing required operator: LRIO", joined)
         self.assertIn("data_card.json operator_supervision missing required operator: RCEO", joined)
 
+    def test_cache_validator_rejects_blank_or_non_string_operator_supervision_entries(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                data_card_overrides={
+                    "operator_supervision": {
+                        "TLEO": "   ",
+                        "SPO": ["class/prototype/task label"],
+                        "LRIO": "paired modality interaction",
+                        "CATO": "phrase-region or source-target alignment",
+                        "RCEO": "quality/corruption/missing metadata",
+                    }
+                },
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("data_card.json operator_supervision.TLEO must be a non-empty string", joined)
+        self.assertIn("data_card.json operator_supervision.SPO must be a non-empty string", joined)
+
     def test_cache_validator_rejects_data_card_dataset_name_mismatch(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
