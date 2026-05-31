@@ -10,7 +10,11 @@ import re
 from typing import Any
 
 from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
-from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+from moat_ovha_torch.eval.multimodal_controlled_report import (
+    CONTROLLED_REQUIRED_FAMILIES,
+    ORACLE_MATRIX_CELLS,
+    build_controlled_report,
+)
 from moat_ovha_torch.eval.multimodal_public_entry import (
     REGION_TEXT_TASK_TYPES,
     SENTIMENT_EMOTION_TASK_TYPES,
@@ -142,6 +146,7 @@ def _require_controlled_artifact_evidence(controlled_report: dict[str, Any] | No
     if not diagnostics_rows:
         errors.append("controlled report diagnostics_report artifact must contain JSONL rows")
         return
+    _validate_controlled_diagnostics_report_content(diagnostics_rows, errors)
 
     recomputed = build_controlled_report(rows, evidence_artifacts=dict(evidence))
     for task_type in ("phrase_region_grounding", "sentiment_emotion"):
@@ -151,6 +156,41 @@ def _require_controlled_artifact_evidence(controlled_report: dict[str, Any] | No
                 f"controlled report artifact recomputation failed: {error}"
                 for error in validation.errors
             )
+
+
+def _validate_controlled_diagnostics_report_content(
+    diagnostics_rows: list[dict[str, Any]],
+    errors: list[str],
+) -> None:
+    rows_by_family: dict[str, dict[str, Any]] = {}
+    for row in diagnostics_rows:
+        family = str(row.get("family", "")).strip()
+        if not family:
+            errors.append("controlled report diagnostics_report row missing controlled family")
+            continue
+        if family not in CONTROLLED_REQUIRED_FAMILIES:
+            errors.append(f"controlled report diagnostics_report contains unknown controlled family: {family}")
+            continue
+        if family in rows_by_family:
+            errors.append(f"controlled report diagnostics_report duplicate controlled family: {family}")
+            continue
+        rows_by_family[family] = row
+
+    for family in CONTROLLED_REQUIRED_FAMILIES:
+        row = rows_by_family.get(family)
+        if row is None:
+            errors.append(f"controlled report diagnostics_report missing controlled family: {family}")
+            continue
+        if row.get("stackability_passed") is not True:
+            errors.append(f"controlled report diagnostics_report {family} stackability_passed must be explicit true")
+        matrix = row.get("oracle_matrix")
+        if not isinstance(matrix, Mapping):
+            errors.append(f"controlled report diagnostics_report {family} oracle_matrix must be an object")
+            continue
+        for cell in ORACLE_MATRIX_CELLS:
+            cell_payload = matrix.get(cell)
+            if not isinstance(cell_payload, Mapping):
+                errors.append(f"controlled report diagnostics_report {family} missing oracle_matrix cell: {cell}")
 
 
 def _controlled_report_payload(controlled_report: dict[str, Any] | None) -> dict[str, Any] | None:
