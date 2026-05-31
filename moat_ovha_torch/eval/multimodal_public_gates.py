@@ -7,6 +7,9 @@ from typing import Any
 from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
 
 
+_SENTIMENT_ANCHOR_BASELINES = ("tfn_lmf", "mult_style_crossmodal_transformer")
+
+
 def evaluate_region_text_gate(
     *,
     statistics_summary: dict[str, Any],
@@ -54,6 +57,14 @@ def evaluate_sentiment_gate(
 ) -> dict[str, Any]:
     checks = {
         "full_beats_same_feature_baseline": _full_beats_baseline(statistics_summary, task, split, full_model, baseline_model),
+        "full_beats_lmf_or_mult_baseline": _full_beats_any_required_baseline(
+            statistics_summary,
+            task,
+            split,
+            full_model,
+            _SENTIMENT_ANCHOR_BASELINES,
+            "full model must beat at least one required sentiment baseline: tfn_lmf or mult_style_crossmodal_transformer",
+        ),
         "no_lrio_drops": _ablation_drop(statistics_summary, task, split, full_model, ablation_scores.get("ovha_no_lrio"), "no-LRIO"),
         "no_spo_drops": _ablation_drop(statistics_summary, task, split, full_model, ablation_scores.get("ovha_no_spo"), "no-SPO"),
         "no_rceo_drops": _ablation_drop(statistics_summary, task, split, full_model, ablation_scores.get("ovha_no_rceo"), "no-RCEO"),
@@ -143,6 +154,38 @@ def _full_beats_required_strong_baselines(
             reasons.append(f"full model does not beat required same-feature baseline: {baseline_model}")
     return {
         "passed": not reasons,
+        "value": values,
+        "reason": "; ".join(reasons),
+    }
+
+
+def _full_beats_any_required_baseline(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    full_model: str,
+    baseline_models: tuple[str, ...],
+    failure_reason: str,
+) -> dict[str, Any]:
+    full = _model_mean(summary, task, split, full_model)
+    if full is None:
+        return {"passed": False, "reason": "full model score missing"}
+    higher_is_better = _higher_is_better(summary, task, split, full_model)
+    missing: list[str] = []
+    values: dict[str, float] = {}
+    for baseline_model in baseline_models:
+        baseline = _model_mean(summary, task, split, baseline_model)
+        if baseline is None:
+            missing.append(baseline_model)
+            continue
+        values[baseline_model] = _directional_improvement(full, baseline, higher_is_better)
+    best_improvement = max(values.values()) if values else None
+    passed = best_improvement is not None and best_improvement > 0.0
+    reasons = [] if passed else [failure_reason]
+    if missing and not passed:
+        reasons.append(f"required sentiment baseline missing: {', '.join(missing)}")
+    return {
+        "passed": passed,
         "value": values,
         "reason": "; ".join(reasons),
     }

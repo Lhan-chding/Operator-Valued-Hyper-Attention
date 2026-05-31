@@ -138,10 +138,25 @@ class MultimodalPublicGateTests(unittest.TestCase):
     def test_sentiment_gate_requires_full_to_beat_lmf_or_mult_baseline(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
 
-        summary = _summary("sentiment_emotion", "test", full=0.76, baseline=0.74)
-        models = summary["main_table"]["sentiment_emotion"]["test"]
-        models["tfn_lmf"]["mean"] = 0.78
-        models["mult_style_crossmodal_transformer"]["mean"] = 0.79
+        base_summary = _summary("sentiment_emotion", "test", full=0.76, baseline=0.74)
+        models = base_summary["main_table"]["sentiment_emotion"]["test"]
+        summary = {
+            **base_summary,
+            "main_table": {
+                **base_summary["main_table"],
+                "sentiment_emotion": {
+                    **base_summary["main_table"]["sentiment_emotion"],
+                    "test": {
+                        **models,
+                        "tfn_lmf": {**models["tfn_lmf"], "mean": 0.78},
+                        "mult_style_crossmodal_transformer": {
+                            **models["mult_style_crossmodal_transformer"],
+                            "mean": 0.79,
+                        },
+                    },
+                },
+            },
+        }
 
         report = evaluate_sentiment_gate(
             statistics_summary=summary,
