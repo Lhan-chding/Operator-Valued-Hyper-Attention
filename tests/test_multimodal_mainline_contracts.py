@@ -178,6 +178,42 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertTrue(sample_records_exists)
         self.assertTrue(alignment_pairs_exists)
 
+    def test_build_cache_cli_validates_requested_cache_version(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_root = tmp_path / "raw"
+            cache_root = tmp_path / "cache"
+            _write_refcoco_raw_fixture(raw_root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "refcoco",
+                    str(raw_root),
+                    str(cache_root),
+                    "--version",
+                    "v0.2-test",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            requested_layout = MultimodalCacheLayout(cache_root, "refcoco", "v0.2-test")
+            default_layout = MultimodalCacheLayout(cache_root, "refcoco", "v0.1")
+            requested_validation = validate_cache_layout(requested_layout, splits=("train", "val", "test"))
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["cache_root"], str(requested_layout.root))
+        self.assertTrue(requested_validation.ok, requested_validation.errors)
+        self.assertTrue((requested_layout.root / "data_card.json").exists())
+        self.assertFalse((default_layout.root / "data_card.json").exists())
+
     def test_build_cache_cli_writes_valid_cmu_mosei_cache_from_raw_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
