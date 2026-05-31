@@ -265,8 +265,11 @@ def _validate_quality_shape(name: str, quality: Any | None, field_shape: tuple[i
 def _validate_episode_identity(batch: MultimodalEpisodeBatch, errors: list[str]) -> None:
     for key in ("task_type", "split", "source_dataset"):
         value = getattr(batch, key)
-        if not isinstance(value, str) or not value:
+        if not _is_non_empty_string(value):
             errors.append(f"{key} must be a non-empty string")
+            continue
+        if not _is_normalized_non_empty_string(value):
+            errors.append(f"{key} must be a non-empty normalized string")
 
 
 def _validate_field_attrs(name: str, attrs: dict[str, Any] | None, errors: list[str]) -> None:
@@ -305,6 +308,10 @@ def _validate_provenance_bank(provenance: ProvenanceBank, batch_size: int, split
             errors.append(f"provenance.{key} length must match batch size {batch_size}, got {len(values)}")
         if any(not _is_non_empty_string(value) for value in values):
             errors.append(f"provenance.{key} entries must be non-empty strings")
+        if key in {"source_id", "original_split"} and any(
+            isinstance(value, str) and not _is_normalized_non_empty_string(value) for value in values
+        ):
+            errors.append(f"provenance.{key} entries must be non-empty normalized strings")
     if isinstance(split, str) and split:
         original_split = provenance.original_split
         if isinstance(original_split, list) and any(value != split for value in original_split if isinstance(value, str) and value):
@@ -343,6 +350,10 @@ def _validate_string_version_map(
 
 def _is_non_empty_string(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _is_normalized_non_empty_string(value: str) -> bool:
+    return bool(value) and value == value.strip()
 
 
 def _validate_supervision_bank(
