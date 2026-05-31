@@ -89,6 +89,7 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
         if key not in metadata or metadata[key] in ({}, None):
             errors.append(f"metadata missing {key}")
     _validate_reporting_metadata(summary, metadata, errors)
+    _validate_report_facing_metadata(summary, errors)
     _validate_baseline_strength(summary.get("paired_tests", {}), metadata, errors)
     _validate_label_provenance(summary.get("per_seed_appendix", []), metadata, errors)
     if not summary.get("per_seed_appendix"):
@@ -244,6 +245,59 @@ def _validate_reporting_metadata(summary: dict[str, Any], metadata: dict[str, An
         row_name = f"{row.get('task', '?')}/{row.get('split', '?')}/{row.get('model', '?')}/seed={row.get('seed', '?')}"
         if not row.get("raw_metric_path"):
             errors.append(f"{row_name}: raw_metric_path missing")
+
+
+def _validate_report_facing_metadata(summary: dict[str, Any], errors: list[str]) -> None:
+    models = _models_in_main_table(summary.get("main_table", {}))
+    metadata = summary.get("reporting_metadata")
+    if not isinstance(metadata, dict):
+        for key in (
+            "parameter_count",
+            "training_steps",
+            "frozen_feature_versions",
+            "hardware",
+            "wall_clock_summary",
+            "per_seed_table",
+        ):
+            errors.append(f"reporting_metadata missing {key}")
+        return
+
+    _validate_report_model_map(metadata, "parameter_count", models, errors)
+    _validate_report_model_map(metadata, "training_steps", models, errors)
+    for key in ("frozen_feature_versions", "hardware", "wall_clock_summary"):
+        if _is_empty_report_value(metadata.get(key)):
+            errors.append(f"reporting_metadata missing {key}")
+    per_seed_table = metadata.get("per_seed_table")
+    if not isinstance(per_seed_table, list) or not per_seed_table:
+        errors.append("reporting_metadata missing per_seed_table")
+        return
+    covered_models = {str(row.get("model")) for row in per_seed_table if isinstance(row, dict) and row.get("model")}
+    for model in sorted(models):
+        if model not in covered_models:
+            errors.append(f"reporting_metadata per_seed_table missing model: {model}")
+
+
+def _validate_report_model_map(
+    metadata: dict[str, Any],
+    key: str,
+    models: set[str],
+    errors: list[str],
+) -> None:
+    values = metadata.get(key)
+    if not isinstance(values, dict) or not values:
+        errors.append(f"reporting_metadata missing {key}")
+        return
+    for model in sorted(models):
+        if _is_empty_report_value(values.get(model)):
+            errors.append(f"reporting_metadata {key} missing model: {model}")
+
+
+def _is_empty_report_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (str, list, dict, tuple, set)):
+        return len(value) == 0
+    return False
 
 
 def _models_in_main_table(main_table: dict[str, Any]) -> set[str]:
