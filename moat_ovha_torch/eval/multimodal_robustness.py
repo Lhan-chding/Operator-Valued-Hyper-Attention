@@ -22,6 +22,13 @@ DEFAULT_REQUIRED_STRESS_TARGETS = {
 }
 DEFAULT_REQUIRED_STRESS_FAMILIES = DEFAULT_REQUIRED_STRESS_TARGETS
 TEMPORAL_STRESS_TARGETS = {"temporal_shift": ("temporal_shift", "temporal_shift_sec")}
+_RCEO_OBSERVED_RELIABILITY_KEYS = (
+    "rceo_observed_reliability",
+    "observed_reliability",
+    "target_reliability",
+    "reliability_target",
+    "observed_accuracy",
+)
 
 
 def summarize_robustness_rows(
@@ -46,6 +53,7 @@ def summarize_robustness_rows(
     reliability_shift = _rceo_reliability_shift(full_rows)
     load_shift = _operator_load_shift(full_rows)
     candidate_loss_shift = _candidate_loss_shift(full_rows)
+    reliability_calibration = _rceo_reliability_calibration(full_rows)
     required_ablation_degradation = _required_ablation_degradation(
         relative_drop,
         full_model,
@@ -66,6 +74,7 @@ def summarize_robustness_rows(
         "rceo_reliability_monotonic": reliability_monotonic,
         "rceo_reliability_shift": reliability_shift,
         "rceo_reliability_curve": reliability_curve,
+        "rceo_reliability_calibration": reliability_calibration,
         "operator_load_shift": load_shift,
         "candidate_loss_shift": candidate_loss_shift,
         "required_stress_coverage": required_stress_coverage,
@@ -148,6 +157,57 @@ def _rceo_reliability_curve(rows: list[dict[str, Any]]) -> list[dict[str, float]
         }
         for strength, values in sorted(reliability_by_strength.items())
     ]
+
+
+def _rceo_reliability_calibration(rows: list[dict[str, Any]], *, bin_count: int = 5) -> dict[str, Any]:
+    pairs: list[tuple[float, float]] = []
+    for row in rows:
+        predicted = _finite_probability(row.get("rceo_reliability"))
+        observed = _observed_reliability(row)
+        if predicted is None or observed is None:
+            continue
+        pairs.append((predicted, observed))
+    if not pairs:
+        return {
+            "ece": None,
+            "expected_calibration_error": None,
+            "bin_count": 0,
+            "calibration_curve": [],
+            "condition": "RCEO reliability calibration requires explicit observed reliability labels",
+        }
+
+    bucket_count = max(1, int(bin_count))
+    buckets: dict[int, list[tuple[float, float]]] = defaultdict(list)
+    for predicted, observed in pairs:
+        bucket = min(int(predicted * bucket_count), bucket_count - 1)
+        buckets[bucket].append((predicted, observed))
+
+    curve: list[dict[str, float | int]] = []
+    for output_bin, bucket in enumerate(sorted(buckets)):
+        values = buckets[bucket]
+        mean_confidence = sum(predicted for predicted, _ in values) / len(values)
+        observed_accuracy = sum(observed for _, observed in values) / len(values)
+        curve.append(
+            {
+                "bin": output_bin,
+                "mean_confidence": mean_confidence,
+                "observed_accuracy": observed_accuracy,
+                "count": len(values),
+            }
+        )
+
+    total = sum(int(point["count"]) for point in curve)
+    ece = sum(
+        int(point["count"]) / total * abs(float(point["mean_confidence"]) - float(point["observed_accuracy"]))
+        for point in curve
+    )
+    return {
+        "ece": ece,
+        "expected_calibration_error": ece,
+        "bin_count": len(curve),
+        "calibration_curve": curve,
+        "condition": "Expected calibration error between predicted RCEO reliability and observed reliability",
+    }
 
 
 def _operator_load_shift(rows: list[dict[str, Any]]) -> dict[str, float]:
@@ -311,6 +371,20 @@ def _valid_corruption_strength(value: Any) -> float | None:
     if number is None or number < 0.0:
         return None
     return number
+
+
+def _finite_probability(value: Any) -> float | None:
+    number = _finite_float(value)
+    if number is None or number < 0.0 or number > 1.0:
+        return None
+    return number
+
+
+def _observed_reliability(row: dict[str, Any]) -> float | None:
+    for key in _RCEO_OBSERVED_RELIABILITY_KEYS:
+        if key in row:
+            return _finite_probability(row.get(key))
+    return None
 
 
 def _finite_float(value: Any) -> float | None:
