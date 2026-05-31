@@ -757,6 +757,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             smoke_baseline_metrics_path = Path(
                 payload["training"]["artifacts"]["smoke_baseline_raw_metrics"]["path"]
             )
+            smoke_statistics_preview_path = Path(
+                payload["training"]["artifacts"]["smoke_statistics_preview"]["path"]
+            )
             eval_rows = [json.loads(line) for line in eval_metrics_path.read_text().splitlines() if line.strip()]
             eval_diagnostics = [json.loads(line) for line in eval_diagnostics_path.read_text().splitlines() if line.strip()]
             smoke_raw_rows = [
@@ -765,6 +768,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             smoke_baseline_rows = [
                 json.loads(line) for line in smoke_baseline_metrics_path.read_text().splitlines() if line.strip()
             ]
+            smoke_statistics_preview = json.loads(smoke_statistics_preview_path.read_text())
 
         training = payload["training"]
         self.assertEqual(training["eval_smoke_split"], "val")
@@ -850,6 +854,29 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             )
             self.assertIn("not a trained strong baseline", row["evidence_limitations"])
             self.assertIn("public metric inventory uses smoke proxies", row["evidence_limitations"])
+        self.assertEqual(smoke_statistics_preview["artifact_type"], "public_smoke_statistics_preview")
+        self.assertEqual(
+            smoke_statistics_preview["evidence_scope"],
+            "smoke_statistics_preview_only_not_topconf_main_table",
+        )
+        self.assertTrue(smoke_statistics_preview["not_topconf_main_table"])
+        self.assertEqual(
+            smoke_statistics_preview["source_raw_metric_paths"],
+            [str(smoke_raw_metrics_path), str(smoke_baseline_metrics_path)],
+        )
+        self.assertEqual(smoke_statistics_preview["full_model"], "ovha_full")
+        self.assertEqual(smoke_statistics_preview["baseline_model"], "cross_attention_transformer")
+        self.assertFalse(smoke_statistics_preview["validation"]["ok"])
+        self.assertIn("at least 3 seeds", "\n".join(smoke_statistics_preview["validation"]["errors"]))
+        self.assertIn(
+            "ovha_full",
+            smoke_statistics_preview["summary"]["main_table"]["phrase_region_grounding"]["val"],
+        )
+        self.assertIn(
+            "cross_attention_transformer",
+            smoke_statistics_preview["summary"]["main_table"]["phrase_region_grounding"]["val"],
+        )
+        self.assertIn("not valid top-conference main-table evidence", smoke_statistics_preview["evidence_limitations"])
 
     def test_public_smoke_runner_rejects_unverified_controlled_artifact_descriptors(self):
         with tempfile.TemporaryDirectory() as tmp:
