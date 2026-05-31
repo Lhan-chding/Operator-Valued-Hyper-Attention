@@ -303,6 +303,8 @@ def _oracle_matrix_monitoring_summary(stage: str, rows: list[dict[str, object]])
 def _families_for_stage(stage: str) -> tuple[str, ...]:
     if stage == "T1":
         return CONTROLLED_SPECIALIST_WARMUP_FAMILIES
+    if stage == "T3":
+        return ("mixed_relation_operator",)
     return CONTROLLED_MULTIMODAL_FAMILIES
 
 
