@@ -669,7 +669,7 @@ def _validate_failed_sample_manifests(
             invalid_string_fields = [
                 key
                 for key in FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS
-                if key in payload and (not isinstance(payload.get(key), str) or not payload.get(key))
+                if key in payload and not _is_non_empty_string(payload.get(key))
             ]
             if invalid_string_fields:
                 errors.append(
