@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate, evaluate_sentiment_gate
+from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 
 
 _SHA256_HEX_RE = re.compile(r"^[a-f0-9]{64}$")
@@ -73,6 +74,7 @@ def main() -> int:
         split=args.split,
     )
     evidence_errors = _topconf_evidence_errors(report["evidence_artifacts"])
+    evidence_errors.extend(_robustness_rows_consistency_errors(args.robustness_summary, args.robustness_rows))
     if report["passed"] and evidence_errors:
         report["passed"] = False
         report["reasons"] = [*report.get("reasons", []), *evidence_errors]
@@ -152,6 +154,99 @@ def _artifact_descriptor_errors(artifact_name: str, artifact: Mapping[str, Any])
     if not isinstance(sha256, str) or _SHA256_HEX_RE.fullmatch(sha256) is None:
         errors.append(f"top-conference gate evidence {artifact_name}.sha256 must be lowercase SHA-256")
     return errors
+
+
+def _robustness_rows_consistency_errors(
+    robustness_path: Path | None,
+    robustness_rows_path: Path | None,
+) -> list[str]:
+    if robustness_path is None or robustness_rows_path is None:
+        return []
+    errors: list[str] = []
+    try:
+        supplied_summary = json.loads(robustness_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"top-conference gate evidence robustness_summary must be valid JSON: {exc}"]
+    if not isinstance(supplied_summary, Mapping):
+        return ["top-conference gate evidence robustness_summary must be a JSON object"]
+    try:
+        robustness_rows = _read_jsonl(robustness_rows_path)
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"top-conference gate evidence robustness_rows must be valid JSONL: {exc}"]
+    if not robustness_rows:
+        return ["top-conference gate evidence robustness_rows must contain JSONL rows"]
+    full_model = str(supplied_summary.get("full_model") or "ovha_full")
+    baseline_model = str(supplied_summary.get("baseline_model") or "cross_attention_transformer")
+    recomputed = summarize_robustness_rows(
+        robustness_rows,
+        full_model=full_model,
+        baseline_model=baseline_model,
+    )
+    for field in (
+        "clean_score",
+        "corrupted_score",
+        "relative_drop",
+        "auc_over_corruption_strength",
+        "full_drop_less_than_baseline",
+        "rceo_reliability_monotonic",
+        "rceo_reliability_shift",
+        "rceo_reliability_curve",
+        "operator_load_shift",
+        "candidate_loss_shift",
+        "required_stress_coverage",
+        "required_ablation_degradation",
+        "rceo_reliability_calibration",
+    ):
+        if field in supplied_summary and field in recomputed:
+            _append_mismatch_errors(
+                errors,
+                f"robustness_summary.{field}",
+                supplied_summary[field],
+                recomputed[field],
+            )
+    return errors
+
+
+def _append_mismatch_errors(errors: list[str], field_path: str, supplied: Any, recomputed: Any) -> None:
+    if isinstance(recomputed, Mapping):
+        if not isinstance(supplied, Mapping):
+            errors.append(f"top-conference gate evidence {field_path} disagrees with robustness_rows recomputation")
+            return
+        for key in sorted(set(supplied) | set(recomputed)):
+            if key not in supplied or key not in recomputed:
+                errors.append(f"top-conference gate evidence {field_path}.{key} disagrees with robustness_rows recomputation")
+                continue
+            _append_mismatch_errors(errors, f"{field_path}.{key}", supplied[key], recomputed[key])
+        return
+    if isinstance(recomputed, list):
+        if not isinstance(supplied, list) or len(supplied) != len(recomputed):
+            errors.append(f"top-conference gate evidence {field_path} disagrees with robustness_rows recomputation")
+            return
+        for index, (supplied_item, recomputed_item) in enumerate(zip(supplied, recomputed)):
+            _append_mismatch_errors(errors, f"{field_path}[{index}]", supplied_item, recomputed_item)
+        return
+    if isinstance(supplied, bool) or isinstance(recomputed, bool):
+        if supplied is not recomputed:
+            errors.append(f"top-conference gate evidence {field_path} disagrees with robustness_rows recomputation")
+        return
+    supplied_number = _finite_float(supplied)
+    recomputed_number = _finite_float(recomputed)
+    if supplied_number is not None and recomputed_number is not None:
+        if abs(supplied_number - recomputed_number) > 1e-9:
+            errors.append(f"top-conference gate evidence {field_path} disagrees with robustness_rows recomputation")
+        return
+    if supplied != recomputed:
+        errors.append(f"top-conference gate evidence {field_path} disagrees with robustness_rows recomputation")
+
+
+def _finite_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if numeric == numeric and numeric not in (float("inf"), float("-inf")) else None
 
 
 def _sha256(path: Path) -> str:
