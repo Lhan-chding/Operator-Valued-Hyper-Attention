@@ -103,8 +103,8 @@ def _require_public_gate_report(
     if report.get("passed") is not True:
         errors.append(f"{label} gate must pass before top-conference main experiments")
     reasons = report.get("reasons", [])
-    if report.get("passed") is True and isinstance(reasons, (list, tuple)) and reasons:
-        errors.append(f"{label} gate reasons must be empty when passed is true")
+    if report.get("passed") is True and (not isinstance(reasons, (list, tuple)) or reasons):
+        errors.append(f"{label} gate reasons must be an empty list when passed is true")
     checks = report.get("checks")
     if not isinstance(checks, dict):
         errors.append(f"{label} gate report must include checks")
@@ -112,6 +112,9 @@ def _require_public_gate_report(
     for check_name, check in sorted(checks.items()):
         if not isinstance(check, dict) or check.get("passed") is not True:
             errors.append(f"{label} gate contains failed check: {check_name}")
+            continue
+        if not _empty_gate_reason(check.get("reason", "")):
+            errors.append(f"{label} gate check {check_name} reason must be empty when passed is true")
     for check_name in required_checks:
         check = checks.get(check_name)
         if not isinstance(check, dict) or check.get("passed") is not True:
@@ -161,3 +164,13 @@ def _cache_data_card_tasks(layout: MultimodalCacheLayout) -> set[str]:
     if not isinstance(tasks, list):
         return set()
     return {str(task) for task in tasks if str(task).strip()}
+
+
+def _empty_gate_reason(reason: Any) -> bool:
+    if reason is None:
+        return True
+    if isinstance(reason, str):
+        return not reason.strip()
+    if isinstance(reason, (list, tuple)):
+        return not reason
+    return False
