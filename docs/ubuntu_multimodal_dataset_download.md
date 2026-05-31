@@ -484,6 +484,32 @@ python scripts/multimodal/accept_public_data.py \
 
 这一步会跑配置里的 3 个开发种子，并为同特征 baseline 训练一轮 smoke probe，产出 raw metrics、diagnostics、statistics preview 和 robustness preview。它仍然只是 public smoke acceptance，不是顶会主表；主表必须继续补齐强 baseline、完整 multi-seed、统计检验和真实 robustness stress。
 
+正式 public 训练得到 raw metrics / diagnostics / robustness rows 后，用同一个 bundle 入口生成 public gate report。RefCOCO / region-text 示例：
+
+```bash
+python scripts/multimodal/build_public_gate_report.py region_text \
+  --raw-metrics outputs/multimodal/refcoco_main/raw_metrics.jsonl \
+  --diagnostics outputs/multimodal/refcoco_main/diagnostics.jsonl \
+  --robustness-rows outputs/multimodal/refcoco_main/robustness_rows.jsonl \
+  --task phrase_region_grounding \
+  --split test \
+  --output-dir outputs/multimodal/refcoco_main/gate_bundle
+```
+
+CMU-MOSEI / sentiment-emotion 示例：
+
+```bash
+python scripts/multimodal/build_public_gate_report.py sentiment \
+  --raw-metrics outputs/multimodal/cmu_mosei_main/raw_metrics.jsonl \
+  --diagnostics outputs/multimodal/cmu_mosei_main/diagnostics.jsonl \
+  --robustness-rows outputs/multimodal/cmu_mosei_main/robustness_rows.jsonl \
+  --task sentiment_emotion \
+  --split test \
+  --output-dir outputs/multimodal/cmu_mosei_main/gate_bundle
+```
+
+两个 gate bundle 都通过后，再把 `gate_report.json` 交给 `validate_topconf_entry.py` 做最终主实验入口验证。
+
 ## 6. 速度与稳定性建议
 
 - 大文件优先 `aria2c -c -x16 -s16 -k1M`，支持断点续传。

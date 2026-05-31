@@ -1554,6 +1554,76 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "\n".join(payload["errors"]),
         )
 
+    def test_public_gate_bundle_cli_generates_topconf_evidence_artifacts_from_raw_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_metrics_path = tmp_path / "region_raw_metrics.jsonl"
+            diagnostics_path = tmp_path / "region_diagnostics.jsonl"
+            robustness_rows_path = tmp_path / "region_robustness_rows.jsonl"
+            output_dir = tmp_path / "gate_bundle"
+            raw_rows = [
+                {**row, "higher_is_better": True}
+                for row in _gate_statistics_summary("phrase_region_grounding", raw_metrics_path)["per_seed_appendix"]
+            ]
+            raw_metrics_path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in raw_rows) + "\n")
+            diagnostics_path.write_text(
+                "\n".join(json.dumps(row, sort_keys=True) for row in _gate_diagnostic_rows("phrase_region_grounding")) + "\n"
+            )
+            robustness_rows_path.write_text(
+                "\n".join(json.dumps(row, sort_keys=True) for row in _gate_robustness_rows()) + "\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_public_gate_report.py"),
+                    "region_text",
+                    "--raw-metrics",
+                    str(raw_metrics_path),
+                    "--diagnostics",
+                    str(diagnostics_path),
+                    "--robustness-rows",
+                    str(robustness_rows_path),
+                    "--task",
+                    "phrase_region_grounding",
+                    "--split",
+                    "test",
+                    "--output-dir",
+                    str(output_dir),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            gate_report_path = Path(payload["artifacts"]["gate_report"]["path"])
+            statistics_path = Path(payload["artifacts"]["statistics_summary"]["path"])
+            robustness_summary_path = Path(payload["artifacts"]["robustness_summary"]["path"])
+            gate_report = json.loads(gate_report_path.read_text())
+            statistics = json.loads(statistics_path.read_text())
+            robustness_summary = json.loads(robustness_summary_path.read_text())
+
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "public_gate_evidence_bundle")
+        self.assertEqual(payload["gate"], "region_text")
+        self.assertEqual(gate_report["name"], "region_text_public")
+        self.assertTrue(gate_report["passed"], gate_report["reasons"])
+        evidence = gate_report["evidence_artifacts"]
+        self.assertEqual(evidence["task"], "phrase_region_grounding")
+        self.assertEqual(evidence["split"], "test")
+        self.assertIn("statistics_summary", evidence)
+        self.assertIn("diagnostics", evidence)
+        self.assertIn("robustness_summary", evidence)
+        self.assertIn("robustness_rows", evidence)
+        self.assertEqual(len(evidence["raw_metrics"]), 1)
+        self.assertEqual(statistics["metadata"]["raw_metric_paths"], [str(raw_metrics_path.resolve())])
+        self.assertEqual(robustness_summary["task"], "phrase_region_grounding")
+        self.assertEqual(payload["validation"]["statistics"]["ok"], True)
+        self.assertEqual(payload["validation"]["evidence_errors"], [])
+
     def test_topconf_main_entry_requires_region_and_sentiment_cache_coverage(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
         from moat_ovha_torch.eval.multimodal_main_experiment_entry import (

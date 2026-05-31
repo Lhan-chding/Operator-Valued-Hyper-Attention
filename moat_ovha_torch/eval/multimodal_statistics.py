@@ -122,6 +122,13 @@ def summarize_public_results(
                 "mean_delta": _mean(deltas),
                 "paired_permutation_p": _paired_sign_permutation_p(deltas),
                 "paired_bootstrap_ci95": _bootstrap_ci95(deltas),
+                "baseline_comparisons": _paired_baseline_comparisons(
+                    rows,
+                    task,
+                    split,
+                    full_model=full_model,
+                    higher_is_better=higher_is_better,
+                ),
             }
 
     return {
@@ -131,6 +138,43 @@ def summarize_public_results(
         "metadata": _metadata(rows),
         "reporting_metadata": _reporting_metadata(rows),
     }
+
+
+def _paired_baseline_comparisons(
+    rows: list[dict[str, Any]],
+    task: str,
+    split: str,
+    *,
+    full_model: str,
+    higher_is_better: bool,
+) -> dict[str, dict[str, Any]]:
+    full = _scores_by_seed(rows, task, split, full_model)
+    models = sorted(
+        {
+            str(row["model"])
+            for row in rows
+            if str(row["task"]) == task and str(row["split"]) == split
+        }
+    )
+    comparisons: dict[str, dict[str, Any]] = {}
+    for model in models:
+        if model == full_model:
+            continue
+        baseline = _scores_by_seed(rows, task, split, model)
+        common = sorted(set(full) & set(baseline))
+        if not common:
+            continue
+        deltas = [_directional_delta(full[seed], baseline[seed], higher_is_better) for seed in common]
+        comparisons[model] = {
+            "model_delta": full_model + "_minus_" + model,
+            "metric_direction": "higher_is_better" if higher_is_better else "lower_is_better",
+            "delta_interpretation": f"positive means {full_model} improves over {model}",
+            "common_seed_count": len(common),
+            "mean_delta": _mean(deltas),
+            "paired_permutation_p": _paired_sign_permutation_p(deltas),
+            "paired_bootstrap_ci95": _bootstrap_ci95(deltas),
+        }
+    return comparisons
 
 
 def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationReport:
