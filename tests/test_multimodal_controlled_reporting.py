@@ -1073,6 +1073,24 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertTrue(t1_rows)
         self.assertNotIn("rceo_reliability_corruption", {row["family"] for row in t1_rows})
         self.assertNotIn("mixed_relation_operator", {row["family"] for row in t1_rows})
+        expected_candidate_by_family = {
+            "tleo_local_evidence": "TLEO",
+            "spo_global_prototype": "SPO",
+            "lrio_low_rank_interaction": "LRIO",
+            "cato_alignment_transport": "CATO",
+        }
+        for row in t1_rows:
+            specialist_candidate = expected_candidate_by_family[row["family"]]
+            self.assertEqual(row["specialist_candidate"], specialist_candidate)
+            self.assertEqual(row["route_override_mode"], "true_router_weights")
+            self.assertEqual(row["trainable_parameter_scope"], "candidate_only_specialist_warmup")
+            self.assertEqual(
+                row["trainable_parameter_groups"],
+                [
+                    f"candidate_primitives.{specialist_candidate}",
+                    f"joint_router_adapter.hyper_adapter.{specialist_candidate}",
+                ],
+            )
 
 
 def _row(
