@@ -1493,6 +1493,31 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertTrue(report.ok, report.errors)
         self.assertEqual(report.warnings, [])
 
+    def test_grounding_cache_requires_public_phrase_region_provenance(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                sample_record_mode="missing_grounding_metadata",
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("sample_records_train.jsonl line 1 missing grounding metadata keys: image_id", joined)
+        self.assertIn("sample_records_train.jsonl line 1 missing grounding metadata keys: caption_id", joined)
+        self.assertIn("sample_records_train.jsonl line 1 missing grounding metadata keys: phrase_span", joined)
+        self.assertIn("sample_records_train.jsonl line 1 missing grounding metadata keys: region_box", joined)
+        self.assertIn("sample_records_train.jsonl line 1 missing grounding metadata keys: candidate_region_source", joined)
+        self.assertIn("sample_records_train.jsonl line 1 missing grounding metadata keys: box_coordinate_convention", joined)
+
     def test_sentiment_cache_requires_public_utterance_and_corruption_provenance(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
