@@ -1145,6 +1145,8 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertFalse(payload["datasets"]["refcoco"]["ok"])
         self.assertFalse(payload["datasets"]["cmu_mosei"]["ok"])
         self.assertIn("scripts/multimodal/bootstrap_public_downloads.py", joined_commands)
+        self.assertIn("bash -n /tmp/ovha_public_downloads.sh", joined_commands)
+        self.assertIn("bash /tmp/ovha_public_downloads.sh", joined_commands)
         self.assertIn("scripts/multimodal/build_refcoco_stage_records.py", joined_commands)
         self.assertIn("scripts/multimodal/write_cmu_sdk_splits.py", joined_commands)
         self.assertNotIn("Traceback", result.stderr)
