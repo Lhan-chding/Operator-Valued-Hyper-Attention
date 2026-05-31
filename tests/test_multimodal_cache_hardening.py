@@ -905,6 +905,25 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("checksums.json hash mismatch for artifact: data_card.json", "\n".join(report.errors))
 
+    def test_cache_validator_rejects_unchecked_extra_cache_artifact(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            _write_complete_checksums(layout.root)
+            (layout.root / "provenance" / "extra_manifest_train.json").write_text(
+                json.dumps({"source_id": "train-source"}, sort_keys=True) + "\n"
+            )
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "checksums.json missing hash for cache artifact: provenance/extra_manifest_train.json",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_empty_checksum_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
