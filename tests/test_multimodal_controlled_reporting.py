@@ -799,6 +799,52 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertRegex(artifacts["diagnostics_report"]["sha256"], r"^[a-f0-9]{64}$")
         self.assertIn("relative_drop", json.loads(robustness.stdout))
 
+    def test_controlled_smoke_writes_auditable_rows_and_diagnostics_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact_root = Path(tmp) / "controlled_artifacts"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "run_controlled_smoke.py"),
+                    "--artifact-root",
+                    str(artifact_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            artifacts = payload["controlled_report"]["evidence_artifacts"]
+            controlled_rows_path = Path(artifacts["controlled_rows"]["path"])
+            diagnostics_report_path = Path(artifacts["diagnostics_report"]["path"])
+            controlled_rows = [
+                json.loads(line)
+                for line in controlled_rows_path.read_text().splitlines()
+                if line.strip()
+            ]
+            diagnostics_rows = [
+                json.loads(line)
+                for line in diagnostics_report_path.read_text().splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(payload["mode"], "oracle_smoke_only")
+        self.assertEqual(len(controlled_rows), 6)
+        self.assertEqual(len(diagnostics_rows), 6)
+        self.assertNotEqual(controlled_rows_path, diagnostics_report_path)
+        self.assertRegex(artifacts["controlled_rows"]["sha256"], r"^[a-f0-9]{64}$")
+        self.assertRegex(artifacts["diagnostics_report"]["sha256"], r"^[a-f0-9]{64}$")
+        self.assertTrue(payload["controlled_report"]["go_no_go"]["controlled_multimodal_passed"])
+        self.assertEqual(
+            {row["family"] for row in controlled_rows},
+            {row["family"] for row in diagnostics_rows},
+        )
+        self.assertIn("oracle_matrix", diagnostics_rows[0])
+        self.assertIn("stackability_passed", diagnostics_rows[0])
+
 
 def _row(
     family: str,
