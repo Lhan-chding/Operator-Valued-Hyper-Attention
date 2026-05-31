@@ -168,6 +168,15 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             checksums_exists = (layout.root / "checksums.json").exists()
             sample_records_exists = (layout.root / "provenance" / "sample_records_train.jsonl").exists()
             alignment_pairs_exists = (layout.root / "supervision" / "alignment_pairs_test.parquet").exists()
+            import numpy as np
+
+            text_train = np.load(layout.root / "token_fields" / "text_train.npy")
+            region_train = np.load(layout.root / "token_fields" / "region_train.npy")
+            text_pos_train = np.load(layout.root / "positions" / "text_pos_train.npy")
+            region_mask_train = np.load(layout.root / "masks" / "region_mask_train.npy")
+            task_labels_train = np.load(layout.root / "supervision" / "task_labels_train.npy")
+            bbox_targets_train = np.load(layout.root / "supervision" / "bbox_targets_train.npy")
+            region_targets_train = np.load(layout.root / "supervision" / "region_targets_train.npy")
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         payload = json.loads(result.stdout)
@@ -177,6 +186,14 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertTrue(checksums_exists)
         self.assertTrue(sample_records_exists)
         self.assertTrue(alignment_pairs_exists)
+        self.assertEqual(text_train.shape, (1, 4, 5))
+        self.assertEqual(region_train.shape, (1, 2, 4))
+        self.assertEqual(text_pos_train.shape, (1, 4, 1))
+        self.assertEqual(region_mask_train.shape, (1, 2))
+        self.assertTrue(region_mask_train.all())
+        self.assertEqual(task_labels_train.shape, (1, 1))
+        self.assertEqual(bbox_targets_train.shape, (1, 4))
+        self.assertEqual(region_targets_train.shape, (1, 1))
 
     def test_build_cache_cli_validates_requested_cache_version(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
@@ -1204,6 +1221,8 @@ def _load_script_module(path: Path):
 
 
 def _write_refcoco_raw_fixture(raw_root: Path) -> None:
+    import numpy as np
+
     for folder in ("annotations", "features"):
         (raw_root / folder).mkdir(parents=True, exist_ok=True)
     split_source_ids = {
@@ -1233,8 +1252,8 @@ def _write_refcoco_raw_fixture(raw_root: Path) -> None:
             )
     (raw_root / "annotations" / "refs.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
     (raw_root / "annotations" / "instances.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
-    (raw_root / "features" / "text_features.npy").write_text("fixture text features\n")
-    (raw_root / "features" / "region_features.npy").write_text("fixture region features\n")
+    np.save(raw_root / "features" / "text_features.npy", np.arange(3 * 4 * 5, dtype=np.float32).reshape(3, 4, 5))
+    np.save(raw_root / "features" / "region_features.npy", np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4))
 
 
 def _write_cmu_mosei_raw_fixture(raw_root: Path) -> None:
