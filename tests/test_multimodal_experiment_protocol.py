@@ -720,6 +720,58 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("sentiment_emotion_public gate evidence_artifacts missing artifact: diagnostics", joined)
         self.assertIn("sentiment_emotion_public gate evidence_artifacts raw_metrics must be a non-empty list", joined)
 
+    def test_topconf_main_entry_rejects_public_gate_artifact_hash_mismatch(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+            region_report = _passing_region_text_public_gate_report()
+            region_artifact = tmp_path / "region_statistics_summary.json"
+            region_artifact.write_text(json.dumps({"task": "phrase_region_grounding"}) + "\n")
+            region_report["evidence_artifacts"]["statistics_summary"] = {
+                "path": str(region_artifact),
+                "sha256": "0" * 64,
+            }
+            sentiment_report = _passing_sentiment_public_gate_report()
+            missing_raw_metric = tmp_path / "missing_raw_metric.jsonl"
+            sentiment_report["evidence_artifacts"]["raw_metrics"] = [
+                {"path": str(missing_raw_metric), "sha256": "1" * 64}
+            ]
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=_complete_controlled_public_entry_report(),
+                region_gate_report=region_report,
+                sentiment_gate_report=sentiment_report,
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "region_text_public gate evidence_artifacts statistics_summary.sha256 does not match file content",
+            joined,
+        )
+        self.assertIn(
+            "sentiment_emotion_public gate evidence_artifacts raw_metrics[0].path does not exist",
+            joined,
+        )
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
