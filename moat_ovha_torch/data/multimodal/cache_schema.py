@@ -717,7 +717,7 @@ def _validate_sample_record_manifests(
             invalid_string_fields = [
                 key
                 for key in SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS
-                if key in payload and (not isinstance(payload.get(key), str) or not payload.get(key))
+                if key in payload and not _is_non_empty_string(payload.get(key))
             ]
             if invalid_string_fields:
                 errors.append(
