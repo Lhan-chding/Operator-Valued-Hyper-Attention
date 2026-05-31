@@ -151,8 +151,14 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("RCEO gate rceo_router_load_shift must be finite positive", joined)
         self.assertIn("Memory gate no_operator_memory_delta must be finite positive for tleo_local_evidence", joined)
         self.assertIn("Adapter gate no_hyper_adapter_delta must be finite positive for cato_alignment_transport", joined)
-        self.assertIn("no-LRIO ablation no_lrio_delta must be finite positive for lrio_low_rank_interaction", joined)
-        self.assertIn("no-RCEO ablation no_rceo_delta must be finite positive for rceo_reliability_corruption", joined)
+        self.assertIn(
+            "no_lrio_delta must be finite positive for lrio_low_rank_interaction",
+            "\n".join(report["gate_table"]["no-LRIO ablation"]["reasons"]),
+        )
+        self.assertIn(
+            "no_rceo_delta must be finite positive for rceo_reliability_corruption",
+            "\n".join(report["gate_table"]["no-RCEO ablation"]["reasons"]),
+        )
 
     def test_collapse_gate_uses_true_router_learned_adapter_oracle_cell(self):
         from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report

@@ -85,6 +85,8 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if family not in family_rows:
             reasons.append(f"missing controlled family: {family}")
     for row in rows:
+        for stackability_reason in _stackability_reasons(row):
+            reasons.append(stackability_reason)
         missing_cells = _missing_oracle_cells(row)
         if missing_cells:
             reasons.append(f"{row.get('family', '<unknown>')} missing oracle matrix cells: {', '.join(missing_cells)}")
@@ -98,6 +100,8 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         gate = gate_table[name]
         if not gate["passed"]:
             reasons.append(f"gate failed: {name}")
+        for gate_reason in gate.get("reasons", ()):
+            reasons.append(f"{name} {gate_reason}")
         for diagnostic_reason in gate.get("diagnostic_reasons", ()):
             reasons.append(f"{name} {diagnostic_reason}")
     return {
@@ -141,8 +145,14 @@ def _rceo_prior_effect_reasons(row: dict[str, Any]) -> list[str]:
 
 
 def _stackability_gate(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    passed = bool(rows) and all(bool(row.get("stackability_passed")) for row in rows)
-    return {"passed": passed, "condition": "all candidate values are [B,Q,Dy] and stackability_passed is true"}
+    reasons = [reason for row in rows for reason in _stackability_reasons(row)]
+    if not rows:
+        reasons.append("no controlled rows available for stackability")
+    return {
+        "passed": not reasons,
+        "reasons": reasons,
+        "condition": "all candidate values are [B,Q,Dy] and stackability_passed is explicit true",
+    }
 
 
 def _collapse_gate(family_rows: dict[str, dict[str, Any]], operator: str) -> dict[str, Any]:
@@ -168,33 +178,63 @@ def _collapse_gate(family_rows: dict[str, dict[str, Any]], operator: str) -> dic
 
 def _router_gate(family_rows: dict[str, dict[str, Any]]) -> dict[str, Any]:
     row = family_rows.get("mixed_relation_operator")
-    accuracy = float(row.get("router_accuracy", 0.0)) if row is not None else 0.0
+    accuracy = _finite_float(row.get("router_accuracy")) if row is not None else None
+    reasons: list[str] = []
+    if accuracy is None or accuracy < 0.0 or accuracy > 1.0:
+        reasons.append("router_accuracy must be a finite probability")
+        accuracy_value = 0.0
+    else:
+        accuracy_value = accuracy
+        if accuracy < 0.80:
+            reasons.append("router_accuracy is below 80%")
     return {
-        "passed": accuracy >= 0.80,
-        "value": accuracy,
+        "passed": not reasons,
+        "value": accuracy_value,
         "threshold": 0.80,
+        "reasons": reasons,
         "condition": "mixed relation active_operator accuracy >= 80% test",
     }
 
 
 def _rceo_gate(family_rows: dict[str, dict[str, Any]]) -> dict[str, Any]:
     row = family_rows.get("rceo_reliability_corruption")
-    monotonic = bool(row.get("rceo_reliability_monotonic")) if row is not None else False
-    load_shift = float(row.get("rceo_router_load_shift", 0.0)) if row is not None else 0.0
-    prior_effect = float(row.get("rceo_prior_effect", 0.0)) if row is not None else 0.0
+    monotonic = row.get("rceo_reliability_monotonic") if row is not None else None
+    load_shift = _finite_float(row.get("rceo_router_load_shift")) if row is not None else None
+    prior_effect = _finite_float(row.get("rceo_prior_effect")) if row is not None else None
+    reasons: list[str] = []
+    if monotonic is not True:
+        reasons.append("rceo_reliability_monotonic must be explicit true")
+    if load_shift is None or load_shift <= 0.0:
+        reasons.append("rceo_router_load_shift must be finite positive")
+    if prior_effect is None or prior_effect <= 0.0:
+        reasons.append("rceo_prior_effect must be finite positive")
     return {
-        "passed": monotonic and load_shift > 0.0 and prior_effect > 0.0,
-        "value": {"monotonic": monotonic, "router_load_shift": load_shift, "prior_effect": prior_effect},
+        "passed": not reasons,
+        "value": {
+            "monotonic": monotonic,
+            "router_load_shift": load_shift if load_shift is not None else 0.0,
+            "prior_effect": prior_effect if prior_effect is not None else 0.0,
+        },
+        "reasons": reasons,
         "condition": "reliability decreases with corruption, router load shifts coherently, and RCEO prior improves loss",
     }
 
 
 def _delta_gate(rows: list[dict[str, Any]], key: str, name: str) -> dict[str, Any]:
-    values = [float(row.get(key, 0.0)) for row in rows]
+    values: list[float] = []
+    reasons: list[str] = []
+    for row in rows:
+        family = str(row.get("family", "<unknown>"))
+        value = _finite_float(row.get(key))
+        if value is None or value <= 0.0:
+            reasons.append(f"{key} must be finite positive for {family}")
+            continue
+        values.append(value)
     min_value = min(values) if values else 0.0
     return {
-        "passed": bool(values) and min_value > 0.0,
+        "passed": not reasons and bool(values),
         "value": min_value,
+        "reasons": reasons,
         "condition": f"{name} ablation is worse than full model for every controlled row",
     }
 
@@ -212,10 +252,11 @@ def _targeted_delta_gate(
         if row is None or key not in row:
             reasons.append(f"missing {name} evidence for {family}")
             continue
-        value = float(row[key])
+        value = _finite_float(row[key])
+        if value is None or value <= 0.0:
+            reasons.append(f"{key} must be finite positive for {family}")
+            continue
         values.append(value)
-        if value <= 0.0:
-            reasons.append(f"{name} does not degrade for {family}")
     return {
         "passed": not reasons,
         "value": min(values) if values else 0.0,
@@ -252,9 +293,16 @@ def _operator_diagnostic_reasons(row: dict[str, Any], operator: str) -> list[str
         if key not in row:
             reasons.append(f"missing diagnostic: {key}")
             continue
-        if float(row[key]) <= 0.0:
+        value = _finite_float(row[key])
+        if value is None or value <= 0.0:
             reasons.append(f"diagnostic must improve: {key}")
     return reasons
+
+
+def _stackability_reasons(row: dict[str, Any]) -> list[str]:
+    if row.get("stackability_passed") is True:
+        return []
+    return [f"{row.get('family', '<unknown>')} stackability_passed must be explicit true"]
 
 
 def _oracle_matrix_value_reasons(row: dict[str, Any]) -> list[str]:
