@@ -637,6 +637,45 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "\n".join(payload["errors"]),
         )
 
+    def test_public_smoke_runner_rejects_diagnostics_artifact_that_duplicates_controlled_rows(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import file_sha256
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "controlled_artifacts"
+            _write_valid_refcoco_public_cache(cache_root)
+            controlled_report = _complete_controlled_public_entry_report(artifact_root)
+            controlled_rows = Path(controlled_report["evidence_artifacts"]["controlled_rows"]["path"])
+            diagnostics_report = Path(controlled_report["evidence_artifacts"]["diagnostics_report"]["path"])
+            diagnostics_report.write_text(controlled_rows.read_text())
+            controlled_report["evidence_artifacts"]["diagnostics_report"]["sha256"] = file_sha256(diagnostics_report)
+            controlled_report_path = tmp_path / "controlled_report.json"
+            controlled_report_path.write_text(json.dumps(controlled_report, sort_keys=True) + "\n")
+            command = [
+                sys.executable,
+                str(ROOT / "scripts" / "multimodal" / "run_public_smoke.py"),
+                str(ROOT / "configs" / "multimodal_refcoco_public_smoke.json"),
+                "--cache-root",
+                str(cache_root),
+                "--controlled-report",
+                str(controlled_report_path),
+            ]
+            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        joined = "\n".join(payload["errors"])
+        self.assertIn(
+            "controlled report evidence_artifacts diagnostics_report.sha256 must differ from controlled_rows.sha256",
+            joined,
+        )
+        self.assertIn(
+            "controlled report diagnostics_report tleo_local_evidence artifact_type must be controlled_diagnostics",
+            joined,
+        )
+
     def test_topconf_main_entry_requires_validated_data_caches(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
         from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
@@ -2168,7 +2207,9 @@ def _controlled_diagnostic_row(row: dict[str, object]) -> dict[str, object]:
         "no_lrio_delta",
         "no_rceo_delta",
     )
-    return {key: row[key] for key in keys if key in row}
+    diagnostics = {key: row[key] for key in keys if key in row}
+    diagnostics["artifact_type"] = "controlled_diagnostics"
+    return diagnostics
 
 
 def _complete_controlled_family_row(*, rceo: bool = False) -> dict[str, object]:
