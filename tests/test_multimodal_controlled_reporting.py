@@ -432,6 +432,13 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertLess(summary["relative_drop"]["ovha_full"], summary["relative_drop"]["cross_attention_transformer"])
         self.assertTrue(summary["rceo_reliability_monotonic"])
         self.assertEqual(summary["rceo_reliability_shift"], -0.25)
+        self.assertEqual(
+            summary["rceo_reliability_curve"],
+            [
+                {"corruption_strength": 0.0, "mean_reliability": 0.90},
+                {"corruption_strength": 0.5, "mean_reliability": 0.65},
+            ],
+        )
         self.assertLess(summary["operator_load_shift"]["CATO"], 0.0)
         self.assertEqual(summary["candidate_loss_shift"]["CATO"], 0.12)
         self.assertEqual(summary["candidate_loss_shift"]["SPO"], -0.06)

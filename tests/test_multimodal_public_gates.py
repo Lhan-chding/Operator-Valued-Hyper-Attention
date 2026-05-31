@@ -412,6 +412,27 @@ class MultimodalPublicGateTests(unittest.TestCase):
             "\n".join(report["reasons"]),
         )
 
+    def test_sentiment_gate_requires_rceo_reliability_curve_not_only_boolean(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        robustness = _passing_sentiment_robustness()
+        robustness.pop("rceo_reliability_curve", None)
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=_summary("sentiment_emotion", "test", full=0.76, baseline=0.74),
+            diagnostics_rows=_passing_sentiment_diagnostics(),
+            ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
+            robustness_summary=robustness,
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "robustness RCEO reliability curve missing",
+            "\n".join(report["reasons"]),
+        )
+
     def test_sentiment_gate_requires_candidate_loss_shift(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
 
