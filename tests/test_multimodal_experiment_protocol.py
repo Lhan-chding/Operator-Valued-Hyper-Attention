@@ -493,6 +493,31 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("controlled go/no-go report is required", "\n".join(payload["errors"]))
 
+    def test_public_smoke_runner_rejects_unverified_controlled_artifact_descriptors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            controlled_report_path = tmp_path / "controlled_report.json"
+            controlled_report_path.write_text(json.dumps(_complete_controlled_public_entry_report(), sort_keys=True) + "\n")
+            command = [
+                sys.executable,
+                str(ROOT / "scripts" / "multimodal" / "run_public_smoke.py"),
+                str(ROOT / "configs" / "multimodal_refcoco_public_smoke.json"),
+                "--cache-root",
+                str(cache_root),
+                "--controlled-report",
+                str(controlled_report_path),
+            ]
+            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        joined = "\n".join(payload["errors"])
+        self.assertIn("controlled report evidence_artifacts controlled_rows.path does not exist", joined)
+        self.assertIn("controlled report evidence_artifacts diagnostics_report.path does not exist", joined)
+
     def test_topconf_main_entry_requires_validated_data_caches(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
         from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
