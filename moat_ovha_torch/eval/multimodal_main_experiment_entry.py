@@ -152,12 +152,85 @@ def _require_controlled_artifact_evidence(controlled_report: dict[str, Any] | No
     _validate_controlled_diagnostics_report_content(rows, diagnostics_rows, errors)
 
     recomputed = build_controlled_report(rows, evidence_artifacts=dict(evidence))
+    _validate_controlled_report_matches_artifacts(report, recomputed, errors)
     for task_type in ("phrase_region_grounding", "sentiment_emotion"):
         validation = validate_public_entry_requirements(task_type, recomputed)
         if not validation.ok:
             errors.extend(
                 f"controlled report artifact recomputation failed: {error}"
                 for error in validation.errors
+            )
+
+
+def _validate_controlled_report_matches_artifacts(
+    supplied_report: Mapping[str, Any],
+    recomputed_report: Mapping[str, Any],
+    errors: list[str],
+) -> None:
+    supplied_families = supplied_report.get("families")
+    recomputed_families = recomputed_report.get("families")
+    if not isinstance(supplied_families, Mapping) or not isinstance(recomputed_families, Mapping):
+        return
+
+    for family in CONTROLLED_REQUIRED_FAMILIES:
+        supplied_row = supplied_families.get(family)
+        recomputed_row = recomputed_families.get(family)
+        if not isinstance(supplied_row, Mapping) or not isinstance(recomputed_row, Mapping):
+            continue
+        for key in _required_controlled_diagnostic_keys(family):
+            _validate_controlled_report_field_matches_artifacts(family, key, supplied_row, recomputed_row, errors)
+        _validate_controlled_report_oracle_matrix_matches_artifacts(
+            family,
+            supplied_row,
+            recomputed_row,
+            errors,
+        )
+
+
+def _validate_controlled_report_field_matches_artifacts(
+    family: str,
+    key: str,
+    supplied_row: Mapping[str, Any],
+    recomputed_row: Mapping[str, Any],
+    errors: list[str],
+) -> None:
+    if key not in recomputed_row:
+        return
+    if key not in supplied_row:
+        errors.append(f"controlled report {family}.{key} missing but present in artifact recomputation")
+        return
+    if key in {"rceo_reliability_monotonic", "rceo_reliability_curve"}:
+        if supplied_row.get(key) != recomputed_row.get(key):
+            errors.append(f"controlled report {family}.{key} disagrees with artifact recomputation")
+        return
+    supplied_value = _finite_float(supplied_row.get(key))
+    recomputed_value = _finite_float(recomputed_row.get(key))
+    if supplied_value is None or recomputed_value is None:
+        if supplied_row.get(key) != recomputed_row.get(key):
+            errors.append(f"controlled report {family}.{key} disagrees with artifact recomputation")
+        return
+    if not math.isclose(supplied_value, recomputed_value, rel_tol=1e-9, abs_tol=1e-9):
+        errors.append(f"controlled report {family}.{key} disagrees with artifact recomputation")
+
+
+def _validate_controlled_report_oracle_matrix_matches_artifacts(
+    family: str,
+    supplied_row: Mapping[str, Any],
+    recomputed_row: Mapping[str, Any],
+    errors: list[str],
+) -> None:
+    supplied_matrix = supplied_row.get("oracle_matrix")
+    recomputed_matrix = recomputed_row.get("oracle_matrix")
+    if not isinstance(supplied_matrix, Mapping) or not isinstance(recomputed_matrix, Mapping):
+        return
+    for cell in ORACLE_MATRIX_CELLS:
+        supplied_loss = _oracle_cell_loss_from_mapping(supplied_matrix, cell)
+        recomputed_loss = _oracle_cell_loss_from_mapping(recomputed_matrix, cell)
+        if supplied_loss is None or recomputed_loss is None:
+            continue
+        if not math.isclose(supplied_loss, recomputed_loss, rel_tol=1e-9, abs_tol=1e-9):
+            errors.append(
+                f"controlled report {family}.oracle_matrix.{cell}.loss disagrees with artifact recomputation"
             )
 
 
@@ -321,6 +394,10 @@ def _oracle_cell_loss(row: dict[str, Any] | None, cell: str) -> float | None:
     matrix = row.get("oracle_matrix")
     if not isinstance(matrix, Mapping):
         return None
+    return _oracle_cell_loss_from_mapping(matrix, cell)
+
+
+def _oracle_cell_loss_from_mapping(matrix: Mapping[str, Any], cell: str) -> float | None:
     cell_payload = matrix.get(cell)
     if not isinstance(cell_payload, Mapping):
         return None
