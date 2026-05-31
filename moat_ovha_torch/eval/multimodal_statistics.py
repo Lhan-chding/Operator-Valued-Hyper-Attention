@@ -43,9 +43,12 @@ def summarize_public_results(
         baseline = _scores_by_seed(rows, task, split, baseline_model)
         common = sorted(set(full) & set(baseline))
         if common:
-            deltas = [full[seed] - baseline[seed] for seed in common]
+            higher_is_better = _higher_is_better(main_table, task, split, full_model)
+            deltas = [_directional_delta(full[seed], baseline[seed], higher_is_better) for seed in common]
             paired_tests.setdefault(task, {})[split] = {
                 "model_delta": full_model + "_minus_" + baseline_model,
+                "metric_direction": "higher_is_better" if higher_is_better else "lower_is_better",
+                "delta_interpretation": f"positive means {full_model} improves over {baseline_model}",
                 "common_seed_count": len(common),
                 "mean_delta": _mean(deltas),
                 "paired_permutation_p": _paired_sign_permutation_p(deltas),
@@ -81,7 +84,7 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
             for split, values in splits.items():
                 if values.get("common_seed_count", 0) < 3:
                     errors.append(f"{task}/{split} paired_tests require at least 3 common seeds")
-                for key in ("paired_permutation_p", "paired_bootstrap_ci95"):
+                for key in ("metric_direction", "paired_permutation_p", "paired_bootstrap_ci95"):
                     if key not in values:
                         errors.append(f"{task}/{split} paired_tests missing {key}")
     metadata = summary.get("metadata", {})
@@ -380,6 +383,21 @@ def _scores_by_seed(rows: list[dict[str, Any]], task: str, split: str, model: st
         for row in rows
         if str(row["task"]) == task and str(row["split"]) == split and str(row["model"]) == model
     }
+
+
+def _higher_is_better(
+    main_table: dict[str, dict[str, dict[str, dict[str, Any]]]],
+    task: str,
+    split: str,
+    model: str,
+) -> bool:
+    return bool(main_table.get(task, {}).get(split, {}).get(model, {}).get("higher_is_better", True))
+
+
+def _directional_delta(full_score: float, baseline_score: float, higher_is_better: bool) -> float:
+    if higher_is_better:
+        return full_score - baseline_score
+    return baseline_score - full_score
 
 
 def _mean(values: list[float]) -> float:
