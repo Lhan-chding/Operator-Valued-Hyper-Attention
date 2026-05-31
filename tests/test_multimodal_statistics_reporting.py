@@ -47,6 +47,25 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         self.assertAlmostEqual(paired["mean_delta"], 0.07)
         self.assertGreater(paired["paired_bootstrap_ci95"][0], 0.0)
 
+    def test_public_summary_rejects_paired_delta_that_disagrees_with_metric_direction(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        summary = summarize_public_results(
+            _lower_is_better_sentiment_rows(),
+            full_model="ovha_full",
+            baseline_model="cross_attention_transformer",
+        )
+        paired = summary["paired_tests"]["sentiment_emotion"]["test"]
+        paired["mean_delta"] = -0.07
+        paired["paired_bootstrap_ci95"] = [-0.08, -0.06]
+
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        joined = "\n".join(validation.errors)
+        self.assertIn("paired_tests mean_delta disagrees with metric_direction", joined)
+        self.assertIn("paired_tests bootstrap CI disagrees with metric_direction", joined)
+
     def test_public_summary_rejects_best_seed_only_and_missing_metadata(self):
         from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
 
