@@ -26,7 +26,8 @@ def main() -> int:
             "to enter top-conference multimodal main experiments."
         )
     )
-    parser.add_argument("--controlled-report", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--controlled-report", type=Path)
     parser.add_argument("--region-gate-report", type=Path)
     parser.add_argument("--region-gate-bundle", type=Path)
     parser.add_argument("--sentiment-gate-report", type=Path)
@@ -42,22 +43,23 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        controlled_report = _read_json(args.controlled_report)
+        spec = _entry_spec(args)
+        controlled_report = _read_json(spec["controlled_report"])
         region_gate_path = _gate_report_path(
-            report_path=args.region_gate_report,
-            bundle_root=args.region_gate_bundle,
+            report_path=spec["region_gate_report"],
+            bundle_root=spec["region_gate_bundle"],
             bundle_filename="region_text_gate_report.json",
             label="region gate",
         )
         sentiment_gate_path = _gate_report_path(
-            report_path=args.sentiment_gate_report,
-            bundle_root=args.sentiment_gate_bundle,
+            report_path=spec["sentiment_gate_report"],
+            bundle_root=spec["sentiment_gate_bundle"],
             bundle_filename="sentiment_gate_report.json",
             label="sentiment gate",
         )
         region_gate_report = _read_json(region_gate_path)
         sentiment_gate_report = _read_json(sentiment_gate_path)
-        cache_targets = _cache_targets(args.cache_target)
+        cache_targets = _cache_targets(spec["cache_target"])
         report = validate_topconf_main_experiment_entry(
             controlled_report=controlled_report,
             region_gate_report=region_gate_report,
@@ -76,6 +78,8 @@ def main() -> int:
                 "sentiment_emotion_public": str(sentiment_gate_path),
             },
         }
+        if spec["manifest"] is not None:
+            payload["manifest"] = str(spec["manifest"])
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0 if report.ok else 2
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -94,6 +98,101 @@ def main() -> int:
             )
         )
         return 2
+
+
+def _entry_spec(args: argparse.Namespace) -> dict[str, Any]:
+    if args.manifest is not None:
+        return _entry_spec_from_manifest(args)
+    if args.controlled_report is None:
+        raise ValueError("--controlled-report is required unless --manifest is provided")
+    return {
+        "manifest": None,
+        "controlled_report": args.controlled_report,
+        "region_gate_report": args.region_gate_report,
+        "region_gate_bundle": args.region_gate_bundle,
+        "sentiment_gate_report": args.sentiment_gate_report,
+        "sentiment_gate_bundle": args.sentiment_gate_bundle,
+        "cache_target": args.cache_target,
+    }
+
+
+def _entry_spec_from_manifest(args: argparse.Namespace) -> dict[str, Any]:
+    if any(
+        value
+        for value in (
+            args.controlled_report,
+            args.region_gate_report,
+            args.region_gate_bundle,
+            args.sentiment_gate_report,
+            args.sentiment_gate_bundle,
+            args.cache_target,
+        )
+    ):
+        raise ValueError("--manifest cannot be combined with direct report, bundle, or cache-target arguments")
+    manifest = _read_json(args.manifest)
+    base_dir = args.manifest.parent
+    return {
+        "manifest": args.manifest,
+        "controlled_report": _manifest_path(manifest, "controlled_report", base_dir=base_dir),
+        "region_gate_report": _optional_manifest_path(manifest, "region_gate_report", base_dir=base_dir),
+        "region_gate_bundle": _optional_manifest_path(manifest, "region_gate_bundle", base_dir=base_dir),
+        "sentiment_gate_report": _optional_manifest_path(manifest, "sentiment_gate_report", base_dir=base_dir),
+        "sentiment_gate_bundle": _optional_manifest_path(manifest, "sentiment_gate_bundle", base_dir=base_dir),
+        "cache_target": _manifest_cache_targets(manifest, base_dir=base_dir),
+    }
+
+
+def _manifest_path(manifest: dict[str, Any], key: str, *, base_dir: Path) -> Path:
+    value = manifest.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"manifest missing required path: {key}")
+    return _resolve_manifest_path(value, base_dir=base_dir)
+
+
+def _optional_manifest_path(manifest: dict[str, Any], key: str, *, base_dir: Path) -> Path | None:
+    value = manifest.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"manifest path must be a non-empty string: {key}")
+    return _resolve_manifest_path(value, base_dir=base_dir)
+
+
+def _resolve_manifest_path(value: str, *, base_dir: Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else base_dir / path
+
+
+def _manifest_cache_targets(manifest: dict[str, Any], *, base_dir: Path) -> list[list[str]]:
+    raw_targets = manifest.get("cache_targets")
+    if not isinstance(raw_targets, list) or not raw_targets:
+        raise ValueError("manifest cache_targets must be a non-empty list")
+    targets: list[list[str]] = []
+    for index, item in enumerate(raw_targets):
+        if not isinstance(item, dict):
+            raise ValueError(f"manifest cache_targets[{index}] must be an object")
+        name = _required_manifest_text(item, "name", index)
+        cache_root = _resolve_manifest_path(_required_manifest_text(item, "cache_root", index), base_dir=base_dir)
+        dataset = str(item.get("dataset", item.get("dataset_name", ""))).strip()
+        if not dataset:
+            raise ValueError(f"manifest cache_targets[{index}] missing dataset")
+        version = _required_manifest_text(item, "version", index)
+        splits = item.get("splits")
+        if isinstance(splits, str):
+            split_text = splits
+        elif isinstance(splits, list) and all(isinstance(split, str) and split.strip() for split in splits):
+            split_text = ",".join(str(split).strip() for split in splits)
+        else:
+            raise ValueError(f"manifest cache_targets[{index}].splits must be a non-empty string list or comma string")
+        targets.append([name, str(cache_root), dataset, version, split_text])
+    return targets
+
+
+def _required_manifest_text(item: dict[str, Any], key: str, index: int) -> str:
+    value = item.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"manifest cache_targets[{index}] missing {key}")
+    return value.strip()
 
 
 def _read_json(path: Path) -> dict[str, Any]:

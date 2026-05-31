@@ -519,6 +519,37 @@ python scripts/multimodal/validate_topconf_entry.py \
   --cache-target cmu_mosei data/multimodal_cache cmu_mosei v0.1 val,test
 ```
 
+为了归档复现，推荐同时保存一个 manifest。路径可以相对 manifest 文件所在目录：
+
+```bash
+cat > outputs/multimodal/topconf_entry_manifest.json <<'JSON'
+{
+  "controlled_report": "controlled_v1_smoke/seed_101/controlled_report.json",
+  "region_gate_bundle": "refcoco_main/gate_bundle",
+  "sentiment_gate_bundle": "cmu_mosei_main/gate_bundle",
+  "cache_targets": [
+    {
+      "name": "refcoco",
+      "cache_root": "../../data/multimodal_cache",
+      "dataset": "refcoco",
+      "version": "v0.1",
+      "splits": ["val", "test"]
+    },
+    {
+      "name": "cmu_mosei",
+      "cache_root": "../../data/multimodal_cache",
+      "dataset": "cmu_mosei",
+      "version": "v0.1",
+      "splits": ["val", "test"]
+    }
+  ]
+}
+JSON
+
+python scripts/multimodal/validate_topconf_entry.py \
+  --manifest outputs/multimodal/topconf_entry_manifest.json
+```
+
 ## 6. 速度与稳定性建议
 
 - 大文件优先 `aria2c -c -x16 -s16 -k1M`，支持断点续传。
