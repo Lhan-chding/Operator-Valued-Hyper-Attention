@@ -160,6 +160,31 @@ class MultimodalControlledReportingTests(unittest.TestCase):
             "\n".join(report["gate_table"]["no-RCEO ablation"]["reasons"]),
         )
 
+    def test_rceo_gate_requires_reliability_corruption_curve_evidence(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+
+        rows = [
+            _row("tleo_local_evidence", "TLEO", 0.010, 0.010),
+            _row("spo_global_prototype", "SPO", 0.020, 0.020),
+            _row("lrio_low_rank_interaction", "LRIO", 0.030, 0.030),
+            _row("cato_alignment_transport", "CATO", 0.040, 0.040),
+            _row(
+                "rceo_reliability_corruption",
+                "LRIO",
+                0.050,
+                0.050,
+                rceo=True,
+                include_rceo_reliability_curve=False,
+            ),
+            _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy=0.85),
+        ]
+
+        report = build_controlled_report(rows)
+
+        self.assertFalse(report["go_no_go"]["controlled_multimodal_passed"])
+        joined = "\n".join(report["go_no_go"]["reasons"])
+        self.assertIn("RCEO gate rceo_reliability_curve must include at least two corruption points", joined)
+
     def test_collapse_gate_uses_true_router_learned_adapter_oracle_cell(self):
         from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
 
@@ -491,6 +516,8 @@ def _row(
     router_accuracy_value: object | None = None,
     rceo_reliability_monotonic: object = True,
     rceo_router_load_shift: object = 0.1,
+    include_rceo_reliability_curve: bool = True,
+    rceo_reliability_curve: object | None = None,
 ) -> dict[str, object]:
     oracle_matrix = {
         "learned_learned": {"loss": full_loss},
@@ -528,6 +555,11 @@ def _row(
     if rceo:
         row["rceo_reliability_monotonic"] = rceo_reliability_monotonic
         row["rceo_router_load_shift"] = rceo_router_load_shift
+        if include_rceo_reliability_curve:
+            row["rceo_reliability_curve"] = rceo_reliability_curve or [
+                {"corruption_strength": 0.0, "mean_reliability": 0.9},
+                {"corruption_strength": 0.5, "mean_reliability": 0.7},
+            ]
         if include_rceo_prior_effect:
             row["rceo_prior_effect"] = 0.1
     if no_lrio_delta is not None:
