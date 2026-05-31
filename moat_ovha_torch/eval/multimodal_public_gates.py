@@ -358,7 +358,7 @@ def _statistical_evidence_reasons(
             continue
         reasons.extend(_main_table_reporting_reasons(main_models, required_baseline, _seed_count(main_models.get(required_baseline, {}))))
     reporting_models = tuple(dict.fromkeys((full_model, baseline_model, *required_baselines)))
-    reasons.extend(_summary_reporting_metadata_reasons(summary, reporting_models, main_models))
+    reasons.extend(_summary_reporting_metadata_reasons(summary, reporting_models, main_models, task))
     paired = (((summary.get("paired_tests", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
     if not isinstance(paired, dict) or not paired:
         reasons.append("paired comparison missing")
@@ -467,6 +467,7 @@ def _summary_reporting_metadata_reasons(
     summary: dict[str, Any],
     models: tuple[str, ...],
     main_models: Any,
+    task: str,
 ) -> list[str]:
     metadata = summary.get("reporting_metadata")
     if not isinstance(metadata, dict):
@@ -485,12 +486,33 @@ def _summary_reporting_metadata_reasons(
         value = metadata.get(key)
         if _is_empty_reporting_value(value):
             reasons.append(f"reporting metadata missing {key}")
+    reasons.extend(_frozen_feature_versions_reasons(metadata.get("frozen_feature_versions"), task))
     reasons.extend(_hardware_metadata_reasons(metadata.get("hardware")))
     reasons.extend(_wall_clock_summary_reasons(metadata.get("wall_clock_summary")))
     per_seed_table = metadata.get("per_seed_table")
     if isinstance(per_seed_table, list):
         reasons.extend(_reporting_per_seed_table_reasons(per_seed_table, models, main_models))
     return reasons
+
+
+def _frozen_feature_versions_reasons(value: Any, task: str) -> list[str]:
+    if _is_empty_reporting_value(value):
+        return []
+    if not isinstance(value, dict):
+        return ["reporting metadata frozen_feature_versions must be keyed by modality"]
+    reasons: list[str] = []
+    for modality in _required_feature_modalities(task):
+        if _is_empty_reporting_value(value.get(modality)):
+            reasons.append(f"reporting metadata frozen_feature_versions missing modality: {modality}")
+    return reasons
+
+
+def _required_feature_modalities(task: str) -> tuple[str, ...]:
+    if task == "phrase_region_grounding":
+        return ("text", "region")
+    if task == "sentiment_emotion":
+        return ("text", "audio", "vision")
+    return ()
 
 
 def _hardware_metadata_reasons(value: Any) -> list[str]:
