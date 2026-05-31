@@ -62,6 +62,8 @@ Robustness summaries must include required ablation degradation for `ovha_no_rce
 
 Robustness summaries must prove Step 6 stress-family coverage: missing text, missing vision, missing audio, image quality corruption, audio quality corruption, text noise, and hard-negative mismatch. Temporal-shift coverage is required only when the dataset has temporal alignment. These stress descriptors must come from reporting metadata such as `corruption_type`, `missing_modalities`, `mismatch_source_id`, or `temporal_shift_sec`, never from model-input fields.
 
+Robustness experiment configs must declare at least one corruption or missing-modality setting for every required Step 6 stress family before launch, so incomplete coverage is rejected at configuration time rather than discovered only after evaluation.
+
 Region-text public entry requires passed stackability, CATO collapse, and CATO alignment diagnostics gates from the controlled report. Region-text public gates must include CATO top alignment accuracy, grounding accuracy improvement paired with lower CATO alignment entropy, and RCEO-supported router-load shift under corrupted or missing visual-region settings.
 
 Sentiment/emotion public entry requires passed LRIO collapse, SPO collapse, RCEO gate, no-LRIO ablation degradation, and no-RCEO ablation degradation evidence. Sentiment/emotion public gates must include clean-setting LRIO rank entropy, SPO prototype entropy, SPO top-prototype differentiation across emotion classes, and RCEO reliability calibration with expected calibration error evidence. Router-load or ablation deltas alone are not enough to claim LRIO/SPO/RCEO validity.

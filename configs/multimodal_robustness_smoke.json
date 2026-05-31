@@ -9,10 +9,14 @@
   "training_stages": ["T0", "T6"],
   "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
   "baseline_names": [
+    "text_only",
+    "region_only",
     "concat_fusion",
     "cross_attention_transformer",
     "modality_expert_moe",
-    "quality_aware_fusion",
+    "clip_style_region_text_retrieval",
+    "cato_only",
+    "ovha_no_cato",
     "ovha_no_rceo",
     "ovha_no_evidence_router"
   ],
@@ -24,7 +28,9 @@
   "robustness_corruptions": [
     "missing_text",
     "missing_vision",
+    "missing_audio",
     "image_blur",
+    "audio_noise",
     "text_token_mask",
     "hard_negative_mismatch"
   ]

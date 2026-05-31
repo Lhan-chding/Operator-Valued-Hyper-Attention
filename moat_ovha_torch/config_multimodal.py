@@ -9,6 +9,7 @@ from moat_ovha_torch.models.multimodal.baselines import (
     forbidden_external_references,
     missing_required_baselines,
 )
+from moat_ovha_torch.eval.multimodal_robustness import DEFAULT_REQUIRED_STRESS_FAMILIES
 
 
 DEFAULT_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
@@ -92,6 +93,8 @@ class MultimodalExperimentConfig:
             raise ValueError("missing cache artifacts must fail fast")
         if self.task_type != "controlled_multimodal" and self.allow_hidden_losses:
             raise ValueError("hidden losses are controlled-only and forbidden for public data")
+        if self.robustness_corruptions:
+            _validate_robustness_corruptions(self.robustness_corruptions)
         missing = missing_required_baselines(self.task_type, self.baseline_names)
         if missing:
             raise ValueError(f"missing required same-feature baselines: {', '.join(missing)}")
@@ -111,3 +114,28 @@ def _expected_training_stages(task_type: str, robustness_corruptions: tuple[str,
     if task_type in REGION_TEXT_TASK_TYPES or task_type in SENTIMENT_EMOTION_TASK_TYPES:
         return PUBLIC_TRAINING_STAGES
     raise ValueError(f"unknown multimodal task_type for training stages: {task_type}")
+
+
+def _validate_robustness_corruptions(robustness_corruptions: tuple[str, ...]) -> None:
+    observed = _observed_robustness_families(robustness_corruptions)
+    missing = sorted(set(DEFAULT_REQUIRED_STRESS_FAMILIES) - observed)
+    if missing:
+        raise ValueError("missing required robustness stress families: " + ", ".join(missing))
+
+
+def _observed_robustness_families(robustness_corruptions: tuple[str, ...]) -> set[str]:
+    alias_to_family = {
+        _normalize_stress_name(alias): family
+        for family, aliases in DEFAULT_REQUIRED_STRESS_FAMILIES.items()
+        for alias in (family, *aliases)
+    }
+    observed = set()
+    for corruption in robustness_corruptions:
+        family = alias_to_family.get(_normalize_stress_name(corruption))
+        if family is not None:
+            observed.add(family)
+    return observed
+
+
+def _normalize_stress_name(value: Any) -> str:
+    return str(value).strip().lower().replace("-", "_").replace(" ", "_")
