@@ -996,6 +996,10 @@ class MultimodalControlledReportingTests(unittest.TestCase):
             stages["T3"]["loss_names_observed"],
             ["router_ce_true_active_operator", "task_loss"],
         )
+        self.assertEqual(stages["T3"]["trainable_parameter_scope"], "router_only_warmup")
+        self.assertEqual(stages["T3"]["trainable_parameter_groups"], ["joint_router_adapter.router"])
+        self.assertIn("candidate_primitives", stages["T3"]["frozen_parameter_groups"])
+        self.assertIn("joint_router_adapter.hyper_adapter", stages["T3"]["frozen_parameter_groups"])
         self.assertEqual(
             stages["T4"]["loss_names_observed"],
             [
@@ -1013,6 +1017,13 @@ class MultimodalControlledReportingTests(unittest.TestCase):
                 entry.get("route_override_mode") == "true_router_weights"
                 for entry in training["loss_history"]
                 if entry["stage"] == "T2"
+            )
+        )
+        self.assertTrue(
+            all(
+                entry.get("trainable_parameter_scope") == "router_only_warmup"
+                for entry in training["loss_history"]
+                if entry["stage"] == "T3"
             )
         )
         self.assertTrue(all(row["training_config_name"] == "multimodal_controlled_v1_smoke" for row in rows))
