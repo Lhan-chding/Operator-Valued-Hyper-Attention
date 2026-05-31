@@ -355,6 +355,52 @@ class MultimodalPublicGateTests(unittest.TestCase):
             "\n".join(report["reasons"]),
         )
 
+    def test_public_gate_rejects_paired_mean_delta_that_disagrees_with_main_table_delta(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["paired_tests"]["phrase_region_grounding"]["test"]["mean_delta"] = 0.02
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "paired comparison mean_delta disagrees with main_table mean delta",
+            "\n".join(report["reasons"]),
+        )
+
+    def test_public_gate_requires_paired_common_seeds_cover_main_delta_models(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary(
+            "phrase_region_grounding",
+            "test",
+            full=0.80,
+            baseline=0.72,
+            seed_count=5,
+            common_seed_count=3,
+        )
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "paired comparison common_seed_count must cover full and baseline main_table seeds",
+            "\n".join(report["reasons"]),
+        )
+
     def test_public_gate_requires_topconf_reporting_metadata_not_only_mean(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
