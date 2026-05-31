@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import subprocess
 import sys
@@ -1837,6 +1839,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("stackability_passed must be true", joined)
 
 def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
+    import numpy as np
+
     from moat_ovha_torch.data.multimodal.cache_schema import (
         MultimodalCacheLayout,
         default_data_card,
@@ -1893,25 +1897,25 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
             + "\n"
         )
         (root / "provenance" / f"failed_samples_{split}.jsonl").write_text("")
-        (root / "supervision" / f"task_labels_{split}.npy").write_text("placeholder labels\n")
+        np.save(root / "supervision" / f"task_labels_{split}.npy", np.zeros((1,), dtype=np.int64))
         (root / "supervision" / f"alignment_pairs_{split}.parquet").write_text("placeholder alignment pairs\n")
-        (root / "supervision" / f"bbox_targets_{split}.npy").write_text("placeholder boxes\n")
-        (root / "supervision" / f"region_targets_{split}.npy").write_text("placeholder regions\n")
+        np.save(root / "supervision" / f"bbox_targets_{split}.npy", np.zeros((1, 4), dtype=np.float32))
+        np.save(root / "supervision" / f"region_targets_{split}.npy", np.zeros((1,), dtype=np.int64))
         (root / "supervision" / f"corruption_{split}.parquet").write_text("placeholder corruption metadata\n")
         manifest = {}
         for modality in ("text", "region"):
             x_path = root / "token_fields" / f"{modality}_{split}.npy"
             pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
             mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
-            x_path.write_text("placeholder token field\n")
-            pos_path.write_text("placeholder positions\n")
-            mask_path.write_text("placeholder mask\n")
+            np.save(x_path, np.zeros((1, 2, 3), dtype=np.float32))
+            np.save(pos_path, np.zeros((1, 2, 1), dtype=np.float32))
+            np.save(mask_path, np.ones((1, 2), dtype=bool))
             manifest[modality] = {
                 "x": str(x_path.relative_to(root)),
                 "pos": str(pos_path.relative_to(root)),
                 "mask": str(mask_path.relative_to(root)),
             }
-        (root / "masks" / f"text_mask_{split}.npy").write_text("placeholder mask\n")
+        np.save(root / "masks" / f"text_mask_{split}.npy", np.ones((1, 2), dtype=bool))
         (root / "token_fields" / f"manifest_{split}.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
     checksums = {}
     for path in required_cache_files(layout, splits=("val", "test")):
@@ -1924,6 +1928,8 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
 
 
 def _write_valid_cmu_mosei_public_cache(cache_root: Path) -> None:
+    import numpy as np
+
     from moat_ovha_torch.data.multimodal.cache_schema import (
         MultimodalCacheLayout,
         default_data_card,
@@ -1989,23 +1995,23 @@ def _write_valid_cmu_mosei_public_cache(cache_root: Path) -> None:
             + "\n"
         )
         (root / "provenance" / f"failed_samples_{split}.jsonl").write_text("")
-        (root / "supervision" / f"task_labels_{split}.npy").write_text("placeholder sentiment labels\n")
-        (root / "supervision" / f"missing_modality_mask_{split}.npy").write_text("placeholder missing mask\n")
+        np.save(root / "supervision" / f"task_labels_{split}.npy", np.zeros((1,), dtype=np.int64))
+        np.save(root / "supervision" / f"missing_modality_mask_{split}.npy", np.zeros((1, 3), dtype=bool))
         (root / "supervision" / f"corruption_{split}.parquet").write_text("placeholder corruption metadata\n")
         manifest = {}
         for modality in ("text", "audio", "vision"):
             x_path = root / "token_fields" / f"{modality}_{split}.npy"
             pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
             mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
-            x_path.write_text("placeholder token field\n")
-            pos_path.write_text("placeholder positions\n")
-            mask_path.write_text("placeholder mask\n")
+            np.save(x_path, np.zeros((1, 2, 3), dtype=np.float32))
+            np.save(pos_path, np.zeros((1, 2, 1), dtype=np.float32))
+            np.save(mask_path, np.ones((1, 2), dtype=bool))
             manifest[modality] = {
                 "x": str(x_path.relative_to(root)),
                 "pos": str(pos_path.relative_to(root)),
                 "mask": str(mask_path.relative_to(root)),
             }
-        (root / "masks" / f"text_mask_{split}.npy").write_text("placeholder mask\n")
+        np.save(root / "masks" / f"text_mask_{split}.npy", np.ones((1, 2), dtype=bool))
         (root / "token_fields" / f"manifest_{split}.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
     checksums = {}
     for path in required_cache_files(layout, splits=("val", "test")):

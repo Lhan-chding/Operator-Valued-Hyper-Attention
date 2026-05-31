@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import tempfile
 import unittest
@@ -2144,14 +2146,16 @@ def _write_sample_records(root: Path, split: str, source_ids: list[str], *, mode
 
 
 def _write_token_field_manifest_for_modalities(root: Path, split: str, modalities: tuple[str, ...]) -> None:
+    import numpy as np
+
     manifest = {}
     for modality in modalities:
         x_path = root / "token_fields" / f"{modality}_{split}.npy"
         pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
         mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
-        x_path.write_text("placeholder token field\n")
-        pos_path.write_text("placeholder positions\n")
-        mask_path.write_text("placeholder mask\n")
+        np.save(x_path, np.zeros((1, 2, 3), dtype=np.float32))
+        np.save(pos_path, np.zeros((1, 2, 1), dtype=np.float32))
+        np.save(mask_path, np.ones((1, 2), dtype=bool))
         manifest[modality] = {
             "x": str(x_path.relative_to(root)),
             "pos": str(pos_path.relative_to(root)),
@@ -2167,6 +2171,8 @@ def _write_token_field_manifest(
     invalid_token_manifest: bool,
     extra_modality: str | None = None,
 ) -> None:
+    import numpy as np
+
     manifest = {}
     modalities = ("text", "region", extra_modality) if extra_modality else ("text", "region")
     for modality in modalities:
@@ -2174,9 +2180,9 @@ def _write_token_field_manifest(
         x_path = root / "token_fields" / f"{modality}_{split}.npy"
         pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
         mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
-        x_path.write_text("placeholder token field\n")
-        pos_path.write_text("placeholder positions\n")
-        mask_path.write_text("placeholder mask\n")
+        np.save(x_path, np.zeros((1, 2, 3), dtype=np.float32))
+        np.save(pos_path, np.zeros((1, 2, 1), dtype=np.float32))
+        np.save(mask_path, np.ones((1, 2), dtype=bool))
         entry = {
             "x": str(x_path.relative_to(root)),
             "pos": str(pos_path.relative_to(root)),

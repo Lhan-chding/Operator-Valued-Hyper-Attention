@@ -1050,9 +1050,41 @@ def _validate_manifest_shard_path(
     if not shard_path.exists():
         errors.append(f"{manifest_name} points to missing {key} shard for {modality}: {normalized_relative}")
         return
+    _validate_numpy_array_artifact(shard_path, manifest_name, modality, key, normalized_relative, errors)
     checksum_key = str(normalized_relative)
     if checksums and checksum_key not in checksums:
         errors.append(f"checksums.json missing hash for token field shard: {checksum_key}")
+
+
+def _validate_numpy_array_artifact(
+    path: Path,
+    manifest_name: Path,
+    modality: str,
+    key: str,
+    normalized_relative: Path,
+    errors: list[str],
+) -> None:
+    try:
+        import numpy as np
+
+        artifact = np.load(path, allow_pickle=False)
+    except (ImportError, OSError, ValueError, TypeError):
+        errors.append(
+            f"{manifest_name} entry for {modality}.{key} must be a loadable numpy array: "
+            f"{normalized_relative}"
+        )
+        return
+    if not isinstance(artifact, np.ndarray):
+        errors.append(
+            f"{manifest_name} entry for {modality}.{key} must be a numpy array artifact: "
+            f"{normalized_relative}"
+        )
+        return
+    if artifact.ndim == 0:
+        errors.append(
+            f"{manifest_name} entry for {modality}.{key} must have at least one dimension: "
+            f"{normalized_relative}"
+        )
 
 
 def _validate_supervision_artifacts(
