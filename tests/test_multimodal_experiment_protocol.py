@@ -1080,6 +1080,11 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             self.assertGreater(row["baseline_parameter_l2_delta"], 0.0)
             self.assertGreater(row["baseline_grad_l2_norm"], 0.0)
             self.assertIn("not a trained strong baseline", row["evidence_limitations"])
+            self.assertIn("trainable same-feature linear probe smoke", row["evidence_limitations"])
+            self.assertNotIn(
+                "deterministic probe only verifies baseline artifact plumbing and same-feature provenance",
+                row["evidence_limitations"],
+            )
 
     def test_public_smoke_runner_rejects_unverified_controlled_artifact_descriptors(self):
         with tempfile.TemporaryDirectory() as tmp:
