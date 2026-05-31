@@ -112,7 +112,11 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("annotations/phrase_regions.json", "\n".join(payload["errors"]))
         self.assertNotIn("Traceback", result.stderr)
 
-    def test_build_cache_cli_rejects_partial_cache_initialization_when_writer_is_unimplemented(self):
+    def test_build_cache_cli_builds_valid_controlled_synthetic_cache_with_hidden_truth(self):
+        import numpy as np
+
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             raw_root = tmp_path / "raw"
@@ -133,11 +137,25 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                 check=False,
             )
 
-        self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            layout = MultimodalCacheLayout(cache_root, "controlled_multimodal", "v0.1")
+            validation = validate_cache_layout(layout, splits=("train",))
+            manifest = json.loads((layout.root / "token_fields" / "manifest_train.json").read_text())
+            data_card = json.loads((layout.root / "data_card.json").read_text())
+            hidden_active = np.load(layout.root / "controlled_hidden" / "true_active_operator_train.npy")
+            hidden_router = np.load(layout.root / "controlled_hidden" / "true_router_weights_train.npy")
+
         payload = json.loads(result.stdout)
-        self.assertFalse(payload["ok"])
-        self.assertIn("partial cache initialization is forbidden", payload["policy"])
-        self.assertIn("controlled synthetic cache writing is intentionally explicit", "\n".join(payload["errors"]))
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["policy"], "cache built and validated")
+        self.assertTrue(validation.ok, validation.errors)
+        self.assertEqual(data_card["tasks"], ["controlled_relation_operator"])
+        self.assertEqual(data_card["modalities"], ["text", "region", "audio"])
+        self.assertEqual(sorted(manifest), ["audio", "region", "text"])
+        self.assertEqual(hidden_active.shape, (2, 4))
+        self.assertEqual(hidden_router.shape, (2, 4, 4))
+        self.assertNotIn("controlled_hidden", json.dumps(manifest, sort_keys=True))
         self.assertFalse((cache_root / "controlled_multimodal" / "v0.1" / "data_card.json").exists())
         self.assertNotIn("Traceback", result.stderr)
 
