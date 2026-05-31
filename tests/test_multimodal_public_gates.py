@@ -1274,11 +1274,9 @@ class MultimodalPublicGateTests(unittest.TestCase):
             summary["metadata"] = {"raw_metric_paths": [str(raw_metrics_path)]}
             raw_metrics_path.write_text(json.dumps({"seed": 1, "score": 0.80}) + "\n")
             stats_path.write_text(json.dumps(summary))
-            robustness_path.write_text(json.dumps(_passing_sentiment_robustness()))
-            robustness_rows_path.write_text(
-                json.dumps({"model": "ovha_full", "corruption_type": "image_blur", "corruption_strength": 0.0, "score": 0.80})
-                + "\n"
-            )
+            robustness_rows = _cli_robustness_rows()
+            robustness_path.write_text(json.dumps(_cli_robustness_summary(robustness_rows)))
+            robustness_rows_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in robustness_rows))
             diagnostics_path.write_text(
                 json.dumps(
                     _diagnostic(
@@ -1351,6 +1349,91 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertRegex(artifacts["robustness_rows"]["sha256"], r"^[a-f0-9]{64}$")
         self.assertEqual(len(artifacts["raw_metrics"]), 1)
         self.assertRegex(artifacts["raw_metrics"][0]["sha256"], r"^[a-f0-9]{64}$")
+
+    def test_public_gate_cli_rejects_robustness_summary_disagreeing_with_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stats_path = root / "stats.json"
+            diagnostics_path = root / "diagnostics.jsonl"
+            robustness_path = root / "robustness.json"
+            robustness_rows_path = root / "robustness_rows.jsonl"
+            raw_metrics_path = root / "raw_metrics_seed1.jsonl"
+            summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+            summary["metadata"] = {"raw_metric_paths": [str(raw_metrics_path)]}
+            raw_metrics_path.write_text(json.dumps({"seed": 1, "score": 0.80}) + "\n")
+            stats_path.write_text(json.dumps(summary))
+            robustness_rows = _cli_robustness_rows()
+            robustness_summary = _cli_robustness_summary(robustness_rows)
+            robustness_summary["auc_over_corruption_strength"]["ovha_full"] = 0.99
+            robustness_path.write_text(json.dumps(robustness_summary, sort_keys=True))
+            robustness_rows_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in robustness_rows))
+            diagnostics_path.write_text(
+                json.dumps(
+                    _diagnostic(
+                        "clean",
+                        {"CATO": 0.55, "TLEO": 0.2, "SPO": 0.15, "LRIO": 0.1},
+                        cato_entropy=0.30,
+                        grounding_accuracy=0.74,
+                        top_alignment_accuracy=0.72,
+                        rceo_reliability=0.90,
+                    )
+                )
+                + "\n"
+                + json.dumps(
+                    _diagnostic(
+                        "no_cato",
+                        {"CATO": 0.0, "TLEO": 0.4, "SPO": 0.4, "LRIO": 0.2},
+                        cato_entropy=0.90,
+                        grounding_accuracy=0.52,
+                        top_alignment_accuracy=0.20,
+                    )
+                )
+                + "\n"
+                + json.dumps(
+                    _diagnostic(
+                        "corrupted_visual",
+                        {"CATO": 0.28, "TLEO": 0.30, "SPO": 0.32, "LRIO": 0.10},
+                        cato_entropy=0.58,
+                        grounding_accuracy=0.61,
+                        top_alignment_accuracy=0.56,
+                        rceo_reliability=0.55,
+                        rceo_corruption_response=0.35,
+                    )
+                )
+                + "\n"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "evaluate_public_gates.py"),
+                    "region_text",
+                    str(stats_path),
+                    str(diagnostics_path),
+                    "--task",
+                    "phrase_region_grounding",
+                    "--split",
+                    "test",
+                    "--no-cato-score",
+                    str(summary["main_table"]["phrase_region_grounding"]["test"]["ovha_no_cato"]["mean"]),
+                    "--robustness-summary",
+                    str(robustness_path),
+                    "--robustness-rows",
+                    str(robustness_rows_path),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["passed"])
+        self.assertIn(
+            "top-conference gate evidence robustness_summary.auc_over_corruption_strength.ovha_full "
+            "disagrees with robustness_rows recomputation",
+            "\n".join(payload["reasons"]),
+        )
 
     def test_public_gate_cli_rejects_passing_gate_without_topconf_evidence_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1667,6 +1750,83 @@ def _passing_required_ablation_degradation() -> dict[str, object]:
         "value": {"ovha_no_rceo": 0.11, "ovha_no_evidence_router": 0.12},
         "reasons": [],
     }
+
+
+def _cli_robustness_summary(rows: list[dict[str, object]]) -> dict[str, object]:
+    from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+    return summarize_robustness_rows(
+        rows,
+        full_model="ovha_full",
+        baseline_model="cross_attention_transformer",
+    )
+
+
+def _cli_robustness_rows() -> list[dict[str, object]]:
+    rows = [
+        {
+            "model": "ovha_full",
+            "corruption_type": "image_blur",
+            "corruption_strength": 0.0,
+            "score": 0.75,
+            "rceo_reliability": 0.90,
+            "rceo_observed_reliability": 0.88,
+            "router_load_by_candidate": {"TLEO": 0.20, "SPO": 0.20, "LRIO": 0.40, "CATO": 0.20},
+            "candidate_loss": {"TLEO": 0.12, "SPO": 0.20, "LRIO": 0.26, "CATO": 0.18},
+        },
+        {
+            "model": "ovha_full",
+            "corruption_type": "image_blur",
+            "corruption_strength": 0.25,
+            "score": 0.72,
+            "rceo_reliability": 0.65,
+            "rceo_observed_reliability": 0.63,
+            "router_load_by_candidate": {"TLEO": 0.18, "SPO": 0.28, "LRIO": 0.32, "CATO": 0.22},
+            "candidate_loss": {"TLEO": 0.13, "SPO": 0.17, "LRIO": 0.28, "CATO": 0.19},
+        },
+    ]
+    for stress in _canonical_cli_stress_rows():
+        rows.append(
+            {
+                **stress,
+                "model": "ovha_full",
+                "corruption_strength": 0.5,
+                "score": 0.69,
+                "rceo_reliability": 0.45,
+                "rceo_observed_reliability": 0.43,
+                "router_load_by_candidate": {"TLEO": 0.18, "SPO": 0.40, "LRIO": 0.20, "CATO": 0.22},
+                "candidate_loss": {"TLEO": 0.14, "SPO": 0.14, "LRIO": 0.31, "CATO": 0.19},
+            }
+        )
+    rows.extend(
+        [
+            {"model": "cross_attention_transformer", "corruption_type": "image_blur", "corruption_strength": 0.0, "score": 0.75},
+            {"model": "cross_attention_transformer", "corruption_type": "image_blur", "corruption_strength": 0.5, "score": 0.63},
+            {"model": "ovha_no_rceo", "corruption_type": "image_blur", "corruption_strength": 0.0, "score": 0.74},
+            {"model": "ovha_no_rceo", "corruption_type": "image_blur", "corruption_strength": 0.5, "score": 0.58},
+            {"model": "ovha_no_evidence_router", "corruption_type": "image_blur", "corruption_strength": 0.0, "score": 0.74},
+            {"model": "ovha_no_evidence_router", "corruption_type": "image_blur", "corruption_strength": 0.5, "score": 0.57},
+        ]
+    )
+    return rows
+
+
+def _canonical_cli_stress_rows() -> list[dict[str, object]]:
+    return [
+        {"corruption_type": "missing_modality", "missing_modalities": ["text"]},
+        {"corruption_type": "missing_modality", "missing_modalities": ["vision"]},
+        {"corruption_type": "missing_modality", "missing_modalities": ["audio"]},
+        {"corruption_type": "image_blur"},
+        {"corruption_type": "image_crop"},
+        {"corruption_type": "image_occlusion"},
+        {"corruption_type": "audio_noise"},
+        {"corruption_type": "audio_masking"},
+        {"corruption_type": "text_token_mask"},
+        {"corruption_type": "text_paraphrase"},
+        {"corruption_type": "hard_negative_caption_mismatch", "mismatch_source_id": "other-caption"},
+        {"corruption_type": "hard_negative_region_mismatch", "mismatch_source_id": "other-region"},
+        {"corruption_type": "hard_negative_audio_mismatch", "mismatch_source_id": "other-audio"},
+    ]
 
 
 def _required_baselines_for_task(task: str) -> tuple[str, ...]:
