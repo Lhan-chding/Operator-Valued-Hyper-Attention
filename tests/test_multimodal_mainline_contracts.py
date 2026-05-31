@@ -35,6 +35,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "scripts" / "multimodal" / "inspect_cmu_sdk_sequences.py",
             ROOT / "scripts" / "multimodal" / "write_cmu_sdk_splits.py",
             ROOT / "scripts" / "multimodal" / "check_public_data_readiness.py",
+            ROOT / "scripts" / "multimodal" / "build_public_main_runbook.py",
         ]
         for path in expected:
             with self.subTest(path=path):

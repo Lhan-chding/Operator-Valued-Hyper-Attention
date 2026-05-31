@@ -24,6 +24,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             ROOT / "moat_ovha_torch" / "eval" / "multimodal_diagnostics.py",
             ROOT / "scripts" / "multimodal" / "run_public_smoke.py",
             ROOT / "scripts" / "multimodal" / "bootstrap_public_downloads.py",
+            ROOT / "scripts" / "multimodal" / "build_public_main_runbook.py",
             ROOT / "scripts" / "multimodal" / "run_robustness_stress_smoke.py",
             ROOT / "scripts" / "multimodal" / "summarize_diagnostics.py",
         ]
@@ -525,6 +526,52 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcoco.zip", script)
         self.assertIn("mmdatasdk.cmu_mosei", script)
         self.assertIn("CMU-MultimodalSDK", script)
+
+    def test_public_main_runbook_cli_wires_gate_bundles_and_topconf_manifest_without_smoke_promotion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            output_dir = tmp_path / "runbook"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_public_main_runbook.py"),
+                    "--output-dir",
+                    str(output_dir),
+                    "--cache-root",
+                    str(tmp_path / "cache"),
+                    "--controlled-report",
+                    str(tmp_path / "controlled_report.json"),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(result.stdout) if result.stdout.strip() else {}
+            runbook_path = output_dir / "public_main_runbook.json"
+            commands_path = output_dir / "public_main_commands.sh"
+            runbook = json.loads(runbook_path.read_text()) if runbook_path.exists() else {}
+            commands = commands_path.read_text() if commands_path.exists() else ""
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "public_main_runbook")
+        self.assertTrue(runbook["requires_real_main_metrics"])
+        self.assertIn("smoke artifacts must not be used as top-conference main-table inputs", runbook["policy"])
+        self.assertEqual(runbook["datasets"], ["refcoco", "cmu_mosei"])
+        self.assertIn("scripts/multimodal/validate_cache.py", commands)
+        self.assertIn("scripts/multimodal/build_public_gate_report.py region_text", commands)
+        self.assertIn("scripts/multimodal/build_public_gate_report.py sentiment", commands)
+        self.assertIn("scripts/multimodal/build_topconf_entry_manifest.py", commands)
+        self.assertIn("--validate", commands)
+        self.assertIn("--cache-target refcoco", commands)
+        self.assertIn("--cache-target cmu_mosei", commands)
+        self.assertIn("outputs/multimodal/refcoco_main/raw_metrics.jsonl", commands)
+        self.assertIn("outputs/multimodal/cmu_mosei_main/raw_metrics.jsonl", commands)
+        self.assertNotIn("public_smoke_raw_metrics", commands)
+        self.assertNotIn("public_smoke_statistics_preview", commands)
+        self.assertEqual(runbook["required_real_inputs"]["region_text"]["split"], "test")
+        self.assertEqual(runbook["required_real_inputs"]["sentiment"]["split"], "test")
 
     def test_public_entry_requires_controlled_go_no_go_report(self):
         from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
