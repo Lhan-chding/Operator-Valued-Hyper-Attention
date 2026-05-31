@@ -576,7 +576,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             payload = json.loads(result.stdout)
             metrics_path = Path(payload["training"]["artifacts"]["metrics"]["path"])
+            diagnostics_path = Path(payload["training"]["artifacts"]["diagnostics"]["path"])
             metrics_rows = [json.loads(line) for line in metrics_path.read_text().splitlines() if line.strip()]
+            diagnostics_rows = [json.loads(line) for line in diagnostics_path.read_text().splitlines() if line.strip()]
 
         training = payload["training"]
         stages = {stage["stage"]: stage for stage in training["stage_history"]}
@@ -597,6 +599,20 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(len(metrics_rows), 1)
         self.assertEqual(metrics_rows[0]["stage"], "T5")
         self.assertEqual(metrics_rows[0]["split"], "train")
+        self.assertEqual(len(diagnostics_rows), 1)
+        diagnostic = diagnostics_rows[0]
+        self.assertEqual(diagnostic["artifact_type"], "public_training_diagnostics")
+        self.assertEqual(diagnostic["stage"], "T5")
+        self.assertEqual(diagnostic["split"], "train")
+        self.assertEqual(diagnostic["task"], "phrase_region_grounding")
+        self.assertTrue(diagnostic["stackability_passed"])
+        self.assertEqual(set(diagnostic["router_logit_parts"]), {"memory", "evidence", "reliability"})
+        self.assertEqual(set(diagnostic["router_load_by_candidate"]), {"TLEO", "SPO", "LRIO", "CATO"})
+        self.assertEqual(set(diagnostic["candidate_loss"]), {"TLEO", "SPO", "LRIO", "CATO"})
+        self.assertEqual(set(diagnostic["memory_slot_norm"]), {"TLEO", "SPO", "LRIO", "CATO"})
+        self.assertIn("CATO_alignment_temperature", diagnostic["adapter_params"])
+        self.assertIn("candidate_loss", diagnostic["candidate_diagnostics"]["CATO"])
+        self.assertIn("corruption_response", diagnostic["candidate_diagnostics"]["RCEO"])
 
     def test_sentiment_public_train_smoke_maps_missing_modality_to_rceo_reliability(self):
         if importlib.util.find_spec("torch") is None:
