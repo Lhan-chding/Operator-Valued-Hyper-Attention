@@ -51,7 +51,7 @@ OPERATOR_DIAGNOSTIC_REQUIREMENTS = {
 
 
 def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    family_rows = {str(row["family"]): row for row in rows}
+    family_rows, family_reasons = _index_controlled_family_rows(rows)
     gate_table = {
         "Stackability": _stackability_gate(rows),
         "TLEO collapse": _collapse_gate(family_rows, "TLEO"),
@@ -80,7 +80,7 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             ("rceo_reliability_corruption", "mixed_relation_operator"),
         ),
     }
-    reasons: list[str] = []
+    reasons: list[str] = list(family_reasons)
     for family in CONTROLLED_REQUIRED_FAMILIES:
         if family not in family_rows:
             reasons.append(f"missing controlled family: {family}")
@@ -114,6 +114,22 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "reasons": reasons,
         },
     }
+
+
+def _index_controlled_family_rows(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    family_rows: dict[str, dict[str, Any]] = {}
+    reasons: list[str] = []
+    allowed = set(CONTROLLED_REQUIRED_FAMILIES)
+    for row in rows:
+        family = str(row.get("family", "")).strip()
+        if family not in allowed:
+            reasons.append(f"unknown controlled family: {family or '<missing>'}")
+            continue
+        if family in family_rows:
+            reasons.append(f"duplicate controlled family row: {family}")
+            continue
+        family_rows[family] = row
+    return family_rows, reasons
 
 
 def _missing_oracle_cells(row: dict[str, Any]) -> list[str]:
