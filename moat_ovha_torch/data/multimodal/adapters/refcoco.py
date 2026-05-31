@@ -197,7 +197,12 @@ def _write_split_cache_files(
     (root / "provenance" / f"sample_records_{split}.jsonl").write_text(
         "\n".join(json.dumps(record, sort_keys=True) for record in sample_records) + "\n"
     )
-    (root / "provenance" / f"failed_samples_{split}.jsonl").write_text("")
+    _write_failed_sample_manifest(
+        root / "provenance" / f"failed_samples_{split}.jsonl",
+        manifest,
+        split,
+        retained_source_ids=set(source_ids),
+    )
     selected_records = [records_by_source_id[source_id] for source_id in source_ids]
     candidate_region_count = _candidate_region_count(feature_shards["region"], split)
     target_region_indices = _target_region_indices(selected_records, candidate_region_count)
@@ -311,6 +316,67 @@ def _write_corruption_metadata(destination: Path, split: str, source_ids: list[s
         "corruption": "none",
     }
     destination.write_text(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def _write_failed_sample_manifest(
+    destination: Path,
+    manifest: RawDatasetManifest,
+    split: str,
+    *,
+    retained_source_ids: set[str],
+) -> None:
+    rows = _failed_sample_rows_for_split(manifest, split)
+    overlaps = sorted(row["source_id"] for row in rows if row["source_id"] in retained_source_ids)
+    if overlaps:
+        raise ValueError(
+            f"{manifest.dataset_name} failed sample manifest overlaps retained split {split}: "
+            + ", ".join(overlaps)
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + ("\n" if rows else ""))
+
+
+def _failed_sample_rows_for_split(manifest: RawDatasetManifest, split: str) -> list[dict[str, str]]:
+    path = _failed_sample_manifest_path(manifest)
+    if path is None:
+        return []
+    rows: list[dict[str, str]] = []
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path.name} line {line_number} is not valid JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"{path.name} line {line_number} must be a JSON object")
+        row = _normalize_failed_sample_row(path.name, line_number, payload)
+        if row["split"] == split:
+            rows.append(row)
+    return rows
+
+
+def _failed_sample_manifest_path(manifest: RawDatasetManifest) -> Path | None:
+    for relative in ("provenance/failed_samples.jsonl", "annotations/failed_samples.jsonl"):
+        path = manifest.raw_root / relative
+        if path.exists():
+            return path
+    return None
+
+
+def _normalize_failed_sample_row(source_name: str, line_number: int, payload: dict[str, Any]) -> dict[str, str]:
+    required = ("source_id", "split", "reason")
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise ValueError(f"{source_name} line {line_number} missing required keys: {', '.join(missing)}")
+    normalized: dict[str, str] = {}
+    for key in required:
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip() or value != value.strip():
+            raise ValueError(f"{source_name} line {line_number} {key} must be a non-empty normalized string")
+        normalized[key] = value
+    return normalized
 
 
 def _write_checksums(root: Path) -> None:
