@@ -372,6 +372,27 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("robustness relative_drop missing", joined)
         self.assertIn("robustness AUC over corruption strength missing", joined)
 
+    def test_sentiment_gate_requires_clean_and_corrupted_scores_for_robustness(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        robustness = _passing_sentiment_robustness()
+        robustness.pop("clean_score", None)
+        robustness.pop("corrupted_score", None)
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=_summary("sentiment_emotion", "test", full=0.76, baseline=0.74),
+            diagnostics_rows=_passing_sentiment_diagnostics(),
+            ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
+            robustness_summary=robustness,
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("robustness clean_score missing", joined)
+        self.assertIn("robustness corrupted_score missing", joined)
+
     def test_sentiment_gate_rejects_robustness_drop_boolean_contradicting_numeric_drop(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
 

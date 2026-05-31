@@ -429,6 +429,10 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         ]
         summary = summarize_robustness_rows(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
 
+        self.assertEqual(summary["clean_score"]["ovha_full"], 0.80)
+        self.assertEqual(summary["corrupted_score"]["ovha_full"], 0.70)
+        self.assertEqual(summary["clean_score"]["cross_attention_transformer"], 0.78)
+        self.assertEqual(summary["corrupted_score"]["cross_attention_transformer"], 0.60)
         self.assertLess(summary["relative_drop"]["ovha_full"], summary["relative_drop"]["cross_attention_transformer"])
         self.assertTrue(summary["rceo_reliability_monotonic"])
         self.assertEqual(summary["rceo_reliability_shift"], -0.25)
