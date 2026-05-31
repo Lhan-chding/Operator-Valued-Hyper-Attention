@@ -56,6 +56,48 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertTrue(report["checks"]["grounding_accuracy_improves_with_entropy"]["passed"])
         self.assertTrue(report["checks"]["rceo_visual_stress_router_shift"]["passed"])
 
+    def test_region_text_gate_rejects_no_cato_score_contradicting_main_table(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["main_table"]["phrase_region_grounding"]["test"]["ovha_no_cato"]["mean"] = 0.84
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            robustness_summary=_passing_sentiment_robustness(),
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "no-CATO ablation score disagrees with main_table mean for model: ovha_no_cato",
+            "\n".join(report["reasons"]),
+        )
+
+    def test_region_text_gate_requires_paired_evidence_for_no_cato_drop(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["paired_tests"]["phrase_region_grounding"]["test"]["baseline_comparisons"].pop("ovha_no_cato")
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=summary["main_table"]["phrase_region_grounding"]["test"]["ovha_no_cato"]["mean"],
+            robustness_summary=_passing_sentiment_robustness(),
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "no-CATO ablation paired comparison missing: ovha_no_cato",
+            "\n".join(report["reasons"]),
+        )
+
     def test_sentiment_gate_requires_lrio_spo_rceo_and_robustness(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
 
