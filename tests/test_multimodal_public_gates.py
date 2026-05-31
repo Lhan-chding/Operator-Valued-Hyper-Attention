@@ -532,6 +532,46 @@ class MultimodalPublicGateTests(unittest.TestCase):
             "\n".join(report["reasons"]),
         )
 
+    def test_public_gate_requires_positive_integer_parameter_counts(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["reporting_metadata"]["parameter_count"]["ovha_full"] = 0
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "reporting metadata parameter_count must be positive integer for model: ovha_full",
+            "\n".join(report["reasons"]),
+        )
+
+    def test_public_gate_requires_positive_integer_training_steps(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["reporting_metadata"]["training_steps"]["ovha_full"] = "many"
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "reporting metadata training_steps must be positive integer for model: ovha_full",
+            "\n".join(report["reasons"]),
+        )
+
     def test_region_text_gate_requires_complete_same_feature_baseline_defense_table(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
