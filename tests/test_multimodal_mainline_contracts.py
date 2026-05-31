@@ -284,6 +284,11 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                 for line in (layout.root / "provenance" / "sample_records_train.jsonl").read_text().splitlines()
                 if line.strip()
             ]
+            failed_train_rows = [
+                json.loads(line)
+                for line in (layout.root / "provenance" / "failed_samples_train.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
             import numpy as np
 
             text_train = np.load(layout.root / "token_fields" / "text_train.npy")
@@ -311,6 +316,10 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(missing_modality_mask_test.shape, (1, 3))
         self.assertEqual(data_card["metadata_availability"]["speaker_id"], True)
         self.assertEqual(train_records[0]["speaker_id"], "speaker-train")
+        self.assertEqual(
+            failed_train_rows,
+            [{"source_id": "mosei-train-failed", "split": "train", "reason": "audio_decode_failed"}],
+        )
 
     def test_build_cache_cli_writes_valid_meld_cache_from_dialogue_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
@@ -1281,7 +1290,7 @@ def _write_refcoco_raw_fixture(raw_root: Path) -> None:
 def _write_cmu_mosei_raw_fixture(raw_root: Path) -> None:
     import numpy as np
 
-    for folder in ("features", "labels", "metadata"):
+    for folder in ("features", "labels", "metadata", "provenance"):
         (raw_root / folder).mkdir(parents=True, exist_ok=True)
     split_source_ids = {
         "train": ["mosei-train-1"],
@@ -1322,6 +1331,10 @@ def _write_cmu_mosei_raw_fixture(raw_root: Path) -> None:
     np.save(raw_root / "metadata" / "missing_modality_mask.npy", np.zeros((3, 3), dtype=bool))
     (raw_root / "metadata" / "corruption_transforms.json").write_text(
         json.dumps({"version": "fixture-corruption-v1"}, sort_keys=True) + "\n"
+    )
+    (raw_root / "provenance" / "failed_samples.jsonl").write_text(
+        json.dumps({"source_id": "mosei-train-failed", "split": "train", "reason": "audio_decode_failed"}, sort_keys=True)
+        + "\n"
     )
     np.save(raw_root / "features" / "text_features.npy", np.arange(3 * 4 * 5, dtype=np.float32).reshape(3, 4, 5))
     np.save(raw_root / "features" / "audio_features.npy", np.arange(3 * 6 * 3, dtype=np.float32).reshape(3, 6, 3))
