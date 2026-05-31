@@ -680,7 +680,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             smoke_robustness_summary_path = Path(
                 payload["training"]["artifacts"]["smoke_robustness_summary"]["path"]
             )
+            eval_diagnostics_path = Path(payload["training"]["artifacts"]["eval_diagnostics"]["path"])
             metrics_rows = [json.loads(line) for line in metrics_path.read_text().splitlines() if line.strip()]
+            eval_diagnostics = [json.loads(line) for line in eval_diagnostics_path.read_text().splitlines() if line.strip()]
             smoke_raw_rows = [
                 json.loads(line) for line in smoke_raw_metrics_path.read_text().splitlines() if line.strip()
             ]
@@ -700,6 +702,12 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(row["rceo_modality_reliability"], {"text": 1.0, "audio": 0.0, "vision": 1.0})
         self.assertAlmostEqual(row["rceo_reliability_mean"], 2.0 / 3.0)
         self.assertAlmostEqual(row["rceo_corruption_response"], 1.0 / 3.0)
+        self.assertEqual(len(eval_diagnostics), 1)
+        public_diagnostics = eval_diagnostics[0]["public_diagnostics"]
+        self.assertIn("lrio_rank_entropy_by_modality_pair", public_diagnostics)
+        self.assertIn("spo_prototype_load_by_emotion_class", public_diagnostics)
+        self.assertIn("rceo_reliability_shift_under_missing_noisy_modality", public_diagnostics)
+        self.assertIn("router_load_by_condition", public_diagnostics)
         self.assertEqual(len(smoke_raw_rows), 1)
         smoke_raw = smoke_raw_rows[0]
         self.assertEqual(smoke_raw["task"], "sentiment_emotion")
@@ -939,6 +947,11 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(eval_diagnostics[0]["stage"], "T5_eval")
         self.assertEqual(eval_diagnostics[0]["split"], "val")
         self.assertTrue(eval_diagnostics[0]["stackability_passed"])
+        public_diagnostics = eval_diagnostics[0]["public_diagnostics"]
+        self.assertIn("cato_router_load_by_phrase_type", public_diagnostics)
+        self.assertIn("no_cato_delta_by_object_size", public_diagnostics)
+        self.assertIn("no_cato_delta_by_phrase_length", public_diagnostics)
+        self.assertIn("rceo_reliability_shift_under_blurred_regions", public_diagnostics)
         self.assertEqual(eval_diagnostics_summary["artifact_type"], "public_smoke_diagnostics_summary")
         self.assertEqual(eval_diagnostics_summary["source_rows_path"], str(eval_diagnostics_path))
         self.assertEqual(eval_diagnostics_summary["row_count"], 1)
