@@ -468,6 +468,28 @@ class MultimodalPublicGateTests(unittest.TestCase):
             "\n".join(report["reasons"]),
         )
 
+    def test_region_text_gate_requires_paired_evidence_for_moe_strong_baseline(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        paired = summary["paired_tests"]["phrase_region_grounding"]["test"]
+        paired.pop("baseline_comparisons", None)
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["checks"]["full_beats_required_strong_baselines"]["passed"])
+        self.assertIn(
+            "required same-feature baseline paired comparison missing: modality_expert_moe",
+            "\n".join(report["reasons"]),
+        )
+
     def test_region_text_gate_rejects_missing_alignment_accuracy_and_visual_stress(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
