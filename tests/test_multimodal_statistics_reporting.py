@@ -122,6 +122,19 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         self.assertIn("cannot report only improvement over weak baseline", joined)
         self.assertIn("cross_attention_transformer", joined)
 
+    def test_public_summary_rejects_incomplete_same_feature_baseline_table(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        rows = _metric_rows_for_models(("ovha_full", "cross_attention_transformer"))
+        summary = summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        joined = "\n".join(validation.errors)
+        self.assertIn("statistics summary missing required same-feature baseline: text_only", joined)
+        self.assertIn("statistics summary missing required same-feature baseline: region_only", joined)
+        self.assertIn("statistics summary missing required same-feature baseline: ovha_no_evidence_router", joined)
+
     def test_public_summary_cli_emits_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             metrics_path = Path(tmp) / "metrics.jsonl"
@@ -149,9 +162,35 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
 
 
 def _metric_rows():
+    from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
+
+    return _metric_rows_for_models(("ovha_full", *baseline_names_for_task("phrase_region_grounding")))
+
+
+def _metric_rows_for_models(models):
     rows = []
+    scores_by_model = {
+        "ovha_full": (0.70, 0.75, 0.80),
+        "cross_attention_transformer": (0.65, 0.70, 0.72),
+        "text_only": (0.58, 0.59, 0.60),
+        "region_only": (0.56, 0.57, 0.59),
+        "concat_fusion": (0.61, 0.63, 0.64),
+        "modality_expert_moe": (0.62, 0.64, 0.65),
+        "clip_style_region_text_retrieval": (0.60, 0.62, 0.63),
+        "cato_only": (0.63, 0.66, 0.67),
+        "ovha_no_cato": (0.60, 0.62, 0.64),
+        "ovha_no_rceo": (0.64, 0.66, 0.68),
+        "ovha_no_evidence_router": (0.61, 0.62, 0.63),
+    }
     for seed, full_score, baseline_score in ((11, 0.70, 0.65), (12, 0.75, 0.70), (13, 0.80, 0.72)):
-        for model, score in (("ovha_full", full_score), ("cross_attention_transformer", baseline_score)):
+        seed_index = (11, 12, 13).index(seed)
+        for model in models:
+            if model == "ovha_full":
+                score = full_score
+            elif model == "cross_attention_transformer":
+                score = baseline_score
+            else:
+                score = scores_by_model[model][seed_index]
             rows.append(
                 {
                     "task": "phrase_region_grounding",
