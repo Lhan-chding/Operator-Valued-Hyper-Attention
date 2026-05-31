@@ -314,6 +314,10 @@ class MultimodalControlledReportingTests(unittest.TestCase):
                 "rank_logits_kl_delta": 0.1,
                 "rceo_reliability_monotonic": True,
                 "rceo_router_load_shift": 0.1,
+                "rceo_reliability_curve": [
+                    {"corruption_strength": 0.0, "mean_reliability": 0.9},
+                    {"corruption_strength": 0.5, "mean_reliability": 0.7},
+                ],
             },
         )
         rows = [

@@ -202,6 +202,12 @@ def _rceo_gate(family_rows: dict[str, dict[str, Any]]) -> dict[str, Any]:
     load_shift = _finite_float(row.get("rceo_router_load_shift")) if row is not None else None
     prior_effect = _finite_float(row.get("rceo_prior_effect")) if row is not None else None
     reasons: list[str] = []
+    if row is None:
+        reasons.append("missing rceo_reliability_corruption controlled family")
+        reliability_curve: list[dict[str, float]] = []
+    else:
+        reliability_curve, curve_reasons = _rceo_reliability_curve(row)
+        reasons.extend(curve_reasons)
     if monotonic is not True:
         reasons.append("rceo_reliability_monotonic must be explicit true")
     if load_shift is None or load_shift <= 0.0:
@@ -214,6 +220,7 @@ def _rceo_gate(family_rows: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "monotonic": monotonic,
             "router_load_shift": load_shift if load_shift is not None else 0.0,
             "prior_effect": prior_effect if prior_effect is not None else 0.0,
+            "reliability_curve": reliability_curve,
         },
         "reasons": reasons,
         "condition": "reliability decreases with corruption, router load shifts coherently, and RCEO prior improves loss",
@@ -322,6 +329,39 @@ def _oracle_matrix_value_reasons(row: dict[str, Any]) -> list[str]:
         if loss is None or loss < 0.0:
             reasons.append(f"{family} oracle_matrix.{cell}.loss must be finite non-negative")
     return reasons
+
+
+def _rceo_reliability_curve(row: dict[str, Any]) -> tuple[list[dict[str, float]], list[str]]:
+    curve = row.get("rceo_reliability_curve")
+    if not isinstance(curve, (list, tuple)) or len(curve) < 2:
+        return [], ["rceo_reliability_curve must include at least two corruption points"]
+
+    parsed: list[dict[str, float]] = []
+    reasons: list[str] = []
+    previous_strength: float | None = None
+    previous_reliability: float | None = None
+    for index, point in enumerate(curve):
+        if not isinstance(point, dict):
+            reasons.append(f"rceo_reliability_curve[{index}] must be an object")
+            continue
+        strength = _finite_float(point.get("corruption_strength"))
+        reliability = _finite_float(point.get("mean_reliability"))
+        if strength is None:
+            reasons.append(f"rceo_reliability_curve[{index}].corruption_strength must be finite")
+            continue
+        if reliability is None or reliability < 0.0 or reliability > 1.0:
+            reasons.append(f"rceo_reliability_curve[{index}].mean_reliability must be finite in [0, 1]")
+            continue
+        if previous_strength is not None and strength <= previous_strength:
+            reasons.append("rceo_reliability_curve corruption_strength must be strictly increasing")
+        if previous_reliability is not None and reliability > previous_reliability + 1e-12:
+            reasons.append("rceo_reliability_curve must be non-increasing as corruption_strength increases")
+        parsed.append({"corruption_strength": strength, "mean_reliability": reliability})
+        previous_strength = strength
+        previous_reliability = reliability
+    if len(parsed) < 2:
+        reasons.append("rceo_reliability_curve must include at least two valid corruption points")
+    return parsed, reasons
 
 
 def _finite_float(value: Any) -> float | None:
