@@ -4,15 +4,59 @@ from dataclasses import dataclass
 from typing import Any
 
 
+CONTROLLED_TASK_TYPES = ("controlled_multimodal", "controlled_relation_operator")
+REGION_TEXT_TASK_TYPES = (
+    "phrase_region_grounding",
+    "region_text_grounding",
+    "refcoco",
+    "flickr30k_entities",
+    "visual_genome",
+)
+SENTIMENT_EMOTION_TASK_TYPES = (
+    "sentiment_emotion",
+    "sentiment_regression",
+    "emotion_classification",
+    "cmu_mosei",
+    "cmu_mosi",
+    "meld",
+    "iemocap",
+)
+
+
 EXPECTED_STAGE_SEQUENCES = {
-    "controlled_multimodal": ("T0", "T1", "T2", "T3", "T4"),
-    "phrase_region_grounding": ("T0", "T5"),
-    "sentiment_emotion": ("T0", "T5"),
-    "cmu_mosei": ("T0", "T5"),
-    "cmu_mosi": ("T0", "T5"),
-    "meld": ("T0", "T5"),
-    "iemocap": ("T0", "T5"),
+    **{task_type: ("T0", "T1", "T2", "T3", "T4") for task_type in CONTROLLED_TASK_TYPES},
+    **{task_type: ("T0", "T5") for task_type in REGION_TEXT_TASK_TYPES},
+    **{task_type: ("T0", "T5") for task_type in SENTIMENT_EMOTION_TASK_TYPES},
     "robustness_eval": ("T0", "T6"),
+}
+
+CONTROLLED_REQUIRED_STAGE_LOSSES = {
+    "T0": ("cache_validation",),
+    "T1": ("task_loss", "candidate_individual_loss"),
+    "T2": ("task_loss", "router_ce_true_active_operator", "adapter_kl_true_params"),
+    "T3": ("task_loss", "router_ce_true_active_operator"),
+    "T4": (
+        "task_loss",
+        "cato_alignment_ce",
+        "lrio_rank_kl",
+        "spo_prototype_kl",
+        "tleo_lengthscale_huber",
+        "rceo_reliability_huber",
+    ),
+}
+PUBLIC_REQUIRED_STAGE_LOSSES = {
+    "T0": ("cache_validation",),
+    "T5": ("task_loss", "candidate_individual_loss"),
+}
+ROBUSTNESS_REQUIRED_STAGE_LOSSES = {
+    "T0": ("cache_validation",),
+    "T6": ("robustness_evaluation_only",),
+}
+REQUIRED_STAGE_LOSSES = {
+    **{task_type: CONTROLLED_REQUIRED_STAGE_LOSSES for task_type in CONTROLLED_TASK_TYPES},
+    **{task_type: PUBLIC_REQUIRED_STAGE_LOSSES for task_type in REGION_TEXT_TASK_TYPES},
+    **{task_type: PUBLIC_REQUIRED_STAGE_LOSSES for task_type in SENTIMENT_EMOTION_TASK_TYPES},
+    "robustness_eval": ROBUSTNESS_REQUIRED_STAGE_LOSSES,
 }
 
 ALLOWED_V1_ADAPTER_PARAMS = {
@@ -100,9 +144,10 @@ def _validate_losses(
     loss_metadata: dict[str, dict[str, Any]],
     errors: list[str],
 ) -> None:
+    _validate_stage_loss_contract(task_type, losses_by_stage, errors)
     for stage, losses in sorted(losses_by_stage.items()):
         for loss in losses:
-            if task_type == "controlled_multimodal":
+            if task_type in CONTROLLED_TASK_TYPES:
                 if loss not in CONTROLLED_ALLOWED_EXTRA_LOSSES:
                     errors.append(f"unknown controlled loss {loss} in {stage}")
             elif task_type == "robustness_eval":
@@ -117,6 +162,41 @@ def _validate_losses(
                     errors.append(f"unknown or unmarked public loss {loss} in {stage}")
                 elif loss in PUBLIC_MARKED_WEAK_LOSSES:
                     _validate_marked_weak_loss(loss, loss_metadata, errors)
+
+
+def _validate_stage_loss_contract(
+    task_type: str,
+    losses_by_stage: dict[str, list[str]],
+    errors: list[str],
+) -> None:
+    expected_stages = EXPECTED_STAGE_SEQUENCES.get(task_type)
+    if expected_stages is None:
+        return
+    if not isinstance(losses_by_stage, dict):
+        errors.append("losses_by_stage must be a stage-to-loss mapping")
+        return
+    expected_stage_set = set(expected_stages)
+    for stage in expected_stages:
+        if stage not in losses_by_stage:
+            errors.append(f"losses_by_stage missing stage: {stage}")
+    for stage in sorted(set(losses_by_stage) - expected_stage_set):
+        errors.append(f"losses_by_stage contains stage not in training_stages: {stage}")
+    required_by_stage = REQUIRED_STAGE_LOSSES.get(task_type, {})
+    for stage, required_losses in sorted(required_by_stage.items()):
+        stage_losses = tuple(losses_by_stage.get(stage, ()))
+        for loss in required_losses:
+            if loss not in stage_losses:
+                errors.append(f"{task_type} {stage} must include required loss/record: {loss}")
+        if task_type in REGION_TEXT_TASK_TYPES and stage == "T5":
+            has_alignment_loss = (
+                "public_alignment_ce" in stage_losses
+                or "public_contrastive_retrieval" in stage_losses
+            )
+            if not has_alignment_loss:
+                errors.append(
+                    f"{task_type} T5 must include public alignment loss: "
+                    "public_alignment_ce or public_contrastive_retrieval"
+                )
 
 
 def _validate_marked_weak_loss(

@@ -81,7 +81,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "ovha_no_evidence_router",
             ],
             "eval_episode_count": 16,
-            "losses_by_stage": {"T0": ["cache_validation"], "T5": ["task_loss", "true_alignment_ce"]},
+            "losses_by_stage": {
+                "T0": ["cache_validation"],
+                "T5": ["task_loss", "candidate_individual_loss", "true_alignment_ce"],
+            },
             "adapter_params_by_candidate": _valid_adapter_params(),
         }
         with self.assertRaisesRegex(ValueError, "hidden loss is controlled-only"):
@@ -189,7 +192,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
             "baseline_names": ["text_only", "cross_attention_transformer"],
             "eval_episode_count": 16,
-            "losses_by_stage": {"T0": ["cache_validation"], "T5": ["task_loss", "public_alignment_ce"]},
+            "losses_by_stage": {
+                "T0": ["cache_validation"],
+                "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss"],
+            },
             "adapter_params_by_candidate": _valid_adapter_params(),
         }
         with self.assertRaisesRegex(ValueError, "missing required same-feature baselines"):
@@ -208,7 +214,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
             "baseline_names": list(baseline_names_for_task("phrase_region_grounding")),
             "eval_episode_count": 16,
-            "losses_by_stage": {"T0": ["cache_validation"], "T5": ["task_loss", "public_alignment_ce"]},
+            "losses_by_stage": {
+                "T0": ["cache_validation"],
+                "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss"],
+            },
             "adapter_params_by_candidate": _valid_adapter_params(),
         }
 
@@ -228,7 +237,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
             "baseline_names": list(baseline_names_for_task("phrase_region_grounding")) + ["GroundingDINO"],
             "eval_episode_count": 16,
-            "losses_by_stage": {"T0": ["cache_validation"], "T5": ["task_loss", "public_alignment_ce"]},
+            "losses_by_stage": {
+                "T0": ["cache_validation"],
+                "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss"],
+            },
             "adapter_params_by_candidate": _valid_adapter_params(),
         }
         with self.assertRaisesRegex(ValueError, "external references must not be listed as same-feature baselines"):

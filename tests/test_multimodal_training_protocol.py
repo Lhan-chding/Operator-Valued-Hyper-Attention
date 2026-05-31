@@ -147,7 +147,13 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
                 "training_stages": ["T0", "T5"],
                 "losses_by_stage": {
                     "T0": ["cache_validation"],
-                    "T5": ["task_loss", "router_ce_true_active_operator", "adapter_kl_true_params", "rceo_unimodal_disagreement"],
+                    "T5": [
+                        "task_loss",
+                        "candidate_individual_loss",
+                        "router_ce_true_active_operator",
+                        "adapter_kl_true_params",
+                        "rceo_unimodal_disagreement",
+                    ],
                 },
                 "adapter_params_by_candidate": _valid_adapter_params(),
             }
@@ -167,7 +173,7 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
                 "training_stages": ["T0", "T5"],
                 "losses_by_stage": {
                     "T0": ["cache_validation"],
-                    "T5": ["task_loss", "weak_rceo_unimodal_disagreement_marked"],
+                    "T5": ["task_loss", "candidate_individual_loss", "weak_rceo_unimodal_disagreement_marked"],
                 },
                 "adapter_params_by_candidate": _valid_adapter_params(),
             }
@@ -185,7 +191,7 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
                 "training_stages": ["T0", "T5"],
                 "losses_by_stage": {
                     "T0": ["cache_validation"],
-                    "T5": ["task_loss", "weak_rceo_unimodal_disagreement_marked"],
+                    "T5": ["task_loss", "candidate_individual_loss", "weak_rceo_unimodal_disagreement_marked"],
                 },
                 "loss_metadata": {
                     "weak_rceo_unimodal_disagreement_marked": {
@@ -253,7 +259,10 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
                     {
                         "task_type": "phrase_region_grounding",
                         "training_stages": ["T0", "T5"],
-                        "losses_by_stage": {"T0": ["cache_validation"], "T5": ["task_loss", "true_alignment_ce"]},
+                        "losses_by_stage": {
+                            "T0": ["cache_validation"],
+                            "T5": ["task_loss", "candidate_individual_loss", "true_alignment_ce"],
+                        },
                         "adapter_params_by_candidate": _valid_adapter_params(),
                     }
                 )
