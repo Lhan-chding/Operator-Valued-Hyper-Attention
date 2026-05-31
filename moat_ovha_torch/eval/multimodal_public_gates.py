@@ -388,6 +388,7 @@ def _robustness_passes(
     metric_reasons = _robustness_metric_reasons(summary, summary_full_model, summary_baseline_model)
     reliability_shift_reasons = _rceo_reliability_shift_reasons(summary.get("rceo_reliability_shift"))
     operator_load_shift_reasons = _operator_load_shift_reasons(summary.get("operator_load_shift"))
+    candidate_loss_shift_reasons = _candidate_loss_shift_reasons(summary.get("candidate_loss_shift"))
     passed = (
         bool(summary.get("full_drop_less_than_baseline"))
         and bool(summary.get("rceo_reliability_monotonic"))
@@ -396,6 +397,7 @@ def _robustness_passes(
         and not metric_reasons
         and not reliability_shift_reasons
         and not operator_load_shift_reasons
+        and not candidate_loss_shift_reasons
     )
     ablation_reasons = "; ".join(str(reason) for reason in ablations.get("reasons", ()) if reason)
     coverage_reasons = "; ".join(str(reason) for reason in coverage.get("reasons", ()) if reason)
@@ -407,6 +409,7 @@ def _robustness_passes(
     reason_parts.extend(metric_reasons)
     reason_parts.extend(reliability_shift_reasons)
     reason_parts.extend(operator_load_shift_reasons)
+    reason_parts.extend(candidate_loss_shift_reasons)
     if ablation_reasons:
         reason_parts.append(ablation_reasons)
     if coverage_reasons:
@@ -476,6 +479,22 @@ def _operator_load_shift_reasons(value: Any, *, minimum_abs_shift: float = 0.05)
         return [
             "robustness operator load shift must include both decreased and increased finite candidate loads",
         ]
+    return []
+
+
+def _candidate_loss_shift_reasons(value: Any, *, minimum_abs_shift: float = 0.01) -> list[str]:
+    if not isinstance(value, dict) or not value:
+        return ["robustness candidate loss shift missing"]
+    shifts: list[float] = []
+    for candidate, raw_shift in value.items():
+        if _is_empty_reporting_value(candidate):
+            return ["robustness candidate loss shift candidate names must be non-empty"]
+        shift = _finite_float(raw_shift)
+        if shift is None:
+            return ["robustness candidate loss shift values must be finite numbers"]
+        shifts.append(shift)
+    if not any(abs(shift) >= minimum_abs_shift for shift in shifts):
+        return ["robustness candidate loss shift must include a non-trivial finite candidate loss change"]
     return []
 
 

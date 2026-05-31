@@ -87,6 +87,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "required_stress_coverage": {"passed": True, "reasons": []},
                 "required_ablation_degradation": {"passed": True, "reasons": []},
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
+                "candidate_loss_shift": {"LRIO": 0.04, "SPO": -0.06},
             },
             task="sentiment_emotion",
             split="test",
@@ -137,6 +138,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "required_stress_coverage": {"passed": True, "reasons": []},
                 "required_ablation_degradation": {"passed": True, "reasons": []},
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
+                "candidate_loss_shift": {"LRIO": 0.04, "SPO": -0.06},
             },
             task="sentiment_emotion",
             split="test",
@@ -1195,6 +1197,7 @@ def _passing_sentiment_robustness() -> dict[str, object]:
         "required_stress_coverage": {"passed": True, "reasons": []},
         "required_ablation_degradation": {"passed": True, "reasons": []},
         "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
+        "candidate_loss_shift": {"LRIO": 0.04, "SPO": -0.06},
     }
 
 

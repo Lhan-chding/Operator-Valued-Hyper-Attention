@@ -42,6 +42,7 @@ def summarize_robustness_rows(
     reliability_monotonic = _non_increasing([float(row.get("rceo_reliability", 0.0)) for row in full_rows])
     reliability_shift = _rceo_reliability_shift(full_rows)
     load_shift = _operator_load_shift(full_rows)
+    candidate_loss_shift = _candidate_loss_shift(full_rows)
     required_ablation_degradation = _required_ablation_degradation(
         relative_drop,
         full_model,
@@ -60,6 +61,7 @@ def summarize_robustness_rows(
         "rceo_reliability_monotonic": reliability_monotonic,
         "rceo_reliability_shift": reliability_shift,
         "operator_load_shift": load_shift,
+        "candidate_loss_shift": candidate_loss_shift,
         "required_stress_coverage": required_stress_coverage,
         "required_ablation_degradation": required_ablation_degradation,
         "full_drop_less_than_baseline": relative_drop.get(full_model, float("inf")) < relative_drop.get(baseline_model, float("-inf")),
@@ -114,6 +116,23 @@ def _rceo_reliability_shift(rows: list[dict[str, Any]]) -> float | None:
     except (KeyError, TypeError, ValueError):
         return None
     return last - first
+
+
+def _candidate_loss_shift(rows: list[dict[str, Any]]) -> dict[str, float]:
+    if len(rows) < 2:
+        return {}
+    first = rows[0].get("candidate_loss", {}) or {}
+    last = rows[-1].get("candidate_loss", {}) or {}
+    if not isinstance(first, dict) or not isinstance(last, dict):
+        return {}
+    names = sorted(set(first) | set(last))
+    shifts: dict[str, float] = {}
+    for name in names:
+        try:
+            shifts[name] = float(last.get(name, 0.0)) - float(first.get(name, 0.0))
+        except (TypeError, ValueError):
+            return {}
+    return shifts
 
 
 def _required_ablation_degradation(
