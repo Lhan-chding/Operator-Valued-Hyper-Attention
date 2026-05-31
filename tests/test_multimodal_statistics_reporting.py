@@ -30,6 +30,9 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         self.assertEqual(summary["metadata"]["training_steps"], 1000)
         self.assertEqual(summary["metadata"]["frozen_feature_extractor_version"]["text"], "clip-text-test")
         self.assertEqual(summary["metadata"]["hardware"]["accelerator"], "A800")
+        self.assertEqual(summary["reporting_metadata"]["parameter_count"]["text_only"], 1000)
+        self.assertEqual(summary["reporting_metadata"]["training_steps"]["ovha_no_cato"], 1000)
+        self.assertTrue(summary["reporting_metadata"]["per_seed_table"])
 
     def test_public_summary_rejects_best_seed_only_and_missing_metadata(self):
         from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
@@ -134,6 +137,24 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         self.assertIn("statistics summary missing required same-feature baseline: text_only", joined)
         self.assertIn("statistics summary missing required same-feature baseline: region_only", joined)
         self.assertIn("statistics summary missing required same-feature baseline: ovha_no_evidence_router", joined)
+
+    def test_public_summary_rejects_missing_report_facing_metadata(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        summary = summarize_public_results(
+            _metric_rows(),
+            full_model="ovha_full",
+            baseline_model="cross_attention_transformer",
+        )
+        summary.pop("reporting_metadata")
+
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        joined = "\n".join(validation.errors)
+        self.assertIn("reporting_metadata missing parameter_count", joined)
+        self.assertIn("reporting_metadata missing training_steps", joined)
+        self.assertIn("reporting_metadata missing per_seed_table", joined)
 
     def test_public_summary_cli_emits_json(self):
         with tempfile.TemporaryDirectory() as tmp:
