@@ -469,6 +469,40 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             joined,
         )
 
+    def test_cache_validator_rejects_derived_hidden_metadata_modality_names(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        hidden_modalities = (
+            "true_active_operator_tokens",
+            "oracle_router_hint",
+            "corruption_metadata_channel",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                data_card_overrides={"modalities": ["text", "region", *hidden_modalities]},
+            )
+            for modality in hidden_modalities:
+                _write_hidden_metadata_token_shards(layout.root, modality)
+            _write_feature_versions_for_modalities(layout.root, ("text", "region", *hidden_modalities))
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        for modality in hidden_modalities:
+            with self.subTest(modality=modality):
+                self.assertIn(
+                    "data_card.json modalities must not expose controlled or hidden metadata as model input: "
+                    f"{modality}",
+                    joined,
+                )
+
     def test_cache_validator_rejects_duplicate_data_card_tasks(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -1273,6 +1307,17 @@ def _write_complete_checksums(root: Path) -> None:
         if path.is_file():
             checksums.setdefault(str(path.relative_to(root)), file_sha256(path))
     (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
+
+
+def _write_feature_versions_for_modalities(root: Path, modalities: tuple[str, ...]) -> None:
+    feature_versions = {modality: f"{modality}-frozen-v1" for modality in modalities}
+    feature_versions["baselines"] = {
+        "cross_attention_transformer": dict(feature_versions),
+        "ovha_full": dict(feature_versions),
+    }
+    (root / "provenance" / "feature_versions.json").write_text(
+        json.dumps(feature_versions, sort_keys=True) + "\n"
+    )
 
 
 def _write_sample_records(root: Path, split: str, source_ids: list[str], *, mode: str = "valid") -> None:
