@@ -1111,6 +1111,7 @@ def _passing_region_text_public_gate_report() -> dict[str, object]:
             "rceo_reliability_calibrated": {"passed": True},
         },
         "reasons": [],
+        "evidence_artifacts": _gate_evidence_artifacts("phrase_region_grounding"),
     }
 
 
@@ -1134,6 +1135,19 @@ def _passing_sentiment_public_gate_report() -> dict[str, object]:
             "rceo_reliability_calibrated": {"passed": True},
         },
         "reasons": [],
+        "evidence_artifacts": _gate_evidence_artifacts("sentiment_emotion"),
+    }
+
+
+def _gate_evidence_artifacts(task: str) -> dict[str, object]:
+    return {
+        "task": task,
+        "split": "test",
+        "generated_by": "scripts/multimodal/evaluate_public_gates.py",
+        "statistics_summary": {"path": f"artifacts/{task}_statistics_summary.json", "sha256": "a" * 64},
+        "diagnostics": {"path": f"artifacts/{task}_diagnostics.jsonl", "sha256": "b" * 64},
+        "robustness_summary": {"path": f"artifacts/{task}_robustness_summary.json", "sha256": "c" * 64},
+        "raw_metrics": [{"path": f"artifacts/{task}_raw_metrics_seed1.jsonl", "sha256": "d" * 64}],
     }
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import json
+import re
 from typing import Any
 
 from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
@@ -41,6 +42,12 @@ SENTIMENT_TOPCONF_CHECKS = (
     "rceo_reliability_calibrated",
     "robustness_passes",
 )
+TOPCONF_GATE_EVIDENCE_ARTIFACTS = ("statistics_summary", "diagnostics", "robustness_summary")
+_SHA256_HEX_RE = re.compile(r"^[a-f0-9]{64}$")
+_EXPECTED_GATE_TASK_TYPES = {
+    "region_text_public": REGION_TEXT_TASK_TYPES,
+    "sentiment_emotion_public": SENTIMENT_EMOTION_TASK_TYPES,
+}
 
 
 @dataclass(frozen=True)
@@ -105,6 +112,7 @@ def _require_public_gate_report(
     reasons = report.get("reasons", [])
     if report.get("passed") is True and (not isinstance(reasons, (list, tuple)) or reasons):
         errors.append(f"{label} gate reasons must be an empty list when passed is true")
+    _require_gate_evidence_artifacts(label, report.get("evidence_artifacts"), errors)
     checks = report.get("checks")
     if not isinstance(checks, dict):
         errors.append(f"{label} gate report must include checks")
@@ -119,6 +127,50 @@ def _require_public_gate_report(
         check = checks.get(check_name)
         if not isinstance(check, dict) or check.get("passed") is not True:
             errors.append(f"{label} required check did not pass: {check_name}")
+
+
+def _require_gate_evidence_artifacts(label: str, evidence: Any, errors: list[str]) -> None:
+    if not isinstance(evidence, Mapping):
+        errors.append(f"{label} gate evidence_artifacts is required")
+        return
+
+    task = evidence.get("task")
+    expected_tasks = _EXPECTED_GATE_TASK_TYPES.get(label, frozenset())
+    if not isinstance(task, str) or task.strip() not in expected_tasks:
+        errors.append(f"{label} gate evidence_artifacts task must match the public gate task family")
+    if not _non_empty_text(evidence.get("split")):
+        errors.append(f"{label} gate evidence_artifacts split must be a non-empty string")
+    if not _non_empty_text(evidence.get("generated_by")):
+        errors.append(f"{label} gate evidence_artifacts generated_by must identify the evaluator")
+
+    for artifact_name in TOPCONF_GATE_EVIDENCE_ARTIFACTS:
+        artifact = evidence.get(artifact_name)
+        if artifact is None:
+            errors.append(f"{label} gate evidence_artifacts missing artifact: {artifact_name}")
+            continue
+        _validate_artifact_descriptor(label, artifact_name, artifact, errors)
+
+    raw_metrics = evidence.get("raw_metrics")
+    if not isinstance(raw_metrics, list) or not raw_metrics:
+        errors.append(f"{label} gate evidence_artifacts raw_metrics must be a non-empty list")
+        return
+    for index, artifact in enumerate(raw_metrics):
+        _validate_artifact_descriptor(label, f"raw_metrics[{index}]", artifact, errors)
+
+
+def _validate_artifact_descriptor(label: str, artifact_name: str, artifact: Any, errors: list[str]) -> None:
+    if not isinstance(artifact, Mapping):
+        errors.append(f"{label} gate evidence_artifacts {artifact_name} must include path and sha256")
+        return
+    if not _non_empty_text(artifact.get("path")):
+        errors.append(f"{label} gate evidence_artifacts {artifact_name}.path must be a non-empty string")
+    sha256 = artifact.get("sha256")
+    if not isinstance(sha256, str) or not _SHA256_HEX_RE.fullmatch(sha256):
+        errors.append(f"{label} gate evidence_artifacts {artifact_name}.sha256 must be lowercase SHA-256")
+
+
+def _non_empty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _validate_all_cache_targets(
