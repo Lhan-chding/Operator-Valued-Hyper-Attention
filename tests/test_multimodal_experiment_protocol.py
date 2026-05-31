@@ -2573,10 +2573,10 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
             + "\n"
         )
         (root / "provenance" / f"failed_samples_{split}.jsonl").write_text("")
-        np.save(root / "supervision" / f"task_labels_{split}.npy", np.zeros((1,), dtype=np.int64))
+        np.save(root / "supervision" / f"task_labels_{split}.npy", np.asarray([[0.0, 1.0]], dtype=np.float32))
         (root / "supervision" / f"alignment_pairs_{split}.parquet").write_text("placeholder alignment pairs\n")
         np.save(root / "supervision" / f"bbox_targets_{split}.npy", np.zeros((1, 4), dtype=np.float32))
-        np.save(root / "supervision" / f"region_targets_{split}.npy", np.zeros((1,), dtype=np.int64))
+        np.save(root / "supervision" / f"region_targets_{split}.npy", np.ones((1,), dtype=np.int64))
         (root / "supervision" / f"corruption_{split}.parquet").write_text("placeholder corruption metadata\n")
         manifest = {}
         for modality in ("text", "region"):

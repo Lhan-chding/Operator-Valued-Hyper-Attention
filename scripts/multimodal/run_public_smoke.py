@@ -439,10 +439,26 @@ def _public_loss_components(
     available = {
         "task_loss": _task_loss(output.y_hat, batch),
         "candidate_individual_loss": (output.candidate_values - batch.target_y.unsqueeze(-2)).square().mean(),
-        "public_alignment_ce": output.y_hat.sum() * 0.0,
+        "public_alignment_ce": _public_alignment_ce(output.y_hat, batch),
         "public_contrastive_retrieval": output.y_hat.sum() * 0.0,
     }
     return {name: available[name] for name in configured if name in available}
+
+
+def _public_alignment_ce(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    region_targets = batch.supervision.region_targets
+    if region_targets is None or prediction.shape[-1] <= 1:
+        return prediction.sum() * 0.0
+    labels = region_targets.to(device=prediction.device, dtype=torch.long)
+    if labels.ndim == 1:
+        labels = labels.unsqueeze(1)
+    if labels.ndim > 2:
+        labels = labels.reshape(labels.shape[0], -1)
+    if labels.shape[1] == 1 and prediction.shape[1] > 1:
+        labels = labels.expand(-1, prediction.shape[1])
+    labels = labels[:, : prediction.shape[1]].contiguous()
+    logits = prediction[:, : labels.shape[1], :].reshape(-1, prediction.shape[-1])
+    return torch.nn.functional.cross_entropy(logits, labels.reshape(-1))
 
 
 def _quality_from_missing_modality(
