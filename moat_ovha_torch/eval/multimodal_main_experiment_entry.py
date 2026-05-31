@@ -957,11 +957,41 @@ def _validate_robustness_artifact_content(label: str, path: Path, errors: list[s
     coverage = summary.get("required_stress_coverage")
     if not isinstance(coverage, Mapping) or coverage.get("passed") is not True:
         errors.append(f"{label} gate robustness_summary missing required stress coverage pass")
+    elif isinstance(coverage, Mapping):
+        _validate_robustness_stress_coverage(label, coverage, errors)
     ablation = summary.get("required_ablation_degradation")
     if not isinstance(ablation, Mapping) or ablation.get("passed") is not True:
         errors.append(f"{label} gate robustness_summary missing required ablation degradation pass")
     if not isinstance(summary.get("rceo_reliability_calibration"), Mapping):
         errors.append(f"{label} gate robustness_summary missing RCEO reliability calibration")
+
+
+def _validate_robustness_stress_coverage(label: str, coverage: Mapping[str, Any], errors: list[str]) -> None:
+    observed = _normalized_text_set(coverage.get("observed"))
+    required = _normalized_text_set(coverage.get("required"))
+    if observed is None or not observed:
+        errors.append(f"{label} gate robustness_summary required_stress_coverage must list observed stress targets")
+        return
+    if required is None or not required:
+        errors.append(f"{label} gate robustness_summary required_stress_coverage must list required stress targets")
+        return
+    missing = sorted(required - observed)
+    if missing:
+        errors.append(
+            f"{label} gate robustness_summary required_stress_coverage observed missing required stress targets: "
+            + ", ".join(missing)
+        )
+
+
+def _normalized_text_set(value: Any) -> set[str] | None:
+    if not isinstance(value, (list, tuple, set)):
+        return None
+    normalized: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            return None
+        normalized.add(item.strip())
+    return normalized
 
 
 def _non_empty_text(value: Any) -> bool:

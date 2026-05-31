@@ -2226,6 +2226,21 @@ def _gate_region_diagnostic(
 
 def _gate_robustness_summary(task: str) -> dict[str, object]:
     baseline = "cross_attention_transformer"
+    stress_targets = [
+        "audio_masking",
+        "audio_noise",
+        "hard_negative_audio_mismatch",
+        "hard_negative_caption_mismatch",
+        "hard_negative_region_mismatch",
+        "image_blur",
+        "image_crop",
+        "image_occlusion",
+        "missing_audio",
+        "missing_text",
+        "missing_vision",
+        "text_paraphrase",
+        "text_token_mask",
+    ]
     return {
         "task": task,
         "full_model": "ovha_full",
@@ -2243,7 +2258,13 @@ def _gate_robustness_summary(task: str) -> dict[str, object]:
         ],
         "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
         "candidate_loss_shift": {"LRIO": 0.04, "SPO": -0.06},
-        "required_stress_coverage": {"passed": True, "reasons": []},
+        "required_stress_coverage": {
+            "passed": True,
+            "reasons": [],
+            "observed": stress_targets,
+            "required": stress_targets,
+            "condition": "robustness rows must cover every required Step 6 stress target",
+        },
         "required_ablation_degradation": {
             "passed": True,
             "reasons": [],
