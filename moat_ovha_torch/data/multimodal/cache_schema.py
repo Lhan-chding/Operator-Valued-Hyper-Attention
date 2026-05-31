@@ -388,6 +388,9 @@ def _validate_split_manifest_source_lists(payload: dict[str, Any], errors: list[
         if not isinstance(split, str) or not split:
             errors.append("splits.json split names must be non-empty strings")
             continue
+        if split != split.strip():
+            errors.append("splits.json split names must be non-empty normalized strings")
+            continue
         if not isinstance(expected, list):
             errors.append(f"splits.json {split} must be a source_id list")
             continue
