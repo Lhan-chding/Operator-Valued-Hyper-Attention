@@ -80,6 +80,39 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("tleo_local_evidence missing oracle gap evidence: TLEO_oracle_gap", joined)
         self.assertIn("rceo_reliability_corruption missing RCEO prior effect", joined)
 
+    def test_controlled_report_rejects_non_finite_oracle_matrix_and_gap_values(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+
+        rows = [
+            _row(
+                "tleo_local_evidence",
+                "TLEO",
+                0.010,
+                0.010,
+                oracle_overrides={"true_true": {"loss": "nan"}},
+                oracle_gap_overrides={"TLEO_oracle_gap": "nan"},
+            ),
+            _row(
+                "spo_global_prototype",
+                "SPO",
+                0.020,
+                0.020,
+                oracle_overrides={"learned_true": {"loss": "inf"}},
+            ),
+            _row("lrio_low_rank_interaction", "LRIO", 0.030, 0.030),
+            _row("cato_alignment_transport", "CATO", 0.040, 0.040),
+            _row("rceo_reliability_corruption", "LRIO", 0.050, 0.050, rceo=True),
+            _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy=0.85),
+        ]
+
+        report = build_controlled_report(rows)
+
+        self.assertFalse(report["go_no_go"]["controlled_multimodal_passed"])
+        joined = "\n".join(report["go_no_go"]["reasons"])
+        self.assertIn("tleo_local_evidence oracle_matrix.true_true.loss must be finite non-negative", joined)
+        self.assertIn("spo_global_prototype oracle_matrix.learned_true.loss must be finite non-negative", joined)
+        self.assertIn("tleo_local_evidence oracle gap must be finite non-negative: TLEO_oracle_gap", joined)
+
     def test_collapse_gate_uses_true_router_learned_adapter_oracle_cell(self):
         from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
 
@@ -403,16 +436,25 @@ def _row(
     true_learned_loss: float | None = None,
     no_lrio_delta: float | None = None,
     no_rceo_delta: float | None = None,
+    oracle_overrides: dict[str, object] | None = None,
+    oracle_gap_overrides: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    oracle_matrix = {
+        "learned_learned": {"loss": full_loss},
+        "true_learned": {"loss": specialist_loss if true_learned_loss is None else true_learned_loss},
+        "learned_true": {"loss": full_loss},
+        "true_true": {"loss": 0.0},
+    }
+    if oracle_overrides is not None:
+        for cell, values in oracle_overrides.items():
+            if isinstance(values, dict) and isinstance(oracle_matrix.get(cell), dict):
+                oracle_matrix[cell] = {**oracle_matrix[cell], **values}
+            else:
+                oracle_matrix[cell] = values
     row = {
         "family": family,
         "active_operator": active_operator,
-        "oracle_matrix": {
-            "learned_learned": {"loss": full_loss},
-            "true_learned": {"loss": specialist_loss if true_learned_loss is None else true_learned_loss},
-            "learned_true": {"loss": full_loss},
-            "true_true": {"loss": 0.0},
-        },
+        "oracle_matrix": oracle_matrix,
         "specialist_loss": specialist_loss,
         "router_accuracy": router_accuracy,
         "stackability_passed": True,
@@ -428,6 +470,8 @@ def _row(
                 "CATO_oracle_gap": 0.1,
             }
         )
+        if oracle_gap_overrides:
+            row.update(oracle_gap_overrides)
     if rceo:
         row["rceo_reliability_monotonic"] = True
         row["rceo_router_load_shift"] = 0.1
