@@ -355,6 +355,111 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             [{"source_id": "mosei-train-failed", "split": "train", "reason": "audio_decode_failed"}],
         )
 
+    def test_stage_cmu_sentiment_raw_cli_outputs_build_cache_ready_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            inputs = tmp_path / "inputs"
+            raw_root = tmp_path / "raw_cmu_mosei"
+            cache_root = tmp_path / "cache"
+            inputs.mkdir()
+            np.save(inputs / "text.npy", np.arange(3 * 4 * 5, dtype=np.float32).reshape(3, 4, 5))
+            np.save(inputs / "audio.npy", np.arange(3 * 6 * 3, dtype=np.float32).reshape(3, 6, 3))
+            np.save(inputs / "vision.npy", np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4))
+            np.save(inputs / "sentiment.npy", np.array([[-1.0], [0.0], [1.0]], dtype=np.float32))
+            np.save(inputs / "emotion.npy", np.eye(7, dtype=np.float32)[:3])
+            (inputs / "splits.json").write_text(
+                json.dumps(
+                    {
+                        "train": ["mosei-train-1"],
+                        "val": ["mosei-val-1"],
+                        "test": ["mosei-test-1"],
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+            stage_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "stage_cmu_sentiment_raw.py"),
+                    "cmu_mosei",
+                    str(raw_root),
+                    "--splits",
+                    str(inputs / "splits.json"),
+                    "--text-features",
+                    str(inputs / "text.npy"),
+                    "--audio-features",
+                    str(inputs / "audio.npy"),
+                    "--visual-features",
+                    str(inputs / "vision.npy"),
+                    "--sentiment-labels",
+                    str(inputs / "sentiment.npy"),
+                    "--emotion-labels",
+                    str(inputs / "emotion.npy"),
+                    "--feature-version",
+                    "text=unit-text-v1",
+                    "--feature-version",
+                    "audio=unit-audio-v1",
+                    "--feature-version",
+                    "vision=unit-vision-v1",
+                    "--license-tag",
+                    "unit-license",
+                    "--preprocessing-version",
+                    "unit-preprocess-v1",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            build_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "cmu_mosei",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            layout = MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1")
+            validation = validate_cache_layout(layout, splits=("train", "val", "test"))
+            payload = json.loads(stage_result.stdout) if stage_result.stdout.strip() else {}
+            feature_versions = (
+                json.loads((raw_root / "metadata" / "feature_versions.json").read_text())
+                if (raw_root / "metadata" / "feature_versions.json").exists()
+                else {}
+            )
+            utterances = (
+                json.loads((raw_root / "metadata" / "utterances.json").read_text()).get("records", [])
+                if (raw_root / "metadata" / "utterances.json").exists()
+                else []
+            )
+            staged_missing = (
+                np.load(raw_root / "metadata" / "missing_modality_mask.npy")
+                if (raw_root / "metadata" / "missing_modality_mask.npy").exists()
+                else np.zeros((0, 0), dtype=bool)
+            )
+
+        self.assertEqual(stage_result.returncode, 0, stage_result.stdout + stage_result.stderr)
+        self.assertEqual(build_result.returncode, 0, build_result.stdout + build_result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["dataset_name"], "cmu_mosei")
+        self.assertTrue(validation.ok, validation.errors)
+        self.assertEqual(feature_versions["text"], "unit-text-v1")
+        self.assertEqual(feature_versions["audio"], "unit-audio-v1")
+        self.assertEqual(feature_versions["vision"], "unit-vision-v1")
+        self.assertEqual([row["source_id"] for row in utterances], ["mosei-train-1", "mosei-val-1", "mosei-test-1"])
+        self.assertEqual(staged_missing.shape, (3, 3))
+        self.assertTrue((layout.root / "supervision" / "task_labels_train.npy").exists())
+
     def test_build_cache_cli_writes_valid_meld_cache_from_dialogue_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
