@@ -46,13 +46,19 @@ class RefCOCOAdapter:
     def extract_token_fields(self, rows, split: str) -> dict[str, TokenFieldShard]:
         root = Path(rows["cache_root"]) if isinstance(rows, dict) and "cache_root" in rows else Path(".")
         return {
-            "text": TokenFieldShard("text", split, root / f"text_{split}.npy", root / f"text_pos_{split}.npy", root / f"text_mask_{split}.npy"),
+            "text": TokenFieldShard(
+                "text",
+                split,
+                root / "token_fields" / f"text_{split}.npy",
+                root / "positions" / f"text_pos_{split}.npy",
+                root / "masks" / f"text_mask_{split}.npy",
+            ),
             "region": TokenFieldShard(
                 "region",
                 split,
-                root / f"region_{split}.npy",
-                root / f"region_pos_{split}.npy",
-                root / f"region_mask_{split}.npy",
+                root / "token_fields" / f"region_{split}.npy",
+                root / "positions" / f"region_pos_{split}.npy",
+                root / "masks" / f"region_mask_{split}.npy",
             ),
         }
 
@@ -60,9 +66,9 @@ class RefCOCOAdapter:
         root = Path(rows["cache_root"]) if isinstance(rows, dict) and "cache_root" in rows else Path(".")
         return SupervisionShard(
             split=split,
-            alignment_pairs_path=root / f"alignment_pairs_{split}.parquet",
-            bbox_targets_path=root / f"bbox_targets_{split}.npy",
-            region_targets_path=root / f"region_targets_{split}.npy",
+            alignment_pairs_path=root / "supervision" / f"alignment_pairs_{split}.parquet",
+            bbox_targets_path=root / "supervision" / f"bbox_targets_{split}.npy",
+            region_targets_path=root / "supervision" / f"region_targets_{split}.npy",
         )
 
     def write_cache(

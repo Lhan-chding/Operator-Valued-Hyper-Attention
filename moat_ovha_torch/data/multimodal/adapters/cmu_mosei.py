@@ -53,14 +53,26 @@ class CMUMOSEIAdapter:
     def extract_token_fields(self, rows, split: str) -> dict[str, TokenFieldShard]:
         root = Path(rows["cache_root"]) if isinstance(rows, dict) and "cache_root" in rows else Path(".")
         return {
-            "text": TokenFieldShard("text", split, root / f"text_{split}.npy", root / f"text_pos_{split}.npy", root / f"text_mask_{split}.npy"),
-            "audio": TokenFieldShard("audio", split, root / f"audio_{split}.npy", root / f"audio_pos_{split}.npy", root / f"audio_mask_{split}.npy"),
+            "text": TokenFieldShard(
+                "text",
+                split,
+                root / "token_fields" / f"text_{split}.npy",
+                root / "positions" / f"text_pos_{split}.npy",
+                root / "masks" / f"text_mask_{split}.npy",
+            ),
+            "audio": TokenFieldShard(
+                "audio",
+                split,
+                root / "token_fields" / f"audio_{split}.npy",
+                root / "positions" / f"audio_pos_{split}.npy",
+                root / "masks" / f"audio_mask_{split}.npy",
+            ),
             "vision": TokenFieldShard(
                 "vision",
                 split,
-                root / f"vision_{split}.npy",
-                root / f"vision_pos_{split}.npy",
-                root / f"vision_mask_{split}.npy",
+                root / "token_fields" / f"vision_{split}.npy",
+                root / "positions" / f"vision_pos_{split}.npy",
+                root / "masks" / f"vision_mask_{split}.npy",
             ),
         }
 
@@ -68,9 +80,9 @@ class CMUMOSEIAdapter:
         root = Path(rows["cache_root"]) if isinstance(rows, dict) and "cache_root" in rows else Path(".")
         return SupervisionShard(
             split=split,
-            task_label_path=root / f"sentiment_{split}.npy",
-            modality_missing_mask_path=root / f"missing_modality_mask_{split}.npy",
-            corruption_metadata_path=root / f"corruption_{split}.parquet",
+            task_label_path=root / "supervision" / f"task_labels_{split}.npy",
+            modality_missing_mask_path=root / "supervision" / f"missing_modality_mask_{split}.npy",
+            corruption_metadata_path=root / "supervision" / f"corruption_{split}.parquet",
         )
 
     def write_cache(
