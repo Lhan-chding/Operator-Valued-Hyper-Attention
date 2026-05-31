@@ -84,9 +84,10 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
             for split, values in splits.items():
                 if values.get("common_seed_count", 0) < 3:
                     errors.append(f"{task}/{split} paired_tests require at least 3 common seeds")
-                for key in ("metric_direction", "paired_permutation_p", "paired_bootstrap_ci95"):
+                for key in ("metric_direction", "mean_delta", "paired_permutation_p", "paired_bootstrap_ci95"):
                     if key not in values:
                         errors.append(f"{task}/{split} paired_tests missing {key}")
+                _validate_paired_delta_consistency(summary, str(task), str(split), values, errors)
     metadata = summary.get("metadata", {})
     for key in ("parameter_count", "training_steps", "frozen_feature_extractor_version", "hardware"):
         if key not in metadata or metadata[key] in ({}, None):
@@ -337,6 +338,46 @@ def _validate_baseline_strength(paired_tests: dict[str, Any], metadata: dict[str
                 )
 
 
+def _validate_paired_delta_consistency(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    values: Any,
+    errors: list[str],
+) -> None:
+    if not isinstance(values, dict):
+        errors.append(f"{task}/{split} paired_tests entry must be an object")
+        return
+    models = _models_from_delta(values.get("model_delta"))
+    if models is None:
+        errors.append(f"{task}/{split} paired_tests model_delta must be '<full>_minus_<baseline>'")
+        return
+    full_model, baseline_model = models
+    direction = values.get("metric_direction")
+    if direction not in {"higher_is_better", "lower_is_better"}:
+        errors.append(f"{task}/{split} paired_tests metric_direction must be higher_is_better or lower_is_better")
+        return
+    higher_is_better = _higher_is_better(summary.get("main_table", {}), task, split, full_model)
+    expected_direction = "higher_is_better" if higher_is_better else "lower_is_better"
+    if direction != expected_direction:
+        errors.append(f"{task}/{split} paired_tests metric_direction disagrees with main_table higher_is_better")
+        return
+    expected_deltas = _expected_paired_deltas(summary, task, split, full_model, baseline_model, higher_is_better)
+    if not expected_deltas:
+        return
+    expected_mean = _mean(expected_deltas)
+    observed_mean = _finite_float(values.get("mean_delta"))
+    if observed_mean is None or not math.isclose(observed_mean, expected_mean, rel_tol=1e-9, abs_tol=1e-9):
+        errors.append(f"{task}/{split} paired_tests mean_delta disagrees with metric_direction")
+    expected_ci = _bootstrap_ci95(expected_deltas)
+    observed_ci = _finite_ci95(values.get("paired_bootstrap_ci95"))
+    if observed_ci is None or any(
+        not math.isclose(observed, expected, rel_tol=1e-9, abs_tol=1e-9)
+        for observed, expected in zip(observed_ci, expected_ci)
+    ):
+        errors.append(f"{task}/{split} paired_tests bootstrap CI disagrees with metric_direction")
+
+
 def _baseline_model_from_delta(model_delta: Any) -> str | None:
     if not model_delta:
         return None
@@ -344,6 +385,18 @@ def _baseline_model_from_delta(model_delta: Any) -> str | None:
     if "_minus_" not in text:
         return None
     return text.rsplit("_minus_", 1)[1]
+
+
+def _models_from_delta(model_delta: Any) -> tuple[str, str] | None:
+    if not model_delta:
+        return None
+    text = str(model_delta)
+    if "_minus_" not in text:
+        return None
+    full_model, baseline_model = text.rsplit("_minus_", 1)
+    if not full_model or not baseline_model:
+        return None
+    return full_model, baseline_model
 
 
 def _row_label_provenance(row: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -385,6 +438,39 @@ def _scores_by_seed(rows: list[dict[str, Any]], task: str, split: str, model: st
     }
 
 
+def _expected_paired_deltas(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    full_model: str,
+    baseline_model: str,
+    higher_is_better: bool,
+) -> list[float]:
+    appendix = summary.get("per_seed_appendix", [])
+    if not isinstance(appendix, list):
+        return []
+    full_scores: dict[int, float] = {}
+    baseline_scores: dict[int, float] = {}
+    for row in appendix:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("task")) != task or str(row.get("split")) != split:
+            continue
+        seed = _safe_int(row.get("seed"))
+        score = _finite_float(row.get("score"))
+        if seed is None or score is None:
+            continue
+        model = str(row.get("model"))
+        if model == full_model:
+            full_scores[seed] = score
+        elif model == baseline_model:
+            baseline_scores[seed] = score
+    return [
+        _directional_delta(full_scores[seed], baseline_scores[seed], higher_is_better)
+        for seed in sorted(set(full_scores) & set(baseline_scores))
+    ]
+
+
 def _higher_is_better(
     main_table: dict[str, dict[str, dict[str, dict[str, Any]]]],
     task: str,
@@ -398,6 +484,31 @@ def _directional_delta(full_score: float, baseline_score: float, higher_is_bette
     if higher_is_better:
         return full_score - baseline_score
     return baseline_score - full_score
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _finite_ci95(value: Any) -> tuple[float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    low = _finite_float(value[0])
+    high = _finite_float(value[1])
+    if low is None or high is None:
+        return None
+    return (low, high)
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _mean(values: list[float]) -> float:
