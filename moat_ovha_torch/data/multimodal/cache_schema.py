@@ -284,8 +284,11 @@ def _validate_operator_supervision(operator_supervision: Any, errors: list[str])
         errors.append("data_card.json operator_supervision must be an object")
         return
     for operator in REQUIRED_OPERATOR_SUPERVISION_KEYS:
-        if not operator_supervision.get(operator):
+        if operator not in operator_supervision:
             errors.append(f"data_card.json operator_supervision missing required operator: {operator}")
+            continue
+        if not _is_non_empty_string(operator_supervision.get(operator)):
+            errors.append(f"data_card.json operator_supervision.{operator} must be a non-empty string")
 
 
 def _validate_data_card_identity(
