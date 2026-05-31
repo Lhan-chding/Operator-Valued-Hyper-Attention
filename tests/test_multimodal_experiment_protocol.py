@@ -556,6 +556,7 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
                     "original_split": split,
                     "raw_ref": f"raw://{split}-source",
                     "license_tag": "test-license",
+                    "preprocessing_version": "preprocess-v1",
                 },
                 sort_keys=True,
             )

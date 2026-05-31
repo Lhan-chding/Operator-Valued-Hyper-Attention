@@ -231,6 +231,7 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
                         "split": "train",
                         "raw_ref": "raw://train-source",
                         "license_tag": "test-license",
+                        "preprocessing_version": "preprocess-v1",
                     },
                     sort_keys=True,
                 )
@@ -299,6 +300,7 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
                         "original_split": " train ",
                         "raw_ref": "raw://train-source",
                         "license_tag": "test-license",
+                        "preprocessing_version": "preprocess-v1",
                     },
                     sort_keys=True,
                 )
@@ -327,7 +329,14 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             )
             (layout.root / "provenance" / "sample_records_train.jsonl").write_text(
                 json.dumps(
-                    {"source_id": 123, "split": "train", "raw_ref": 456, "license_tag": ["bad"]},
+                    {
+                        "source_id": 123,
+                        "split": "train",
+                        "original_split": "train",
+                        "raw_ref": 456,
+                        "license_tag": ["bad"],
+                        "preprocessing_version": "preprocess-v1",
+                    },
                     sort_keys=True,
                 )
                 + "\n"
@@ -362,6 +371,7 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
                         "original_split": "train",
                         "raw_ref": "   ",
                         "license_tag": "   ",
+                        "preprocessing_version": "preprocess-v1",
                     },
                     sort_keys=True,
                 )
@@ -1928,6 +1938,7 @@ def _write_minimal_sentiment_cache(
                 "original_split": split,
                 "raw_ref": f"raw://{source_id}",
                 "license_tag": "test-license",
+                "preprocessing_version": "sentiment-preprocess-v1",
             }
             if include_sentiment_record_fields:
                 record.update(
@@ -1985,6 +1996,7 @@ def _write_sample_records(root: Path, split: str, source_ids: list[str], *, mode
             "original_split": split,
             "raw_ref": f"raw://{source_id}",
             "license_tag": "test-license",
+            "preprocessing_version": "preprocess-v1",
         }
         if mode == "missing_required_keys":
             record.pop("raw_ref")

@@ -19,7 +19,14 @@ REQUIRED_DATA_CARD_KEYS = (
 
 REQUIRED_OPERATOR_SUPERVISION_KEYS = ("TLEO", "SPO", "LRIO", "CATO", "RCEO")
 FAILED_SAMPLE_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "reason")
-SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS = ("source_id", "split", "original_split", "raw_ref", "license_tag")
+SAMPLE_RECORD_MANIFEST_REQUIRED_KEYS = (
+    "source_id",
+    "split",
+    "original_split",
+    "raw_ref",
+    "license_tag",
+    "preprocessing_version",
+)
 SENTIMENT_SAMPLE_RECORD_REQUIRED_KEYS = (
     "utterance_id",
     "dialogue_id",
