@@ -950,6 +950,44 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("region_text_public gate artifact recomputation failed", joined)
         self.assertIn("region-text public diagnostics missing CATO router load by phrase type", joined)
 
+    def test_topconf_main_entry_rejects_public_gate_report_disagreeing_with_artifacts(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+
+            region_report = _passing_region_text_public_gate_report(tmp_path / "artifacts")
+            region_report["checks"]["no_cato_drops"]["value"] = 999.0
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
+                region_gate_report=region_report,
+                sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "region_text_public gate check no_cato_drops.value disagrees with artifact recomputation",
+            "\n".join(report.errors),
+        )
+
     def test_topconf_main_entry_recomputes_controlled_report_from_artifacts(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256
         from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
@@ -1710,49 +1748,85 @@ def _complete_controlled_family_row(*, rceo: bool = False) -> dict[str, object]:
 
 
 def _passing_region_text_public_gate_report(artifact_root: Path | None = None) -> dict[str, object]:
-    return {
-        "name": "region_text_public",
-        "passed": True,
-        "checks": {
-            "full_beats_same_feature_baseline": {"passed": True},
-            "full_beats_required_strong_baselines": {"passed": True},
-            "no_cato_drops": {"passed": True},
-            "cato_router_load_high": {"passed": True},
-            "alignment_entropy_improves": {"passed": True},
-            "cato_top_alignment_accuracy_high": {"passed": True},
-            "grounding_accuracy_improves_with_entropy": {"passed": True},
-            "rceo_visual_stress_router_shift": {"passed": True},
-            "step14_public_diagnostics": {"passed": True},
-            "robustness_passes": {"passed": True},
-            "rceo_reliability_calibrated": {"passed": True},
-        },
-        "reasons": [],
-        "evidence_artifacts": _gate_evidence_artifacts("phrase_region_grounding", artifact_root),
-    }
+    evidence_artifacts = _gate_evidence_artifacts("phrase_region_grounding", artifact_root)
+    if artifact_root is not None:
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        task = "phrase_region_grounding"
+        raw_metrics = Path(evidence_artifacts["raw_metrics"][0]["path"])
+        report = evaluate_region_text_gate(
+            statistics_summary=_gate_statistics_summary(task, raw_metrics),
+            diagnostics_rows=_gate_diagnostic_rows(task),
+            no_cato_score=_gate_score_for_model(task, "ovha_no_cato", full_score=0.80, baseline_score=0.72),
+            robustness_summary=_gate_robustness_summary(task),
+            task=task,
+            split="test",
+        )
+    else:
+        report = {
+            "name": "region_text_public",
+            "passed": True,
+            "checks": {
+                "full_beats_same_feature_baseline": {"passed": True},
+                "full_beats_required_strong_baselines": {"passed": True},
+                "no_cato_drops": {"passed": True},
+                "cato_router_load_high": {"passed": True},
+                "alignment_entropy_improves": {"passed": True},
+                "cato_top_alignment_accuracy_high": {"passed": True},
+                "grounding_accuracy_improves_with_entropy": {"passed": True},
+                "rceo_visual_stress_router_shift": {"passed": True},
+                "step14_public_diagnostics": {"passed": True},
+                "robustness_passes": {"passed": True},
+                "rceo_reliability_calibrated": {"passed": True},
+            },
+            "reasons": [],
+        }
+    report["evidence_artifacts"] = evidence_artifacts
+    return report
 
 
 def _passing_sentiment_public_gate_report(artifact_root: Path | None = None) -> dict[str, object]:
-    return {
-        "name": "sentiment_emotion_public",
-        "passed": True,
-        "checks": {
-            "full_beats_same_feature_baseline": {"passed": True},
-            "full_beats_lmf_or_mult_baseline": {"passed": True},
-            "no_lrio_drops": {"passed": True},
-            "no_spo_drops": {"passed": True},
-            "no_rceo_drops": {"passed": True},
-            "lrio_router_load_high": {"passed": True},
-            "spo_router_load_high": {"passed": True},
-            "lrio_rank_entropy_present": {"passed": True},
-            "spo_prototype_entropy_present": {"passed": True},
-            "spo_top_prototype_differentiates": {"passed": True},
-            "step14_public_diagnostics": {"passed": True},
-            "robustness_passes": {"passed": True},
-            "rceo_reliability_calibrated": {"passed": True},
-        },
-        "reasons": [],
-        "evidence_artifacts": _gate_evidence_artifacts("sentiment_emotion", artifact_root),
-    }
+    evidence_artifacts = _gate_evidence_artifacts("sentiment_emotion", artifact_root)
+    if artifact_root is not None:
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        task = "sentiment_emotion"
+        raw_metrics = Path(evidence_artifacts["raw_metrics"][0]["path"])
+        report = evaluate_sentiment_gate(
+            statistics_summary=_gate_statistics_summary(task, raw_metrics),
+            diagnostics_rows=_gate_diagnostic_rows(task),
+            ablation_scores={
+                "ovha_no_lrio": _gate_score_for_model(task, "ovha_no_lrio", full_score=0.76, baseline_score=0.74),
+                "ovha_no_spo": _gate_score_for_model(task, "ovha_no_spo", full_score=0.76, baseline_score=0.74),
+                "ovha_no_rceo": _gate_score_for_model(task, "ovha_no_rceo", full_score=0.76, baseline_score=0.74),
+            },
+            robustness_summary=_gate_robustness_summary(task),
+            task=task,
+            split="test",
+        )
+    else:
+        report = {
+            "name": "sentiment_emotion_public",
+            "passed": True,
+            "checks": {
+                "full_beats_same_feature_baseline": {"passed": True},
+                "full_beats_lmf_or_mult_baseline": {"passed": True},
+                "no_lrio_drops": {"passed": True},
+                "no_spo_drops": {"passed": True},
+                "no_rceo_drops": {"passed": True},
+                "lrio_router_load_high": {"passed": True},
+                "spo_router_load_high": {"passed": True},
+                "lrio_rank_entropy_present": {"passed": True},
+                "spo_prototype_entropy_present": {"passed": True},
+                "spo_top_prototype_differentiates": {"passed": True},
+                "step14_public_diagnostics": {"passed": True},
+                "robustness_passes": {"passed": True},
+                "rceo_reliability_calibrated": {"passed": True},
+            },
+            "reasons": [],
+        }
+    report["evidence_artifacts"] = evidence_artifacts
+    return report
 
 
 def _gate_evidence_artifacts(task: str, artifact_root: Path | None = None) -> dict[str, object]:
