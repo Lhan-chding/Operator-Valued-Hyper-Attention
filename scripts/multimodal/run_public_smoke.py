@@ -222,6 +222,9 @@ def _run_public_training_smoke(
             eval_history.append(
                 {
                     "seed": seed,
+                    "dataset": config.dataset_name,
+                    "task": config.task_type,
+                    "model": "ovha_full",
                     "stage": "T5_eval",
                     "split": args.eval_smoke_split,
                     "loss_names_observed": sorted(eval_components),
@@ -498,11 +501,46 @@ def _write_training_artifacts(
     if eval_history:
         eval_metrics = artifact_root / "public_eval_metrics.jsonl"
         eval_diagnostics = artifact_root / "public_eval_diagnostics.jsonl"
+        smoke_raw_metrics = artifact_root / "public_smoke_raw_metrics.jsonl"
         eval_metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in eval_history) + "\n")
         eval_diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in eval_diagnostic_history) + "\n")
+        smoke_raw_rows = _public_smoke_raw_metric_rows(eval_history, smoke_raw_metrics)
+        smoke_raw_metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in smoke_raw_rows) + "\n")
         artifacts["eval_metrics"] = {"path": str(eval_metrics), "sha256": file_sha256(eval_metrics)}
         artifacts["eval_diagnostics"] = {"path": str(eval_diagnostics), "sha256": file_sha256(eval_diagnostics)}
+        artifacts["smoke_raw_metrics"] = {"path": str(smoke_raw_metrics), "sha256": file_sha256(smoke_raw_metrics)}
     return artifacts
+
+
+def _public_smoke_raw_metric_rows(
+    eval_history: list[dict[str, object]],
+    raw_metric_path: Path,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "artifact_type": "public_smoke_raw_metric",
+            "evidence_scope": "public_smoke_only_not_topconf_main_table",
+            "not_topconf_main_table": True,
+            "dataset": str(row["dataset"]),
+            "task": str(row["task"]),
+            "model": str(row["model"]),
+            "stage": str(row["stage"]),
+            "split": str(row["split"]),
+            "seed": int(row["seed"]),
+            "metric_name": "heldout_task_loss_smoke",
+            "score": float(row["task_loss"]),
+            "higher_is_better": False,
+            "raw_metric_path": str(raw_metric_path),
+            "source_total_loss": float(row["total_loss"]),
+            "loss_names_observed": list(row["loss_names_observed"]),
+            "evidence_limitations": [
+                "single OVHA smoke model only",
+                "not a same-feature baseline comparison",
+                "not valid top-conference main-table evidence",
+            ],
+        }
+        for row in eval_history
+    ]
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
