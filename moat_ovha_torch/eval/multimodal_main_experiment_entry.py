@@ -468,7 +468,7 @@ def _require_public_gate_report(
     reasons = report.get("reasons", [])
     if report.get("passed") is True and (not isinstance(reasons, (list, tuple)) or reasons):
         errors.append(f"{label} gate reasons must be an empty list when passed is true")
-    _require_gate_evidence_artifacts(label, report.get("evidence_artifacts"), errors)
+    recomputed_report = _require_gate_evidence_artifacts(label, report.get("evidence_artifacts"), errors)
     checks = report.get("checks")
     if not isinstance(checks, dict):
         errors.append(f"{label} gate report must include checks")
@@ -483,12 +483,14 @@ def _require_public_gate_report(
         check = checks.get(check_name)
         if not isinstance(check, dict) or check.get("passed") is not True:
             errors.append(f"{label} required check did not pass: {check_name}")
+    if recomputed_report is not None:
+        _validate_public_gate_report_matches_artifacts(label, report, recomputed_report, required_checks, errors)
 
 
-def _require_gate_evidence_artifacts(label: str, evidence: Any, errors: list[str]) -> None:
+def _require_gate_evidence_artifacts(label: str, evidence: Any, errors: list[str]) -> dict[str, Any] | None:
     if not isinstance(evidence, Mapping):
         errors.append(f"{label} gate evidence_artifacts is required")
-        return
+        return None
 
     task = evidence.get("task")
     expected_tasks = _EXPECTED_GATE_TASK_TYPES.get(label, frozenset())
@@ -512,7 +514,7 @@ def _require_gate_evidence_artifacts(label: str, evidence: Any, errors: list[str
     raw_metrics = evidence.get("raw_metrics")
     if not isinstance(raw_metrics, list) or not raw_metrics:
         errors.append(f"{label} gate evidence_artifacts raw_metrics must be a non-empty list")
-        return
+        return None
     raw_metric_paths: list[Path] = []
     for index, artifact in enumerate(raw_metrics):
         artifact_path = _validate_artifact_descriptor(label, f"raw_metrics[{index}]", artifact, errors)
@@ -536,13 +538,14 @@ def _require_gate_evidence_artifacts(label: str, evidence: Any, errors: list[str
         and _non_empty_text(evidence.get("split"))
         and all(artifact_name in artifact_paths for artifact_name in TOPCONF_GATE_EVIDENCE_ARTIFACTS)
     ):
-        _validate_recomputed_public_gate(
+        return _validate_recomputed_public_gate(
             label,
             task.strip(),
             str(evidence["split"]).strip(),
             artifact_paths,
             errors,
         )
+    return None
 
 
 def _validate_artifact_descriptor(label: str, artifact_name: str, artifact: Any, errors: list[str]) -> Path | None:
@@ -749,12 +752,12 @@ def _validate_recomputed_public_gate(
     split: str,
     artifact_paths: dict[str, Path],
     errors: list[str],
-) -> None:
+) -> dict[str, Any] | None:
     summary = _read_json_artifact(label, "statistics_summary", artifact_paths["statistics_summary"], errors)
     diagnostics = _read_jsonl_artifact(label, "diagnostics", artifact_paths["diagnostics"], errors)
     robustness = _read_json_artifact(label, "robustness_summary", artifact_paths["robustness_summary"], errors)
     if summary is None or robustness is None:
-        return
+        return None
 
     if label == "region_text_public":
         recomputed = evaluate_region_text_gate(
@@ -779,15 +782,126 @@ def _validate_recomputed_public_gate(
             split=split,
         )
     else:
-        return
+        return None
 
-    if recomputed.get("passed") is True:
+    if recomputed.get("passed") is not True:
+        reasons = recomputed.get("reasons")
+        if not isinstance(reasons, list) or not reasons:
+            errors.append(f"{label} gate artifact recomputation failed")
+        else:
+            errors.extend(f"{label} gate artifact recomputation failed: {reason}" for reason in reasons)
+    return recomputed
+
+
+def _validate_public_gate_report_matches_artifacts(
+    label: str,
+    supplied_report: Mapping[str, Any],
+    recomputed_report: Mapping[str, Any],
+    required_checks: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    if supplied_report.get("passed") != recomputed_report.get("passed"):
+        errors.append(f"{label} gate passed disagrees with artifact recomputation")
+    if _normalized_gate_reasons(supplied_report.get("reasons")) != _normalized_gate_reasons(recomputed_report.get("reasons")):
+        errors.append(f"{label} gate reasons disagree with artifact recomputation")
+
+    supplied_checks = supplied_report.get("checks")
+    recomputed_checks = recomputed_report.get("checks")
+    if not isinstance(supplied_checks, Mapping) or not isinstance(recomputed_checks, Mapping):
         return
-    reasons = recomputed.get("reasons")
-    if not isinstance(reasons, list) or not reasons:
-        errors.append(f"{label} gate artifact recomputation failed")
+    for check_name in sorted(set(required_checks) | set(recomputed_checks)):
+        supplied_check = supplied_checks.get(check_name)
+        recomputed_check = recomputed_checks.get(check_name)
+        if not isinstance(recomputed_check, Mapping):
+            continue
+        if not isinstance(supplied_check, Mapping):
+            errors.append(f"{label} gate check {check_name} missing but present in artifact recomputation")
+            continue
+        if supplied_check.get("passed") != recomputed_check.get("passed"):
+            errors.append(f"{label} gate check {check_name}.passed disagrees with artifact recomputation")
+        if _normalized_gate_reason(supplied_check.get("reason")) != _normalized_gate_reason(recomputed_check.get("reason")):
+            errors.append(f"{label} gate check {check_name}.reason disagrees with artifact recomputation")
+        if "value" in recomputed_check:
+            if "value" not in supplied_check:
+                errors.append(f"{label} gate check {check_name}.value missing but present in artifact recomputation")
+            else:
+                _validate_gate_value_matches_artifacts(
+                    label,
+                    f"{check_name}.value",
+                    supplied_check.get("value"),
+                    recomputed_check.get("value"),
+                    errors,
+                )
+
+
+def _validate_gate_value_matches_artifacts(
+    label: str,
+    field_path: str,
+    supplied_value: Any,
+    recomputed_value: Any,
+    errors: list[str],
+) -> None:
+    if isinstance(recomputed_value, Mapping):
+        if not isinstance(supplied_value, Mapping):
+            errors.append(f"{label} gate check {field_path} disagrees with artifact recomputation")
+            return
+        for key in sorted(set(supplied_value) | set(recomputed_value)):
+            next_path = f"{field_path}.{key}"
+            if key not in recomputed_value:
+                errors.append(f"{label} gate check {next_path} not present in artifact recomputation")
+            elif key not in supplied_value:
+                errors.append(f"{label} gate check {next_path} missing but present in artifact recomputation")
+            else:
+                _validate_gate_value_matches_artifacts(
+                    label,
+                    next_path,
+                    supplied_value.get(key),
+                    recomputed_value.get(key),
+                    errors,
+                )
         return
-    errors.extend(f"{label} gate artifact recomputation failed: {reason}" for reason in reasons)
+    if isinstance(recomputed_value, (list, tuple)):
+        if not isinstance(supplied_value, (list, tuple)) or len(supplied_value) != len(recomputed_value):
+            errors.append(f"{label} gate check {field_path} disagrees with artifact recomputation")
+            return
+        for index, (supplied_item, recomputed_item) in enumerate(zip(supplied_value, recomputed_value)):
+            _validate_gate_value_matches_artifacts(
+                label,
+                f"{field_path}[{index}]",
+                supplied_item,
+                recomputed_item,
+                errors,
+            )
+        return
+    if isinstance(supplied_value, bool) or isinstance(recomputed_value, bool):
+        if supplied_value is not recomputed_value:
+            errors.append(f"{label} gate check {field_path} disagrees with artifact recomputation")
+        return
+    supplied_number = _finite_float(supplied_value)
+    recomputed_number = _finite_float(recomputed_value)
+    if supplied_number is not None and recomputed_number is not None:
+        if not math.isclose(supplied_number, recomputed_number, rel_tol=1e-9, abs_tol=1e-9):
+            errors.append(f"{label} gate check {field_path} disagrees with artifact recomputation")
+        return
+    if supplied_value != recomputed_value:
+        errors.append(f"{label} gate check {field_path} disagrees with artifact recomputation")
+
+
+def _normalized_gate_reasons(value: Any) -> tuple[str, ...]:
+    if isinstance(value, (list, tuple)):
+        return tuple(str(reason).strip() for reason in value if str(reason).strip())
+    reason = _normalized_gate_reason(value)
+    return (reason,) if reason else ()
+
+
+def _normalized_gate_reason(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple)) and not value:
+        return ""
+    return str(value).strip()
 
 
 def _summary_model_mean(summary: Mapping[str, Any], task: str, split: str, model: str) -> float | None:
