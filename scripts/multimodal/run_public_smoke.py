@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 import time
@@ -26,6 +27,7 @@ from moat_ovha_torch.data.multimodal.typed_batch import (
 )
 from moat_ovha_torch.eval.multimodal_statistics import (
     REGION_TEXT_REQUIRED_PUBLIC_METRICS,
+    SENTIMENT_REQUIRED_PUBLIC_METRICS,
     summarize_public_results,
     validate_public_summary,
 )
@@ -745,6 +747,12 @@ def _public_smoke_metrics(
     router_entropy: Any,
 ) -> dict[str, object]:
     if config.task_type not in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
+        if config.task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
+            return _sentiment_smoke_metrics(
+                batch,
+                prediction=prediction,
+                router_load_by_candidate=router_load_by_candidate,
+            )
         return {}
     task_loss = _task_loss(prediction, batch)
     bounded_score = _bounded_score_from_loss(task_loss)
@@ -768,6 +776,8 @@ def _public_smoke_metrics(
 def _public_metrics_scope(config: MultimodalExperimentConfig) -> str:
     if config.task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
         return "region_text_smoke_proxy_not_topconf_main_table"
+    if config.task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
+        return "sentiment_emotion_smoke_proxy_not_topconf_main_table"
     return "smoke_proxy_not_topconf_main_table"
 
 
@@ -791,6 +801,88 @@ def _null_unmatched_rate(batch: MultimodalEpisodeBatch) -> float:
     if batch.target_mask.numel() == 0:
         return 0.0
     return max(0.0, min(1.0, 1.0 - _as_float(batch.target_mask.to(dtype=torch.float32).mean())))
+
+
+def _sentiment_smoke_metrics(
+    batch: MultimodalEpisodeBatch,
+    *,
+    prediction: torch.Tensor,
+    router_load_by_candidate: Any,
+) -> dict[str, object]:
+    mae = _as_float((prediction - batch.target_y).abs().mean())
+    bounded_score = _bounded_score_from_loss(_task_loss(prediction, batch))
+    missing_drop = _missing_modality_fraction(batch)
+    metrics = {
+        "mae": max(0.0, mae),
+        "pearson_correlation": 0.0,
+        "accuracy": bounded_score,
+        "f1": bounded_score,
+        "missing_modality_performance_drop": missing_drop,
+        "corruption_robustness_auc": max(0.0, min(1.0, 1.0 - missing_drop)),
+        "router_load_by_corruption_type": {
+            _missing_corruption_key(batch): _complete_candidate_probability_map(router_load_by_candidate)
+        },
+        "lrio_rank_entropy": _entropy_proxy(router_load_by_candidate, "LRIO"),
+        "spo_prototype_entropy": _entropy_proxy(router_load_by_candidate, "SPO"),
+        "rceo_reliability_calibration": _smoke_rceo_calibration(batch, bounded_score),
+    }
+    return {name: metrics[name] for name in SENTIMENT_REQUIRED_PUBLIC_METRICS}
+
+
+def _missing_modality_fraction(batch: MultimodalEpisodeBatch) -> float:
+    missing = batch.supervision.modality_missing_mask
+    if missing is None or missing.numel() == 0:
+        return 0.0
+    return max(0.0, min(1.0, _as_float(missing.to(dtype=torch.float32).mean())))
+
+
+def _missing_corruption_key(batch: MultimodalEpisodeBatch) -> str:
+    missing = batch.supervision.modality_missing_mask
+    if missing is None or missing.numel() == 0 or not bool(missing.any().item()):
+        return "clean_smoke"
+    modality_order = list(batch.fields)
+    missing_by_modality = missing.to(dtype=torch.float32).mean(dim=0)
+    index = int(torch.argmax(missing_by_modality).item())
+    modality = modality_order[index] if index < len(modality_order) else "modality"
+    return f"{modality}_missing_smoke"
+
+
+def _complete_candidate_probability_map(values: Any) -> dict[str, float]:
+    loads = {
+        candidate: _candidate_probability(values, candidate, default=0.0)
+        for candidate in ("TLEO", "SPO", "LRIO", "CATO")
+    }
+    total = sum(loads.values())
+    if total <= 0.0:
+        return {candidate: 0.25 for candidate in loads}
+    return {candidate: value / total for candidate, value in loads.items()}
+
+
+def _entropy_proxy(values: Any, candidate: str) -> float:
+    probability = _candidate_probability(values, candidate, default=0.25)
+    if probability <= 0.0:
+        return 0.0
+    return max(0.0, -probability * math.log(probability))
+
+
+def _smoke_rceo_calibration(batch: MultimodalEpisodeBatch, observed_score: float) -> dict[str, object]:
+    predicted_reliability = max(0.0, min(1.0, 1.0 - _missing_modality_fraction(batch)))
+    observed = max(0.0, min(1.0, observed_score))
+    ece = abs(predicted_reliability - observed)
+    return {
+        "ece": ece,
+        "expected_calibration_error": ece,
+        "bin_count": 1,
+        "calibration_curve": [
+            {
+                "bin": 0,
+                "mean_confidence": predicted_reliability,
+                "observed_accuracy": observed,
+                "count": max(1, int(batch.target_y.shape[0])),
+            }
+        ],
+        "condition": "smoke proxy calibration between missing-modality reliability and bounded task score",
+    }
 
 
 def _probe_router_load_by_candidate(model_name: str) -> dict[str, float]:
