@@ -1296,6 +1296,42 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             joined,
         )
 
+    def test_cache_validator_rejects_weak_label_artifacts_without_source_splits_or_version(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            (layout.root / "supervision" / "weak_labels_train.parquet").write_text("placeholder weak labels\n")
+            (layout.root / "provenance" / "pseudo_label_versions.json").write_text(
+                json.dumps(
+                    {
+                        "generated_from_splits": [],
+                        "label_provenance": {
+                            "supervision_type": "pseudo",
+                            "source": "cross_modal_disagreement_v0",
+                            "must_report_as": "pseudo",
+                        },
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "pseudo_label_versions.json generated_from_splits must be non-empty when weak label artifacts exist",
+            joined,
+        )
+        self.assertIn(
+            "pseudo_label_versions.json version must be a non-empty string when weak label artifacts exist",
+            joined,
+        )
+
 
 def _write_minimal_cache(
     root: Path,
