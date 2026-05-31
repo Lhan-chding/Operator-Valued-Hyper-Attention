@@ -165,6 +165,7 @@ def _run_public_training_smoke(
         output = model(batch)
         components = _public_loss_components(output, batch, config)
         total_loss = torch.stack([value for value in components.values()]).sum()
+        rceo_metrics = _rceo_training_metrics(output, batch)
         total_loss.backward()
         grad_norm = _grad_l2_norm(model)
         max_grad_norm = max(max_grad_norm, grad_norm)
@@ -177,6 +178,7 @@ def _run_public_training_smoke(
                 "loss_names_observed": sorted(components),
                 "total_loss": _as_float(total_loss),
                 "grad_l2_norm": grad_norm,
+                **rceo_metrics,
                 **{name: _as_float(value) for name, value in components.items()},
             }
         )
@@ -222,12 +224,17 @@ def _load_public_batch(
 
     root = layout.root
     manifest = json.loads((root / "token_fields" / f"manifest_{split}.json").read_text())
+    data_card = json.loads((root / "data_card.json").read_text())
+    modality_order = tuple(str(modality) for modality in data_card.get("modalities", ())) or tuple(sorted(manifest))
+    missing_modality_mask = _optional_tensor(root / "supervision" / f"missing_modality_mask_{split}.npy", device)
     fields: dict[str, TokenField] = {}
-    for modality, paths in sorted(manifest.items()):
+    for modality_index, modality in enumerate(modality_order):
+        paths = manifest[modality]
         x = torch.as_tensor(np.load(root / paths["x"]), dtype=torch.float32, device=device)
         pos = torch.as_tensor(np.load(root / paths["pos"]), dtype=torch.float32, device=device)
         mask = torch.as_tensor(np.load(root / paths["mask"]), dtype=torch.bool, device=device)
-        fields[modality] = TokenField(modality=modality, x=x, pos=pos, mask=mask)
+        quality = _quality_from_missing_modality(missing_modality_mask, modality_index, x)
+        fields[modality] = TokenField(modality=modality, x=x, pos=pos, mask=mask, quality=quality)
     target_y = _target_tensor(root / "supervision" / f"task_labels_{split}.npy", device)
     batch_size, query_count = int(target_y.shape[0]), int(target_y.shape[1])
     query_source = fields["text"].x if "text" in fields else next(iter(fields.values())).x
@@ -256,7 +263,7 @@ def _load_public_batch(
             bbox_targets=_optional_tensor(root / "supervision" / f"bbox_targets_{split}.npy", device),
             region_targets=_optional_tensor(root / "supervision" / f"region_targets_{split}.npy", device),
             timestamp_targets=None,
-            modality_missing_mask=_optional_tensor(root / "supervision" / f"missing_modality_mask_{split}.npy", device),
+            modality_missing_mask=missing_modality_mask,
             corruption_metadata=None,
             weak_labels=None,
             weak_label_confidence=None,
@@ -307,6 +314,33 @@ def _public_loss_components(
         "public_contrastive_retrieval": output.y_hat.sum() * 0.0,
     }
     return {name: available[name] for name in configured if name in available}
+
+
+def _quality_from_missing_modality(
+    missing_modality_mask: torch.Tensor | None,
+    modality_index: int,
+    field_x: torch.Tensor,
+) -> torch.Tensor | None:
+    if missing_modality_mask is None:
+        return None
+    present = ~missing_modality_mask[:, modality_index].to(dtype=torch.bool, device=field_x.device)
+    return present.to(dtype=field_x.dtype).reshape(field_x.shape[0], 1)
+
+
+def _rceo_training_metrics(output: MultimodalOVHAOutput, batch: MultimodalEpisodeBatch) -> dict[str, object]:
+    if output.reliability_prior is None:
+        return {}
+    modality_order = list(batch.fields)
+    modality_reliability = output.reliability_prior.modality_reliability.detach().mean(dim=0)
+    return {
+        "rceo_modality_order": modality_order,
+        "rceo_modality_reliability": {
+            modality: _as_float(modality_reliability[index])
+            for index, modality in enumerate(modality_order)
+        },
+        "rceo_reliability_mean": _as_float(output.reliability_prior.modality_reliability.mean()),
+        "rceo_corruption_response": _as_float(output.reliability_prior.diagnostics["corruption_response"]),
+    }
 
 
 def _task_loss(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
