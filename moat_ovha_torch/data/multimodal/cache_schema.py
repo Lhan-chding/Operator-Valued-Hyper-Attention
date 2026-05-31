@@ -294,7 +294,7 @@ def _validate_data_card_identity(
 
 def _validate_data_card_string_list(data_card: dict[str, Any], key: str, errors: list[str]) -> None:
     values = data_card.get(key)
-    if not isinstance(values, list) or not values or any(not isinstance(value, str) or not value for value in values):
+    if not isinstance(values, list) or not values or any(not _is_non_empty_string(value) for value in values):
         errors.append(f"data_card.json {key} must be a non-empty list of strings")
         return
     if len(values) != len(set(values)):
