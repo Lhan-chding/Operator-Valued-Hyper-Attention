@@ -36,6 +36,7 @@ def main() -> int:
     parser.add_argument("--train-smoke-steps", type=int, default=0)
     parser.add_argument("--train-all-config-seeds", action="store_true")
     parser.add_argument("--train-split", default="train")
+    parser.add_argument("--eval-smoke-split")
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--d-model", type=int, default=16)
     parser.add_argument("--memory-tokens", type=int, default=2)
@@ -82,6 +83,23 @@ def main() -> int:
                 )
             )
             return 2
+        if args.eval_smoke_split:
+            eval_report = validate_cache_layout(layout, splits=(args.eval_smoke_split,))
+            if not eval_report.ok:
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "policy": "fail-fast: public eval smoke requires a validated held-out split",
+                            "config": config.name,
+                            "errors": eval_report.errors,
+                            "warnings": eval_report.warnings,
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                return 2
     controlled_report = json.loads(args.controlled_report.read_text()) if args.controlled_report else None
     entry_report = validate_public_entry_requirements(
         config.task_type,
@@ -150,6 +168,8 @@ def _run_public_training_smoke(
     )
     loss_history: list[dict[str, object]] = []
     diagnostic_history: list[dict[str, object]] = []
+    eval_history: list[dict[str, object]] = []
+    eval_diagnostic_history: list[dict[str, object]] = []
     parameter_deltas: dict[int, float] = {}
     max_grad_norm = 0.0
 
@@ -192,10 +212,35 @@ def _run_public_training_smoke(
                 }
             )
         parameter_deltas[seed] = float(torch.linalg.vector_norm(_parameter_vector(model) - initial_parameters).item())
+        if args.eval_smoke_split:
+            eval_batch = _load_public_batch(layout, config, args.eval_smoke_split, device)
+            model.eval()
+            with torch.no_grad():
+                eval_output = model(eval_batch)
+                eval_components = _public_loss_components(eval_output, eval_batch, config)
+                eval_total_loss = torch.stack([value for value in eval_components.values()]).sum()
+            eval_history.append(
+                {
+                    "seed": seed,
+                    "stage": "T5_eval",
+                    "split": args.eval_smoke_split,
+                    "loss_names_observed": sorted(eval_components),
+                    "total_loss": _as_float(eval_total_loss),
+                    **_rceo_training_metrics(eval_output, eval_batch),
+                    **{name: _as_float(value) for name, value in eval_components.items()},
+                }
+            )
+            eval_diagnostic_history.append(
+                _public_training_diagnostics_row(eval_output, config, eval_batch, 0, seed, artifact_type="public_eval_diagnostics", stage="T5_eval")
+            )
     parameter_l2_delta = float(sum(parameter_deltas.values()) / max(len(parameter_deltas), 1))
     parameter_l2_delta_min = min(parameter_deltas.values()) if parameter_deltas else 0.0
     expected_steps = int(args.train_smoke_steps) * len(seed_values)
-    artifacts = _write_training_artifacts(args.artifact_root, loss_history, diagnostic_history) if args.artifact_root else {}
+    artifacts = (
+        _write_training_artifacts(args.artifact_root, loss_history, diagnostic_history, eval_history, eval_diagnostic_history)
+        if args.artifact_root
+        else {}
+    )
     return {
         "ok": bool(
             parameter_l2_delta_min > 0.0
@@ -215,6 +260,8 @@ def _run_public_training_smoke(
         "parameter_l2_delta_min": parameter_l2_delta_min,
         "parameter_l2_delta_by_seed": {str(seed): value for seed, value in parameter_deltas.items()},
         "max_grad_norm": max_grad_norm,
+        "eval_smoke_split": args.eval_smoke_split,
+        "eval_smoke_rows": len(eval_history),
         "stage_history": [
             {
                 "stage": "T0",
@@ -232,6 +279,7 @@ def _run_public_training_smoke(
             },
         ],
         "loss_history": loss_history,
+        "eval_history": eval_history,
         "artifacts": artifacts,
     }
 
@@ -371,14 +419,17 @@ def _public_training_diagnostics_row(
     batch: MultimodalEpisodeBatch,
     step: int,
     seed: int,
+    *,
+    artifact_type: str = "public_training_diagnostics",
+    stage: str = "T5",
 ) -> dict[str, object]:
     diagnostics = output.diagnostics
     return {
-        "artifact_type": "public_training_diagnostics",
+        "artifact_type": artifact_type,
         "config_name": config.name,
         "dataset": config.dataset_name,
         "task": config.task_type,
-        "stage": "T5",
+        "stage": stage,
         "split": batch.split,
         "seed": seed,
         "step": step,
@@ -426,13 +477,15 @@ def _write_training_artifacts(
     artifact_root: Path,
     loss_history: list[dict[str, object]],
     diagnostic_history: list[dict[str, object]],
+    eval_history: list[dict[str, object]],
+    eval_diagnostic_history: list[dict[str, object]],
 ) -> dict[str, object]:
     artifact_root.mkdir(parents=True, exist_ok=True)
     metrics = artifact_root / "public_training_metrics.jsonl"
     diagnostics = artifact_root / "public_training_diagnostics.jsonl"
     metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in loss_history) + "\n")
     diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in diagnostic_history) + "\n")
-    return {
+    artifacts = {
         "metrics": {
             "path": str(metrics),
             "sha256": file_sha256(metrics),
@@ -442,6 +495,14 @@ def _write_training_artifacts(
             "sha256": file_sha256(diagnostics),
         },
     }
+    if eval_history:
+        eval_metrics = artifact_root / "public_eval_metrics.jsonl"
+        eval_diagnostics = artifact_root / "public_eval_diagnostics.jsonl"
+        eval_metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in eval_history) + "\n")
+        eval_diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in eval_diagnostic_history) + "\n")
+        artifacts["eval_metrics"] = {"path": str(eval_metrics), "sha256": file_sha256(eval_metrics)}
+        artifacts["eval_diagnostics"] = {"path": str(eval_diagnostics), "sha256": file_sha256(eval_diagnostics)}
+    return artifacts
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
