@@ -29,6 +29,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "iemocap.py",
             ROOT / "moat_ovha_torch" / "models" / "multimodal" / "ovha_multimodal.py",
             ROOT / "scripts" / "multimodal" / "validate_cache.py",
+            ROOT / "scripts" / "multimodal" / "build_refcoco_stage_records.py",
             ROOT / "scripts" / "multimodal" / "extract_cmu_sdk_stage_inputs.py",
             ROOT / "scripts" / "multimodal" / "inspect_cmu_sdk_sequences.py",
             ROOT / "scripts" / "multimodal" / "write_cmu_sdk_splits.py",
@@ -346,6 +347,148 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(refs[0]["license_tag"], "unit-refcoco-license")
         self.assertEqual(refs[0]["preprocessing_version"], "unit-refcoco-preprocess-v1")
         self.assertEqual(task_labels_train.tolist(), [[0.0, 1.0]])
+
+    def test_build_refcoco_stage_records_cli_outputs_stage_ready_records_and_splits(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            inputs = tmp_path / "inputs"
+            stage_inputs = tmp_path / "stage_inputs"
+            raw_root = tmp_path / "raw_refcoco"
+            cache_root = tmp_path / "cache"
+            inputs.mkdir()
+            stage_inputs.mkdir()
+            (inputs / "instances.json").write_text(
+                json.dumps(
+                    {
+                        "images": [
+                            {"id": 10, "width": 100, "height": 200},
+                            {"id": 20, "width": 50, "height": 100},
+                            {"id": 30, "width": 80, "height": 80},
+                        ],
+                        "annotations": [
+                            {"id": 501, "image_id": 10, "bbox": [10, 20, 30, 40]},
+                            {"id": 502, "image_id": 20, "bbox": [5, 10, 10, 20]},
+                            {"id": 503, "image_id": 30, "bbox": [8, 16, 16, 24]},
+                        ],
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            (inputs / "refs.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "ref_id": 1,
+                            "ann_id": 501,
+                            "image_id": 10,
+                            "split": "train",
+                            "sentences": [{"sent_id": 1001, "raw": "red ball", "tokens": ["red", "ball"]}],
+                        },
+                        {
+                            "ref_id": 2,
+                            "ann_id": 502,
+                            "image_id": 20,
+                            "split": "val",
+                            "sentences": [{"sent_id": 1002, "sent": "blue box", "tokens": ["blue", "box"]}],
+                        },
+                        {
+                            "ref_id": 3,
+                            "ann_id": 503,
+                            "image_id": 30,
+                            "split": "testA",
+                            "sentences": [{"sent_id": 1003, "raw": "green thing", "tokens": ["green", "thing"]}],
+                        },
+                    ],
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+            build_records_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_refcoco_stage_records.py"),
+                    "refcoco",
+                    str(stage_inputs),
+                    "--refs",
+                    str(inputs / "refs.json"),
+                    "--instances",
+                    str(inputs / "instances.json"),
+                    "--candidate-region-source",
+                    "coco_gt_box",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            np.save(stage_inputs / "refcoco_text_features.npy", np.arange(3 * 4 * 5, dtype=np.float32).reshape(3, 4, 5))
+            np.save(stage_inputs / "refcoco_region_features.npy", np.arange(3 * 1 * 4, dtype=np.float32).reshape(3, 1, 4))
+            stage_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "stage_refcoco_raw.py"),
+                    "refcoco",
+                    str(raw_root),
+                    "--splits",
+                    str(stage_inputs / "refcoco_splits.json"),
+                    "--records",
+                    str(stage_inputs / "refcoco_phrase_region_records.json"),
+                    "--text-features",
+                    str(stage_inputs / "refcoco_text_features.npy"),
+                    "--region-features",
+                    str(stage_inputs / "refcoco_region_features.npy"),
+                    "--license-tag",
+                    "unit-refcoco-coco2014",
+                    "--preprocessing-version",
+                    "unit-refcoco-records-v1",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            build_cache_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "refcoco",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(build_records_result.stdout) if build_records_result.stdout.strip() else {}
+            splits = json.loads((stage_inputs / "refcoco_splits.json").read_text()) if (stage_inputs / "refcoco_splits.json").exists() else {}
+            records = (
+                json.loads((stage_inputs / "refcoco_phrase_region_records.json").read_text()).get("records", [])
+                if (stage_inputs / "refcoco_phrase_region_records.json").exists()
+                else []
+            )
+            validation = validate_cache_layout(MultimodalCacheLayout(cache_root, "refcoco", "v0.1"), splits=("train", "val", "test"))
+
+        self.assertEqual(build_records_result.returncode, 0, build_records_result.stdout + build_records_result.stderr)
+        self.assertEqual(stage_result.returncode, 0, stage_result.stdout + stage_result.stderr)
+        self.assertEqual(build_cache_result.returncode, 0, build_cache_result.stdout + build_cache_result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["sample_count"], 3)
+        self.assertEqual(splits, {
+            "test": ["refcoco::image30::ann503::sent1003"],
+            "train": ["refcoco::image10::ann501::sent1001"],
+            "val": ["refcoco::image20::ann502::sent1002"],
+        })
+        self.assertEqual(records[0]["phrase_span"], {"start": 0, "end": 2})
+        self.assertEqual(records[0]["region_box"], [0.1, 0.1, 0.4, 0.3])
+        self.assertEqual(records[0]["target_region_index"], 0)
+        self.assertEqual(records[0]["box_coordinate_convention"], "xyxy_normalized")
+        self.assertTrue(validation.ok, validation.errors)
 
     def test_build_cache_cli_validates_requested_cache_version(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
