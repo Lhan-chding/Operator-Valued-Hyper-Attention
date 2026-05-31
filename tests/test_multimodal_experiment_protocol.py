@@ -41,6 +41,41 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least 3 seeds"):
             MultimodalExperimentConfig.from_mapping({"name": "bad", "seeds": [1], "dataset_name": "controlled_multimodal"})
 
+    def test_config_parser_validates_embedded_training_loss_protocol(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_refcoco_public_smoke.json")
+
+        self.assertIn("T5", config.losses_by_stage)
+        self.assertIn("public_alignment_ce", config.losses_by_stage["T5"])
+        self.assertIn("CATO", config.adapter_params_by_candidate)
+
+        invalid = {
+            "name": "bad_public_loss",
+            "dataset_name": "refcoco",
+            "task_type": "phrase_region_grounding",
+            "seeds": [1, 2, 3],
+            "training_stages": ["T0", "T5"],
+            "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
+            "baseline_names": [
+                "text_only",
+                "region_only",
+                "concat_fusion",
+                "cross_attention_transformer",
+                "modality_expert_moe",
+                "clip_style_region_text_retrieval",
+                "cato_only",
+                "ovha_no_cato",
+                "ovha_no_rceo",
+                "ovha_no_evidence_router",
+            ],
+            "eval_episode_count": 16,
+            "losses_by_stage": {"T0": ["cache_validation"], "T5": ["task_loss", "true_alignment_ce"]},
+            "adapter_params_by_candidate": _valid_adapter_params(),
+        }
+        with self.assertRaisesRegex(ValueError, "hidden loss is controlled-only"):
+            MultimodalExperimentConfig.from_mapping(invalid)
+
     def test_same_feature_baseline_registry_matches_plan(self):
         from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task, external_reference_names_for_task
 
@@ -504,6 +539,15 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
         if path.is_file():
             checksums.setdefault(str(path.relative_to(root)), file_sha256(path))
     (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
+
+
+def _valid_adapter_params() -> dict[str, list[str]]:
+    return {
+        "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
+        "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
+        "LRIO": ["rank_logits", "interaction_temperature", "scale", "bias"],
+        "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"],
+    }
 
 
 if __name__ == "__main__":
