@@ -13,8 +13,9 @@ class MultimodalPublicGateTests(unittest.TestCase):
     def test_region_text_gate_requires_full_baseline_and_cato_evidence(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
         report = evaluate_region_text_gate(
-            statistics_summary=_summary("phrase_region_grounding", "test", full=0.80, baseline=0.72),
+            statistics_summary=summary,
             diagnostics_rows=[
                 _diagnostic(
                     "clean",
@@ -41,7 +42,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                     rceo_corruption_response=0.35,
                 ),
             ],
-            no_cato_score=0.70,
+            no_cato_score=summary["main_table"]["phrase_region_grounding"]["test"]["ovha_no_cato"]["mean"],
             robustness_summary=_passing_sentiment_robustness(),
             task="phrase_region_grounding",
             split="test",
@@ -1229,7 +1230,8 @@ class MultimodalPublicGateTests(unittest.TestCase):
             stats_path = root / "stats.json"
             diagnostics_path = root / "diagnostics.jsonl"
             robustness_path = root / "robustness.json"
-            stats_path.write_text(json.dumps(_summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)))
+            summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+            stats_path.write_text(json.dumps(summary))
             robustness_path.write_text(json.dumps(_passing_sentiment_robustness()))
             diagnostics_path.write_text(
                 json.dumps(
@@ -1278,7 +1280,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                     "--split",
                     "test",
                     "--no-cato-score",
-                    "0.70",
+                    str(summary["main_table"]["phrase_region_grounding"]["test"]["ovha_no_cato"]["mean"]),
                     "--robustness-summary",
                     str(robustness_path),
                 ],

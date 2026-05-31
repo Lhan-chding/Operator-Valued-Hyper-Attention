@@ -31,7 +31,15 @@ def evaluate_region_text_gate(
             split,
             full_model,
         ),
-        "no_cato_drops": _ablation_drop(statistics_summary, task, split, full_model, no_cato_score, "no-CATO"),
+        "no_cato_drops": _ablation_drop(
+            statistics_summary,
+            task,
+            split,
+            full_model,
+            no_cato_score,
+            "no-CATO",
+            ablation_model="ovha_no_cato",
+        ),
         "cato_router_load_high": _router_load_high(diagnostics_rows, "CATO", minimum=0.35),
         "alignment_entropy_improves": _entropy_improves(diagnostics_rows, "CATO", "alignment_entropy"),
         "cato_top_alignment_accuracy_high": _candidate_diag_at_least(
@@ -131,20 +139,65 @@ def _ablation_drop(
     full_model: str,
     ablation_score: float | None,
     ablation_name: str,
+    *,
+    ablation_model: str | None = None,
 ) -> dict[str, Any]:
     full = _model_mean(summary, task, split, full_model)
+    reasons: list[str] = []
     if ablation_score is None:
         return {"passed": False, "reason": f"{ablation_name} ablation score missing"}
     if full is None:
         return {"passed": False, "reason": "full model score missing"}
+    comparison_score = _finite_float(ablation_score)
+    if comparison_score is None:
+        return {"passed": False, "reason": f"{ablation_name} ablation score must be finite"}
+    if ablation_model is not None:
+        main_table_score = _model_mean(summary, task, split, ablation_model)
+        if main_table_score is None:
+            reasons.append(f"{ablation_name} ablation main_table row missing: {ablation_model}")
+        elif not math.isclose(comparison_score, main_table_score, rel_tol=1e-9, abs_tol=1e-9):
+            reasons.append(f"{ablation_name} ablation score disagrees with main_table mean for model: {ablation_model}")
+        else:
+            comparison_score = main_table_score
+        reasons.extend(
+            _ablation_paired_reasons(
+                summary,
+                task,
+                split,
+                full_model,
+                ablation_model,
+                ablation_name,
+            )
+        )
     higher_is_better = _higher_is_better(summary, task, split, full_model)
-    improvement = _directional_improvement(full, float(ablation_score), higher_is_better)
-    passed = improvement > 0.0
+    improvement = _directional_improvement(full, comparison_score, higher_is_better)
+    if improvement <= 0.0:
+        reasons.append(f"{ablation_name} ablation does not drop")
+    passed = not reasons
     return {
         "passed": passed,
         "value": improvement,
-        "reason": f"{ablation_name} ablation does not drop" if not passed else "",
+        "reason": "; ".join(reasons),
     }
+
+
+def _ablation_paired_reasons(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    full_model: str,
+    ablation_model: str,
+    ablation_name: str,
+) -> list[str]:
+    return _baseline_comparison_paired_reasons(
+        summary,
+        task,
+        split,
+        full_model,
+        ablation_model,
+        f"{ablation_name} ablation paired comparison missing: {ablation_model}",
+        f"{ablation_name} ablation {ablation_model} paired comparison",
+    )
 
 
 def _full_beats_required_strong_baselines(
