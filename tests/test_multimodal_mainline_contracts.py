@@ -31,6 +31,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "scripts" / "multimodal" / "validate_cache.py",
             ROOT / "scripts" / "multimodal" / "extract_cmu_sdk_stage_inputs.py",
             ROOT / "scripts" / "multimodal" / "inspect_cmu_sdk_sequences.py",
+            ROOT / "scripts" / "multimodal" / "write_cmu_sdk_splits.py",
         ]
         for path in expected:
             with self.subTest(path=path):
@@ -796,6 +797,60 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("scripts/multimodal/extract_cmu_sdk_stage_inputs.py", payload["suggested_extract_command"])
         self.assertIn("--text-sequence", payload["suggested_extract_command"])
         self.assertEqual(written["suggested_roles"], payload["suggested_roles"])
+
+    def test_write_cmu_sdk_splits_cli_exports_official_fold_json_and_validates_sequences(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            folds = tmp_path / "folds.json"
+            output = tmp_path / "cmu_mosei_splits.json"
+            sequence = tmp_path / "text.json"
+            folds.write_text(
+                json.dumps(
+                    {
+                        "standard_train_fold": ["mosei-train-1"],
+                        "standard_valid_fold": ["mosei-val-1"],
+                        "standard_test_fold": ["mosei-test-1"],
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            _write_cmu_sequence_json(
+                sequence,
+                {
+                    "mosei-train-1": np.ones((2, 4), dtype=np.float32),
+                    "mosei-val-1": np.ones((2, 4), dtype=np.float32),
+                    "mosei-test-1": np.ones((2, 4), dtype=np.float32),
+                },
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "write_cmu_sdk_splits.py"),
+                    "cmu_mosei",
+                    str(output),
+                    "--folds-json",
+                    str(folds),
+                    "--sequence",
+                    str(sequence),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(result.stdout) if result.stdout.strip() else {}
+            splits = json.loads(output.read_text()) if output.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["source"], "folds_json")
+        self.assertEqual(payload["split_counts"], {"test": 1, "train": 1, "val": 1})
+        self.assertTrue(payload["sequence_validation"]["ok"])
+        self.assertEqual(splits, {"test": ["mosei-test-1"], "train": ["mosei-train-1"], "val": ["mosei-val-1"]})
 
     def test_build_cache_cli_writes_valid_meld_cache_from_dialogue_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
