@@ -555,18 +555,22 @@ def _validate_pseudo_label_provenance(
             else:
                 errors.append(f"pseudo labels must not be generated from evaluation split: {split}")
     weak_label_artifacts_exist = _weak_label_artifacts_exist(layout, splits)
-    if generated_from and (not isinstance(payload.get("version"), str) or not payload.get("version")):
+    if generated_from and not _is_non_empty_string(payload.get("version")):
         errors.append("pseudo_label_versions.json version must be a non-empty string")
     if weak_label_artifacts_exist:
         if not generated_from:
             errors.append(
                 "pseudo_label_versions.json generated_from_splits must be non-empty when weak label artifacts exist"
             )
-        if not isinstance(payload.get("version"), str) or not payload.get("version"):
+        if not _is_non_empty_string(payload.get("version")):
             errors.append(
                 "pseudo_label_versions.json version must be a non-empty string when weak label artifacts exist"
             )
         _validate_weak_label_provenance(payload.get("label_provenance"), errors)
+
+
+def _is_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _weak_label_artifacts_exist(layout: MultimodalCacheLayout, splits: tuple[str, ...]) -> bool:
