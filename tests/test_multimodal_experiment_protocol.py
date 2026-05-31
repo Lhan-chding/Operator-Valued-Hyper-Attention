@@ -518,6 +518,41 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("controlled report evidence_artifacts controlled_rows.path does not exist", joined)
         self.assertIn("controlled report evidence_artifacts diagnostics_report.path does not exist", joined)
 
+    def test_public_smoke_runner_rejects_controlled_report_artifact_content_mismatch(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import file_sha256
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "controlled_artifacts"
+            _write_valid_refcoco_public_cache(cache_root)
+            controlled_report = _complete_controlled_public_entry_report(artifact_root)
+            controlled_rows = Path(controlled_report["evidence_artifacts"]["controlled_rows"]["path"])
+            rows = [json.loads(line) for line in controlled_rows.read_text().splitlines() if line.strip()]
+            rows[0]["oracle_matrix"]["true_learned"]["loss"] += 1.0
+            controlled_rows.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
+            controlled_report["evidence_artifacts"]["controlled_rows"]["sha256"] = file_sha256(controlled_rows)
+            controlled_report_path = tmp_path / "controlled_report.json"
+            controlled_report_path.write_text(json.dumps(controlled_report, sort_keys=True) + "\n")
+            command = [
+                sys.executable,
+                str(ROOT / "scripts" / "multimodal" / "run_public_smoke.py"),
+                str(ROOT / "configs" / "multimodal_refcoco_public_smoke.json"),
+                "--cache-root",
+                str(cache_root),
+                "--controlled-report",
+                str(controlled_report_path),
+            ]
+            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn(
+            "controlled report tleo_local_evidence.oracle_matrix.true_learned.loss disagrees with artifact recomputation",
+            "\n".join(payload["errors"]),
+        )
+
     def test_topconf_main_entry_requires_validated_data_caches(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
         from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
