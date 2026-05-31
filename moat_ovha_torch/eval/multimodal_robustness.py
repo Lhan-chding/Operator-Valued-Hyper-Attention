@@ -19,6 +19,7 @@ DEFAULT_REQUIRED_STRESS_TARGETS = {
     "hard_negative_region_mismatch": ("hard_negative_region_mismatch", "region_mismatch"),
     "hard_negative_audio_mismatch": ("hard_negative_audio_mismatch", "audio_mismatch"),
 }
+DEFAULT_REQUIRED_STRESS_FAMILIES = DEFAULT_REQUIRED_STRESS_TARGETS
 TEMPORAL_STRESS_TARGETS = {"temporal_shift": ("temporal_shift", "temporal_shift_sec")}
 
 

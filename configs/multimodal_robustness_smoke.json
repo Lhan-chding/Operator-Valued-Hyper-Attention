@@ -30,9 +30,15 @@
     "missing_vision",
     "missing_audio",
     "image_blur",
+    "image_crop",
+    "image_occlusion",
     "audio_noise",
+    "audio_masking",
     "text_token_mask",
-    "hard_negative_mismatch"
+    "text_paraphrase",
+    "hard_negative_caption_mismatch",
+    "hard_negative_region_mismatch",
+    "hard_negative_audio_mismatch"
   ],
   "losses_by_stage": {
     "T0": ["cache_validation"],
