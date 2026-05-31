@@ -27,6 +27,7 @@ from moat_ovha_torch.eval.multimodal_public_gates import (
     evaluate_region_text_gate,
     evaluate_sentiment_gate,
 )
+from moat_ovha_torch.eval.multimodal_statistics import validate_public_summary
 
 
 CONTROLLED_TOPCONF_EVIDENCE_ARTIFACTS = ("controlled_rows", "diagnostics_report")
@@ -592,6 +593,12 @@ def _validate_statistics_summary_content(
     if not isinstance(summary, Mapping):
         errors.append(f"{label} gate statistics_summary must be a JSON object")
         return
+    validation = validate_public_summary(dict(summary))
+    if not validation.ok:
+        errors.extend(
+            f"{label} gate statistics_summary validation failed: {error}"
+            for error in validation.errors
+        )
 
     main_table = summary.get("main_table")
     task_table = main_table.get(task) if isinstance(main_table, Mapping) else None

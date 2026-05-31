@@ -1929,26 +1929,35 @@ def _gate_statistics_summary(task: str, raw_metrics: Path) -> dict[str, object]:
         model: {
             "mean": score,
             "std": 0.01,
-            "ci95": [score - 0.01, score + 0.01],
+            "ci95": [score - (1.96 * 0.01 / (3 ** 0.5)), score + (1.96 * 0.01 / (3 ** 0.5))],
             "seed_count": 3,
             "per_seed_scores": [score - 0.01, score, score + 0.01],
             "higher_is_better": True,
         }
         for model, score in model_scores.items()
     }
+    parameter_count = {model: 120000 + index for index, model in enumerate(models)}
+    feature_versions = (
+        {"text": "frozen-text-v1", "audio": "frozen-audio-v1", "vision": "frozen-vision-v1"}
+        if task == "sentiment_emotion"
+        else {"text": "frozen-text-v1", "region": "frozen-region-v1"}
+    )
+    hardware = {"accelerator": "unit-test-cpu", "wall_clock_hours": 0.17}
+    full_delta = full_score - baseline_score
     paired = {
         "common_seed_count": 3,
-        "mean_delta": full_score - baseline_score,
+        "model_delta": "ovha_full_minus_cross_attention_transformer",
+        "mean_delta": full_delta,
         "metric_direction": "higher_is_better",
         "paired_permutation_p": 0.25,
-        "paired_bootstrap_ci95": [0.01, 0.12],
+        "paired_bootstrap_ci95": [full_delta, full_delta],
         "baseline_comparisons": {
             model: {
                 "common_seed_count": 3,
                 "mean_delta": full_score - score,
                 "metric_direction": "higher_is_better",
                 "paired_permutation_p": 0.25,
-                "paired_bootstrap_ci95": [0.01, 0.12],
+                "paired_bootstrap_ci95": [full_score - score, full_score - score],
             }
             for model, score in model_scores.items()
             if model not in {"ovha_full", "cross_attention_transformer"}
@@ -1962,6 +1971,12 @@ def _gate_statistics_summary(task: str, raw_metrics: Path) -> dict[str, object]:
             "seed": seed,
             "score": score + (seed - 2) * 0.01,
             "raw_metric_path": str(raw_metrics),
+            "parameter_count": parameter_count[model],
+            "training_steps": 1000,
+            "frozen_feature_extractor_version": feature_versions,
+            "hardware": hardware,
+            "seed_count_rationale": "unit-test fixture uses the plan minimum of 3 seeds; production main tables should use 5 seeds",
+            "public_metrics": _public_metrics_for_task(task),
         }
         for model, score in model_scores.items()
         for seed in (1, 2, 3)
@@ -1969,21 +1984,57 @@ def _gate_statistics_summary(task: str, raw_metrics: Path) -> dict[str, object]:
     return {
         "main_table": {task: {"test": model_rows}},
         "paired_tests": {task: {"test": paired}},
-        "metadata": {"raw_metric_paths": [str(raw_metrics)]},
+        "metadata": {
+            "parameter_count": parameter_count,
+            "baseline_strength": {},
+            "training_steps": 1000,
+            "frozen_feature_extractor_version": feature_versions,
+            "hardware": hardware,
+            "label_provenance": {},
+            "raw_metric_paths": [str(raw_metrics)],
+        },
         "per_seed_appendix": per_seed_table,
         "reporting_metadata": {
-            "parameter_count": {model: 120000 + index for index, model in enumerate(models)},
+            "parameter_count": parameter_count,
             "training_steps": {model: 1000 for model in models},
-            "frozen_feature_versions": (
-                {"text": "frozen-text-v1", "audio": "frozen-audio-v1", "vision": "frozen-vision-v1"}
-                if task == "sentiment_emotion"
-                else {"text": "frozen-text-v1", "region": "frozen-region-v1"}
-            ),
-            "hardware": {"accelerator": "unit-test-cpu"},
+            "frozen_feature_versions": feature_versions,
+            "hardware": hardware,
             "wall_clock_summary": {"wall_clock_hours": 0.17},
             "seed_count_rationale": "unit-test fixture uses the plan minimum of 3 seeds; production main tables should use 5 seeds",
             "per_seed_table": per_seed_table,
         },
+    }
+
+
+def _public_metrics_for_task(task: str) -> dict[str, object]:
+    if task == "sentiment_emotion":
+        return {
+            "mae": 0.3,
+            "pearson_correlation": 0.7,
+            "accuracy": 0.74,
+            "f1": 0.73,
+            "missing_modality_performance_drop": 0.08,
+            "corruption_robustness_auc": 0.82,
+            "router_load_by_corruption_type": {"missing_audio": 0.45, "audio_noise": 0.42},
+            "lrio_rank_entropy": 0.6,
+            "spo_prototype_entropy": 0.5,
+            "rceo_reliability_calibration": {
+                "ece": 0.08,
+                "bin_count": 5,
+                "calibration_curve": [{"confidence": 0.8, "accuracy": 0.76}],
+            },
+        }
+    return {
+        "acc_at_0_5": 0.80,
+        "recall_at_1": 0.78,
+        "recall_at_5": 0.90,
+        "mean_iou": 0.62,
+        "phrase_region_topk_accuracy": 0.85,
+        "alignment_entropy": 0.4,
+        "cato_router_load": 0.55,
+        "cato_candidate_loss": 0.2,
+        "cato_top_alignment_accuracy": 0.7,
+        "null_unmatched_rate": 0.05,
     }
 
 
