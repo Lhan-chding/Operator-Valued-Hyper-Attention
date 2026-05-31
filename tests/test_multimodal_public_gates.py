@@ -548,6 +548,44 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("reporting metadata missing parameter_count", joined)
         self.assertIn("reporting metadata missing per_seed_table", joined)
 
+    def test_public_gate_rejects_invalid_main_table_mean_std_and_ci(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        baseline_row = summary["main_table"]["phrase_region_grounding"]["test"]["cross_attention_transformer"]
+        summary = {
+            **summary,
+            "main_table": {
+                **summary["main_table"],
+                "phrase_region_grounding": {
+                    **summary["main_table"]["phrase_region_grounding"],
+                    "test": {
+                        **summary["main_table"]["phrase_region_grounding"]["test"],
+                        "cross_attention_transformer": {
+                            **baseline_row,
+                            "mean": "nan",
+                            "std": "nan",
+                            "ci95": [0.75, 0.70],
+                        },
+                    },
+                },
+            },
+        }
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("cross_attention_transformer main table mean must be finite number", joined)
+        self.assertIn("cross_attention_transformer main table std must be finite non-negative number", joined)
+        self.assertIn("cross_attention_transformer main table ci95 lower bound must not exceed upper bound", joined)
+
     def test_public_gate_requires_reporting_per_seed_table_cover_main_seed_counts(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
