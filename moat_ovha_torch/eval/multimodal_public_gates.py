@@ -93,9 +93,10 @@ def _full_beats_baseline(
 ) -> dict[str, Any]:
     full = _model_mean(summary, task, split, full_model)
     baseline = _model_mean(summary, task, split, baseline_model)
-    if full is None or baseline is None:
-        return {"passed": False, "reason": "full or same-feature baseline score missing"}
     reasons = _statistical_evidence_reasons(summary, task, split, full_model, baseline_model)
+    if full is None or baseline is None:
+        reasons.append("full or same-feature baseline score missing")
+        return {"passed": False, "reason": "; ".join(reasons)}
     higher_is_better = _higher_is_better(summary, task, split, full_model)
     improvement = _directional_improvement(full, baseline, higher_is_better)
     if improvement <= 0.0:
@@ -398,7 +399,7 @@ def _robustness_passes(summary: dict[str, Any]) -> dict[str, Any]:
 
 def _model_mean(summary: dict[str, Any], task: str, split: str, model: str) -> float | None:
     try:
-        return float(summary["main_table"][task][split][model]["mean"])
+        return _finite_float(summary["main_table"][task][split][model]["mean"])
     except KeyError:
         return None
 
@@ -535,9 +536,21 @@ def _main_table_reporting_reasons(main_models: dict[str, Any], model: str, seed_
     if not isinstance(row, dict):
         reasons.append(f"{model} main table row missing")
         return reasons
-    for key in ("std", "ci95"):
-        if key not in row:
-            reasons.append(f"{model} main table missing {key}")
+    if _finite_float(row.get("mean")) is None:
+        reasons.append(f"{model} main table mean must be finite number")
+    std = _finite_float(row.get("std"))
+    if "std" not in row:
+        reasons.append(f"{model} main table missing std")
+    elif std is None or std < 0.0:
+        reasons.append(f"{model} main table std must be finite non-negative number")
+    if "ci95" not in row:
+        reasons.append(f"{model} main table missing ci95")
+    else:
+        ci95 = _finite_interval(row.get("ci95"))
+        if ci95 is None:
+            reasons.append(f"{model} main table ci95 must be finite length-2 interval")
+        elif ci95[0] > ci95[1]:
+            reasons.append(f"{model} main table ci95 lower bound must not exceed upper bound")
     per_seed = row.get("per_seed_scores", row.get("per_seed"))
     if not isinstance(per_seed, list) or len(per_seed) < seed_count or seed_count < 3:
         reasons.append(f"{model} main table missing raw per-seed scores")
