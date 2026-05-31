@@ -235,6 +235,30 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertFalse(report["passed"])
         self.assertIn("robustness stress family coverage missing", "\n".join(report["reasons"]))
 
+    def test_sentiment_gate_requires_operator_load_shift_for_robustness(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=_summary("sentiment_emotion", "test", full=0.76, baseline=0.74),
+            diagnostics_rows=_passing_sentiment_diagnostics(),
+            ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
+            robustness_summary={
+                "full_drop_less_than_baseline": True,
+                "rceo_reliability_monotonic": True,
+                "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+                "required_stress_coverage": {"passed": True, "reasons": []},
+                "required_ablation_degradation": {"passed": True, "reasons": []},
+            },
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "robustness operator load shift missing",
+            "\n".join(report["reasons"]),
+        )
+
     def test_public_gate_blocks_when_delta_or_ablation_missing(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
