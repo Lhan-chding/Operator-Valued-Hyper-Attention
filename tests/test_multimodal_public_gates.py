@@ -1085,6 +1085,52 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("reporting metadata frozen_feature_versions missing modality: audio", joined)
         self.assertIn("reporting metadata frozen_feature_versions missing modality: vision", joined)
 
+    def test_region_text_gate_requires_step14_public_diagnostic_breakdowns(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        diagnostics = [dict(row) for row in _passing_region_text_diagnostics()]
+        for row in diagnostics:
+            row.pop("public_diagnostics", None)
+
+        report = evaluate_region_text_gate(
+            statistics_summary=_summary("phrase_region_grounding", "test", full=0.80, baseline=0.72),
+            diagnostics_rows=diagnostics,
+            no_cato_score=0.70,
+            robustness_summary=_passing_sentiment_robustness(),
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("region-text public diagnostics missing CATO router load by phrase type", joined)
+        self.assertIn("region-text public diagnostics missing no-CATO delta by object size", joined)
+        self.assertIn("region-text public diagnostics missing no-CATO delta by phrase length", joined)
+        self.assertIn("region-text public diagnostics missing RCEO reliability shift under blurred regions", joined)
+
+    def test_sentiment_gate_requires_step14_public_diagnostic_breakdowns(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        diagnostics = [dict(row) for row in _passing_sentiment_diagnostics()]
+        for row in diagnostics:
+            row.pop("public_diagnostics", None)
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=_summary("sentiment_emotion", "test", full=0.76, baseline=0.74),
+            diagnostics_rows=diagnostics,
+            ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
+            robustness_summary=_passing_sentiment_robustness(),
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("sentiment public diagnostics missing LRIO rank entropy by modality pair", joined)
+        self.assertIn("sentiment public diagnostics missing SPO prototype load by emotion class", joined)
+        self.assertIn("sentiment public diagnostics missing RCEO reliability shift under missing/noisy modality", joined)
+        self.assertIn("sentiment public diagnostics missing router load by clean/corrupted/missing split", joined)
+
     def test_region_text_gate_requires_complete_same_feature_baseline_defense_table(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
