@@ -79,12 +79,14 @@ def _full_beats_baseline(
     if full is None or baseline is None:
         return {"passed": False, "reason": "full or same-feature baseline score missing"}
     reasons = _statistical_evidence_reasons(summary, task, split, full_model, baseline_model)
-    if full <= baseline:
+    higher_is_better = _higher_is_better(summary, task, split, full_model)
+    improvement = _directional_improvement(full, baseline, higher_is_better)
+    if improvement <= 0.0:
         reasons.append("full model does not beat same-feature baseline")
     passed = not reasons
     return {
         "passed": passed,
-        "value": full - baseline,
+        "value": improvement,
         "reason": "; ".join(reasons),
     }
 
@@ -102,10 +104,12 @@ def _ablation_drop(
         return {"passed": False, "reason": f"{ablation_name} ablation score missing"}
     if full is None:
         return {"passed": False, "reason": "full model score missing"}
-    passed = full > float(ablation_score)
+    higher_is_better = _higher_is_better(summary, task, split, full_model)
+    improvement = _directional_improvement(full, float(ablation_score), higher_is_better)
+    passed = improvement > 0.0
     return {
         "passed": passed,
-        "value": full - float(ablation_score),
+        "value": improvement,
         "reason": f"{ablation_name} ablation does not drop" if not passed else "",
     }
 
@@ -314,6 +318,19 @@ def _model_mean(summary: dict[str, Any], task: str, split: str, model: str) -> f
         return float(summary["main_table"][task][split][model]["mean"])
     except KeyError:
         return None
+
+
+def _higher_is_better(summary: dict[str, Any], task: str, split: str, model: str) -> bool:
+    try:
+        return bool(summary["main_table"][task][split][model].get("higher_is_better", True))
+    except KeyError:
+        return True
+
+
+def _directional_improvement(full: float, comparison: float, higher_is_better: bool) -> float:
+    if higher_is_better:
+        return full - comparison
+    return comparison - full
 
 
 def _statistical_evidence_reasons(
