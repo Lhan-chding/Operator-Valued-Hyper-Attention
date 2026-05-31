@@ -32,6 +32,7 @@ CONTROLLED_SPECIALIST_WARMUP_FAMILIES = (
     "lrio_low_rank_interaction",
     "cato_alignment_transport",
 )
+CONTROLLED_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
 
 
 def main() -> int:
@@ -195,8 +196,8 @@ def _run_configured_stage_training(
             )
             continue
         stage_families = _families_for_stage(stage)
-        parameter_scope = _apply_trainable_parameter_scope(model, stage)
         stage_rows: list[dict[str, object]] = []
+        parameter_scopes: list[dict[str, object]] = []
         for stage_step in range(steps_per_stage):
             family = _family_for_training_step(
                 stage,
@@ -204,11 +205,14 @@ def _run_configured_stage_training(
                 stage_step=stage_step,
                 optimizer_steps=optimizer_steps,
             )
+            specialist_candidate = _specialist_candidate_for_stage(stage, family)
+            parameter_scope = _apply_trainable_parameter_scope(model, stage, family)
+            parameter_scopes.append(parameter_scope)
             batch = _sample(adapter, family, args, device)
             optimizer.zero_grad(set_to_none=True)
             router_weight_override = _router_weight_override_for_stage(stage, batch)
             output = model(batch, router_weight_override=router_weight_override)
-            components = _controlled_loss_components(output, batch)
+            components = _controlled_loss_components(output, batch, specialist_candidate=specialist_candidate)
             stage_components = {name: components[name] for name in configured_losses if name in components}
             total_loss = _stage_total_loss(stage_components, output)
             total_loss.backward()
@@ -223,12 +227,16 @@ def _run_configured_stage_training(
                 "loss_names_observed": sorted(stage_components),
                 "route_override_mode": _route_override_mode(router_weight_override),
                 "trainable_parameter_scope": parameter_scope["trainable_parameter_scope"],
+                "trainable_parameter_groups": parameter_scope["trainable_parameter_groups"],
                 "total_loss": _as_float(total_loss),
                 "grad_l2_norm": grad_norm,
                 **{name: _as_float(value) for name, value in stage_components.items()},
             }
+            if specialist_candidate is not None:
+                step_row["specialist_candidate"] = specialist_candidate
             stage_rows.append(step_row)
             loss_history.append(step_row)
+        stage_parameter_scope = _merge_parameter_scopes(stage, parameter_scopes)
         stage_history.append(
             {
                 "stage": stage,
@@ -237,7 +245,7 @@ def _run_configured_stage_training(
                 "optimizer_steps": len(stage_rows),
                 "family_schedule_scope": _family_schedule_scope(stage),
                 "route_override_mode": _stage_route_override_mode(stage),
-                **parameter_scope,
+                **stage_parameter_scope,
                 "mean_total_loss": float(sum(float(row["total_loss"]) for row in stage_rows) / max(len(stage_rows), 1)),
                 "families_seen": sorted({str(row["family"]) for row in stage_rows}),
             }
@@ -281,7 +289,7 @@ def _family_schedule_scope(stage: str) -> str:
 
 
 def _router_weight_override_for_stage(stage: str, batch: Any) -> torch.Tensor | None:
-    if stage != "T2":
+    if stage not in {"T1", "T2"}:
         return None
     hidden = batch.hidden or {}
     override = hidden.get("true_router_weights")
@@ -293,11 +301,20 @@ def _route_override_mode(router_weight_override: torch.Tensor | None) -> str:
 
 
 def _stage_route_override_mode(stage: str) -> str:
-    return "true_router_weights" if stage == "T2" else "learned_router"
+    return "true_router_weights" if stage in {"T1", "T2"} else "learned_router"
 
 
-def _apply_trainable_parameter_scope(model: MultimodalOVHA, stage: str) -> dict[str, object]:
-    trainable_groups = _trainable_parameter_groups_for_stage(stage)
+def _specialist_candidate_for_stage(stage: str, family: str) -> str | None:
+    if stage != "T1":
+        return None
+    active = CONTROLLED_FAMILY_ACTIVE_OPERATOR[family]
+    if active not in CONTROLLED_CANDIDATE_NAMES:
+        raise ValueError(f"T1 specialist warmup requires a single candidate family, got {family}: {active}")
+    return active
+
+
+def _apply_trainable_parameter_scope(model: MultimodalOVHA, stage: str, family: str) -> dict[str, object]:
+    trainable_groups = _trainable_parameter_groups_for_stage(stage, family)
     observed_groups: set[str] = set()
     frozen_groups: set[str] = set()
     for name, parameter in model.named_parameters():
@@ -315,10 +332,16 @@ def _apply_trainable_parameter_scope(model: MultimodalOVHA, stage: str) -> dict[
     }
 
 
-def _trainable_parameter_groups_for_stage(stage: str) -> set[str]:
+def _trainable_parameter_groups_for_stage(stage: str, family: str) -> set[str]:
+    if stage == "T1":
+        candidate = _specialist_candidate_for_stage(stage, family)
+        return {
+            f"candidate_primitives.{candidate}",
+            f"joint_router_adapter.hyper_adapter.{candidate}",
+        }
     if stage == "T3":
         return {"joint_router_adapter.router"}
-    return {
+    groups = {
         "candidate_primitives",
         "evidence_encoder",
         "joint_router_adapter.hyper_adapter",
@@ -326,26 +349,57 @@ def _trainable_parameter_groups_for_stage(stage: str) -> set[str]:
         "memory_encoder",
         "reliability_prior",
     }
+    groups.update(f"candidate_primitives.{candidate}" for candidate in CONTROLLED_CANDIDATE_NAMES)
+    groups.update(f"joint_router_adapter.hyper_adapter.{candidate}" for candidate in CONTROLLED_CANDIDATE_NAMES)
+    return groups
 
 
 def _trainable_parameter_scope_name(stage: str) -> str:
+    if stage == "T1":
+        return "candidate_only_specialist_warmup"
     if stage == "T3":
         return "router_only_warmup"
     if stage == "T2":
         return "oracle_router_adapter_candidate_warmup"
-    if stage == "T1":
-        return "candidate_specialist_warmup"
     if stage == "T4":
         return "joint_controlled_training"
     return "full_model"
 
 
 def _parameter_group_for_name(name: str) -> str:
+    if name.startswith("candidate_primitives."):
+        parts = name.split(".")
+        return f"candidate_primitives.{parts[1]}"
     if name.startswith("joint_router_adapter.router."):
         return "joint_router_adapter.router"
     if name.startswith("joint_router_adapter.hyper_adapter."):
+        parts = name.split(".")
+        if len(parts) > 3 and parts[2] == "heads":
+            return f"joint_router_adapter.hyper_adapter.{parts[3]}"
         return "joint_router_adapter.hyper_adapter"
     return name.split(".", 1)[0]
+
+
+def _merge_parameter_scopes(stage: str, parameter_scopes: list[dict[str, object]]) -> dict[str, object]:
+    trainable: set[str] = set()
+    frozen: set[str] = set()
+    for scope in parameter_scopes:
+        trainable.update(str(group) for group in scope.get("trainable_parameter_groups", []))
+        frozen.update(str(group) for group in scope.get("frozen_parameter_groups", []))
+    return {
+        "trainable_parameter_scope": _trainable_parameter_scope_name(stage),
+        "trainable_parameter_groups": sorted(trainable),
+        "frozen_parameter_groups": sorted(_with_parent_group_aliases(frozen)),
+    }
+
+
+def _with_parent_group_aliases(groups: set[str]) -> set[str]:
+    expanded = set(groups)
+    if any(group.startswith("candidate_primitives.") for group in groups):
+        expanded.add("candidate_primitives")
+    if any(group.startswith("joint_router_adapter.hyper_adapter.") for group in groups):
+        expanded.add("joint_router_adapter.hyper_adapter")
+    return expanded
 
 
 def _controlled_losses(output: MultimodalOVHAOutput, batch: Any) -> dict[str, torch.Tensor]:
@@ -360,7 +414,12 @@ def _controlled_losses(output: MultimodalOVHAOutput, batch: Any) -> dict[str, to
     }
 
 
-def _controlled_loss_components(output: MultimodalOVHAOutput, batch: Any) -> dict[str, torch.Tensor]:
+def _controlled_loss_components(
+    output: MultimodalOVHAOutput,
+    batch: Any,
+    *,
+    specialist_candidate: str | None = None,
+) -> dict[str, torch.Tensor]:
     active = batch.hidden["true_active_operator"]
     router_ce = torch.nn.functional.cross_entropy(
         output.router_logits.reshape(-1, output.router_logits.shape[-1]),
@@ -370,7 +429,7 @@ def _controlled_loss_components(output: MultimodalOVHAOutput, batch: Any) -> dic
     task_loss = _task_loss(output.y_hat, batch)
     return {
         "task_loss": task_loss,
-        "candidate_individual_loss": (output.candidate_values - batch.target_y.unsqueeze(-2)).square().mean(),
+        "candidate_individual_loss": _candidate_individual_loss(output, batch, specialist_candidate),
         "router_ce_true_active_operator": router_ce,
         "candidate_oracle_mse": candidate_oracle_mse,
         "adapter_kl_true_params": _adapter_true_param_loss(output, batch),
@@ -380,6 +439,17 @@ def _controlled_loss_components(output: MultimodalOVHAOutput, batch: Any) -> dic
         "tleo_lengthscale_huber": _tleo_lengthscale_loss(output, batch),
         "rceo_reliability_huber": _rceo_reliability_loss(output, batch),
     }
+
+
+def _candidate_individual_loss(
+    output: MultimodalOVHAOutput,
+    batch: Any,
+    specialist_candidate: str | None,
+) -> torch.Tensor:
+    if specialist_candidate is None:
+        return (output.candidate_values - batch.target_y.unsqueeze(-2)).square().mean()
+    candidate_index = CONTROLLED_CANDIDATE_NAMES.index(specialist_candidate)
+    return (output.candidate_values[..., candidate_index, :] - batch.target_y).square().mean()
 
 
 def _evaluate_task_losses(
