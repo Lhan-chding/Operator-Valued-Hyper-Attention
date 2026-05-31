@@ -538,6 +538,40 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("missing robustness stress target: hard_negative_region_mismatch", joined)
         self.assertIn("missing robustness stress target: hard_negative_audio_mismatch", joined)
 
+    def test_robustness_summary_requires_required_stress_metadata_fields(self):
+        from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+        rows = [
+            _stress_row("missing_text"),
+            _stress_row("missing_vision"),
+            _stress_row("missing_audio"),
+            _stress_row("image_blur"),
+            _stress_row("image_crop"),
+            _stress_row("image_occlusion"),
+            _stress_row("audio_noise"),
+            _stress_row("audio_masking"),
+            _stress_row("text_token_mask"),
+            _stress_row("text_paraphrase"),
+            _stress_row("hard_negative_caption_mismatch", mismatch_source_id="other-caption"),
+            _stress_row("hard_negative_region_mismatch", mismatch_source_id="other-region"),
+            _stress_row("hard_negative_audio_mismatch", mismatch_source_id="other-audio"),
+            _stress_row("temporal_shift"),
+        ]
+
+        summary = summarize_robustness_rows(
+            rows,
+            full_model="ovha_full",
+            baseline_model="cross_attention_transformer",
+            temporal_data=True,
+        )
+
+        self.assertFalse(summary["required_stress_coverage"]["passed"])
+        joined = "\n".join(summary["required_stress_coverage"]["reasons"])
+        self.assertIn("missing robustness stress target: missing_text", joined)
+        self.assertIn("missing robustness stress target: missing_vision", joined)
+        self.assertIn("missing robustness stress target: missing_audio", joined)
+        self.assertIn("missing robustness stress target: temporal_shift", joined)
+
     def test_robustness_summary_accepts_plan_stress_metadata_coverage(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 
