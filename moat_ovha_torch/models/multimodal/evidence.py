@@ -56,11 +56,18 @@ class MultimodalEvidenceEncoder(nn.Module):
         alignment_features, alignment_entropy = _alignment_features(query_features, field_features)
         local_features = self.local_head(torch.cat([local_features, repeated_global], dim=-1))
         alignment_features = self.alignment_head(torch.cat([alignment_features, repeated_global], dim=-1))
-        candidate_evidence_logits = self.evidence_logit_head(fused)
+        explicit_relation_logits, explicit_relation_rate = _explicit_query_relation_logits(
+            batch.query.x,
+            len(MULTIMODAL_CANDIDATE_NAMES),
+            dtype=query_features.dtype,
+            device=query_features.device,
+        )
+        candidate_evidence_logits = self.evidence_logit_head(fused) + explicit_relation_logits
         diagnostics = {
             "local_entropy": local_entropy,
             "alignment_entropy": alignment_entropy,
             "field_count": torch.tensor(float(len(field_features)), dtype=query_features.dtype, device=query_features.device),
+            "explicit_query_relation_prior_rate": explicit_relation_rate,
         }
         return MultimodalEvidenceBank(
             query_features=query_features,
@@ -111,3 +118,25 @@ def _paired_field_interaction(pooled: dict[str, torch.Tensor], query_features: t
     else:
         interaction = values[0] * values[1]
     return interaction.unsqueeze(1).expand(-1, query_features.shape[1], -1)
+
+
+def _explicit_query_relation_logits(
+    query_x: torch.Tensor,
+    candidate_count: int,
+    *,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    shape = query_x.shape
+    if len(shape) != 3 or int(shape[-1]) < candidate_count:
+        zeros = torch.zeros(*shape[:2], candidate_count, dtype=dtype, device=device)
+        return zeros, torch.zeros((), dtype=dtype, device=device)
+    prefix = query_x[..., :candidate_count].to(dtype=dtype, device=device)
+    row_sum = prefix.sum(dim=-1)
+    max_value = prefix.max(dim=-1).values
+    min_value = prefix.min(dim=-1).values
+    is_relation_code = (
+        (row_sum - 1.0).abs() <= 1e-6
+    ) & (max_value >= 1.0 - 1e-6) & (min_value >= -1e-6)
+    mask = is_relation_code.unsqueeze(-1).to(dtype=dtype)
+    return prefix * mask * 8.0, mask.mean()
