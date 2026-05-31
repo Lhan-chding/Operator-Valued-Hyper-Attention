@@ -1443,6 +1443,31 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
         )
         self.assertNotIn("true_active_operator", str(batch.model_inputs()))
 
+    def test_evidence_encoder_uses_controlled_family_relation_prior_without_hidden_input(self):
+        import torch
+
+        from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
+            CONTROLLED_FAMILY_ACTIVE_OPERATOR,
+            CONTROLLED_OPERATOR_ORDER,
+            ControlledSyntheticMultimodalAdapter,
+        )
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceEncoder
+
+        encoder = MultimodalEvidenceEncoder(
+            field_dims={"text": 4, "region": 4, "audio": 4},
+            query_dim=4,
+            d_model=8,
+        )
+        adapter = ControlledSyntheticMultimodalAdapter(seed=123, field_dim=4, output_dim=3)
+        for family in ("tleo_local_evidence", "spo_global_prototype", "lrio_low_rank_interaction", "cato_alignment_transport"):
+            with self.subTest(family=family):
+                batch = adapter.sample_batch(family=family, batch_size=2, query_count=4, device="cpu")
+                evidence = encoder(batch)
+                expected = CONTROLLED_OPERATOR_ORDER.index(CONTROLLED_FAMILY_ACTIVE_OPERATOR[family])
+
+                self.assertTrue(torch.equal(evidence.candidate_evidence_logits.argmax(dim=-1), torch.full((2, 4), expected)))
+                self.assertNotIn("true_active_operator", str(batch.model_inputs()))
+
     def test_controlled_spo_and_lrio_have_non_degenerate_adapter_truth(self):
         import torch
 
