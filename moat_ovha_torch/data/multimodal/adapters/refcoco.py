@@ -171,8 +171,10 @@ def _write_split_cache_files(
         "text": manifest.files["features/text_features.npy"],
         "region": manifest.files["features/region_features.npy"],
     }
+    feature_shards: dict[str, np.ndarray] = {}
     for modality, source in feature_sources.items():
         shard = _load_and_select_rows(source, row_indices, artifact_name=f"{modality} features")
+        feature_shards[modality] = shard
         _write_array(root / "token_fields" / f"{modality}_{split}.npy", shard)
         _write_position_and_mask_artifacts(root, modality, split, shard)
     token_manifest = {
@@ -197,10 +199,20 @@ def _write_split_cache_files(
     )
     (root / "provenance" / f"failed_samples_{split}.jsonl").write_text("")
     selected_records = [records_by_source_id[source_id] for source_id in source_ids]
-    _write_array(root / "supervision" / f"task_labels_{split}.npy", np.ones((len(source_ids), 1), dtype=np.float32))
-    _write_alignment_pairs(root / "supervision" / f"alignment_pairs_{split}.parquet", split, selected_records)
+    candidate_region_count = _candidate_region_count(feature_shards["region"], split)
+    target_region_indices = _target_region_indices(selected_records, candidate_region_count)
+    _write_array(
+        root / "supervision" / f"task_labels_{split}.npy",
+        _region_distribution_targets(target_region_indices, candidate_region_count),
+    )
+    _write_alignment_pairs(
+        root / "supervision" / f"alignment_pairs_{split}.parquet",
+        split,
+        selected_records,
+        target_region_indices,
+    )
     _write_array(root / "supervision" / f"bbox_targets_{split}.npy", _bbox_targets(selected_records))
-    _write_array(root / "supervision" / f"region_targets_{split}.npy", np.zeros((len(source_ids), 1), dtype=np.int64))
+    _write_array(root / "supervision" / f"region_targets_{split}.npy", target_region_indices.reshape(-1, 1))
     _write_corruption_metadata(root / "supervision" / f"corruption_{split}.parquet", split, source_ids)
 
 
@@ -233,7 +245,42 @@ def _load_and_select_rows(source: Path, row_indices: list[int], *, artifact_name
     return np.asarray(array[row_indices]).copy()
 
 
-def _write_alignment_pairs(destination: Path, split: str, records: list[dict[str, Any]]) -> None:
+def _candidate_region_count(region_shard: np.ndarray, split: str) -> int:
+    if region_shard.ndim < 2:
+        raise ValueError(f"region feature shard for split {split} must have candidate region axis")
+    candidate_count = int(region_shard.shape[1])
+    if candidate_count <= 0:
+        raise ValueError(f"region feature shard for split {split} must contain candidate regions")
+    return candidate_count
+
+
+def _target_region_indices(records: list[dict[str, Any]], candidate_region_count: int) -> np.ndarray:
+    targets: list[int] = []
+    for record in records:
+        value = record.get("target_region_index", 0)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"target_region_index must be an integer for source_id: {record.get('source_id')}")
+        if value < 0 or value >= candidate_region_count:
+            raise ValueError(
+                f"target_region_index out of range for source_id: {record.get('source_id')} "
+                f"(value={value}, candidate_count={candidate_region_count})"
+            )
+        targets.append(value)
+    return np.asarray(targets, dtype=np.int64)
+
+
+def _region_distribution_targets(target_region_indices: np.ndarray, candidate_region_count: int) -> np.ndarray:
+    targets = np.zeros((int(target_region_indices.shape[0]), candidate_region_count), dtype=np.float32)
+    targets[np.arange(int(target_region_indices.shape[0])), target_region_indices] = 1.0
+    return targets
+
+
+def _write_alignment_pairs(
+    destination: Path,
+    split: str,
+    records: list[dict[str, Any]],
+    target_region_indices: np.ndarray,
+) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     rows = []
     for row_index, record in enumerate(records):
@@ -242,7 +289,7 @@ def _write_alignment_pairs(destination: Path, split: str, records: list[dict[str
                 "source_id": record["source_id"],
                 "split": split,
                 "phrase_span": record["phrase_span"],
-                "target_region_index": 0,
+                "target_region_index": int(target_region_indices[row_index]),
                 "row_index": row_index,
             }
         )
@@ -395,6 +442,11 @@ def _validate_grounding_record(source_name: str, index: int, record: dict[str, A
             float(coordinate)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{source_name} records[{index}] region_box must be numeric") from exc
+    target_region_index = record.get("target_region_index")
+    if target_region_index is not None and (
+        not isinstance(target_region_index, int) or isinstance(target_region_index, bool) or target_region_index < 0
+    ):
+        raise ValueError(f"{source_name} records[{index}] target_region_index must be a non-negative integer")
 
 
 def _sample_record(record: dict[str, Any], split: str) -> dict[str, Any]:
@@ -411,6 +463,7 @@ def _sample_record(record: dict[str, Any], split: str) -> dict[str, Any]:
         "caption_id": record["caption_id"],
         "phrase_span": record["phrase_span"],
         "region_box": [float(value) for value in record["region_box"]],
+        "target_region_index": int(record.get("target_region_index", 0)),
         "candidate_region_source": record["candidate_region_source"],
         "box_coordinate_convention": record["box_coordinate_convention"],
     }
