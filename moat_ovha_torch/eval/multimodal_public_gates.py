@@ -374,8 +374,18 @@ def _statistical_evidence_reasons(
             reasons.append("paired comparison metric_direction must be higher_is_better or lower_is_better")
         elif main_metric_direction is not None and paired_direction != main_metric_direction:
             reasons.append("paired comparison metric_direction disagrees with main_table higher_is_better")
-    if "mean_delta" in paired and _finite_float(paired.get("mean_delta")) is None:
-        reasons.append("paired comparison mean_delta must be a finite number")
+    if "mean_delta" in paired:
+        mean_delta = _finite_float(paired.get("mean_delta"))
+        if mean_delta is None:
+            reasons.append("paired comparison mean_delta must be a finite number")
+        elif mean_delta <= 0.0:
+            reasons.append("paired comparison mean_delta must be positive for claimed improvement")
+    if "paired_bootstrap_ci95" in paired:
+        bootstrap_ci = _finite_interval(paired.get("paired_bootstrap_ci95"))
+        if bootstrap_ci is None:
+            reasons.append("paired comparison paired_bootstrap_ci95 must be a finite length-2 interval")
+        elif bootstrap_ci[0] <= 0.0:
+            reasons.append("paired comparison bootstrap CI must be strictly positive for claimed improvement")
     return reasons
 
 
@@ -552,6 +562,16 @@ def _safe_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _finite_interval(value: Any) -> tuple[float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    low = _finite_float(value[0])
+    high = _finite_float(value[1])
+    if low is None or high is None:
+        return None
+    return (low, high)
 
 
 def _top_prototype_map_differentiates(value: Any) -> bool:
