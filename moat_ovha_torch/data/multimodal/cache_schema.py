@@ -518,7 +518,7 @@ def _validate_feature_version_value(
     value: Any,
     errors: list[str],
 ) -> bool:
-    if not isinstance(value, str) or not value:
+    if not _is_non_empty_string(value):
         errors.append(
             f"{context} feature extractor version for modality {modality_name} "
             "must be a non-empty string"
