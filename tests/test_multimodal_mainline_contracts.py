@@ -1342,6 +1342,34 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
         self.assertIn("TLEO_oracle_gap", report)
         self.assertIn("CATO_oracle_gap", report)
 
+    def test_robustness_transforms_drive_rceo_quality_signal(self):
+        import torch
+
+        from moat_ovha_torch.data.multimodal.transforms import add_gaussian_corruption, apply_modality_dropout
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        batch = _batch(torch)
+        dropped = apply_modality_dropout(batch, "region")
+        corrupted = add_gaussian_corruption(batch, "region", torch.full_like(batch.fields["region"].x, 0.25))
+        model = MultimodalOVHA(
+            field_dims={"text": 4, "region": 4},
+            query_dim=4,
+            output_dim=3,
+            d_model=8,
+        )
+        clean_reliability = model(batch).reliability_prior.modality_reliability
+        dropped_reliability = model(dropped).reliability_prior.modality_reliability
+        corrupted_reliability = model(corrupted).reliability_prior.modality_reliability
+
+        self.assertTrue(torch.allclose(dropped.fields["region"].quality, torch.zeros_like(dropped.fields["region"].quality)))
+        self.assertEqual(int(dropped.fields["region"].mask.sum()), 0)
+        self.assertTrue(bool(dropped.supervision.modality_missing_mask[:, 0].all()))
+        self.assertTrue(torch.all(corrupted.fields["region"].quality < batch.fields["region"].quality))
+        self.assertAlmostEqual(float(corrupted.fields["region"].quality.mean()), 0.75, places=6)
+        self.assertIn("gaussian_noise_strength", corrupted.supervision.corruption_metadata)
+        self.assertLess(float(dropped_reliability[:, 0].mean()), float(clean_reliability[:, 0].mean()))
+        self.assertLess(float(corrupted_reliability[:, 0].mean()), float(clean_reliability[:, 0].mean()))
+
 
 class _ArrayTensor:
     def __init__(self, value):
