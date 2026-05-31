@@ -182,6 +182,11 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                 for line in (layout.root / "supervision" / "alignment_pairs_train.parquet").read_text().splitlines()
                 if line.strip()
             ]
+            failed_train_rows = [
+                json.loads(line)
+                for line in (layout.root / "provenance" / "failed_samples_train.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         payload = json.loads(result.stdout)
@@ -202,6 +207,10 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(region_targets_train.shape, (1, 1))
         self.assertEqual(region_targets_train.tolist(), [[1]])
         self.assertEqual(alignment_rows[0]["target_region_index"], 1)
+        self.assertEqual(
+            failed_train_rows,
+            [{"source_id": "ref-train-failed", "split": "train", "reason": "download_failed"}],
+        )
 
     def test_build_cache_cli_validates_requested_cache_version(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
@@ -1231,7 +1240,7 @@ def _load_script_module(path: Path):
 def _write_refcoco_raw_fixture(raw_root: Path) -> None:
     import numpy as np
 
-    for folder in ("annotations", "features"):
+    for folder in ("annotations", "features", "provenance"):
         (raw_root / folder).mkdir(parents=True, exist_ok=True)
     split_source_ids = {
         "train": ["ref-train-1"],
@@ -1261,6 +1270,10 @@ def _write_refcoco_raw_fixture(raw_root: Path) -> None:
             )
     (raw_root / "annotations" / "refs.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
     (raw_root / "annotations" / "instances.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
+    (raw_root / "provenance" / "failed_samples.jsonl").write_text(
+        json.dumps({"source_id": "ref-train-failed", "split": "train", "reason": "download_failed"}, sort_keys=True)
+        + "\n"
+    )
     np.save(raw_root / "features" / "text_features.npy", np.arange(3 * 4 * 5, dtype=np.float32).reshape(3, 4, 5))
     np.save(raw_root / "features" / "region_features.npy", np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4))
 
