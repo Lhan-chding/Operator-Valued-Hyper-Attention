@@ -32,7 +32,27 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         self.assertEqual(summary["metadata"]["hardware"]["accelerator"], "A800")
         self.assertEqual(summary["reporting_metadata"]["parameter_count"]["text_only"], 1000)
         self.assertEqual(summary["reporting_metadata"]["training_steps"]["ovha_no_cato"], 1000)
+        self.assertEqual(
+            summary["reporting_metadata"]["seed_count_rationale"],
+            "unit-test fixture uses the plan minimum of 3 seeds; production main tables should use 5 seeds",
+        )
         self.assertTrue(summary["reporting_metadata"]["per_seed_table"])
+
+    def test_public_summary_rejects_under_five_seed_main_table_without_rationale(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        rows = _metric_rows()
+        for row in rows:
+            row.pop("seed_count_rationale", None)
+
+        summary = summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        self.assertIn(
+            "reporting_metadata seed_count_rationale required when main table uses fewer than 5 seeds",
+            "\n".join(validation.errors),
+        )
 
     def test_public_summary_reports_lower_is_better_paired_delta_as_positive_improvement(self):
         from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
@@ -487,6 +507,10 @@ def _metric_rows_for_models(models):
                     "frozen_feature_extractor_version": {"text": "clip-text-test", "region": "clip-region-test"},
                     "hardware": {"accelerator": "A800", "wall_clock_hours": 1.5},
                     "raw_metric_path": f"outputs/mock/{model}/seed_{seed}.jsonl",
+                    "seed_count_rationale": (
+                        "unit-test fixture uses the plan minimum of 3 seeds; "
+                        "production main tables should use 5 seeds"
+                    ),
                 }
             )
     return rows
@@ -532,6 +556,10 @@ def _lower_is_better_sentiment_rows():
                     },
                     "hardware": {"accelerator": "A800", "wall_clock_hours": 1.5},
                     "raw_metric_path": f"outputs/mock/{model}/seed_{seed}.jsonl",
+                    "seed_count_rationale": (
+                        "unit-test fixture uses the plan minimum of 3 seeds; "
+                        "production main tables should use 5 seeds"
+                    ),
                 }
             )
     return rows
