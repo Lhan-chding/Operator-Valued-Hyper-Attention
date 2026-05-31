@@ -317,6 +317,19 @@ unzip -q data/raw_multimodal/_downloads/refcoco/refcocog.zip \
   -d data/raw_multimodal/_downloads/refcoco/extracted
 ```
 
+解压后先把 UNC refer annotations 和 COCO instances 统一转成本仓库 `stage_refcoco_raw.py` 需要的 phrase-region records / splits。下面的 `--refs` 路径要按解压后的实际 `refs*.json` / `refs*.p` 文件替换：
+
+```bash
+python scripts/multimodal/build_refcoco_stage_records.py \
+  refcoco \
+  data/raw_multimodal/_downloads/refcoco_stage_inputs \
+  --refs data/raw_multimodal/_downloads/refcoco/extracted/replace_with_refcoco_refs.json \
+  --instances data/raw_multimodal/_downloads/refcoco/extracted/annotations/instances_train2014.json \
+  --candidate-region-source coco_gt_box
+```
+
+这个步骤只生成 `refcoco_phrase_region_records.json` 和 `refcoco_splits.json`；正式训练前仍需要用冻结的 text / region feature extractor 产出与这些 records 顺序完全一致的 `refcoco_text_features.npy` 和 `refcoco_region_features.npy`。
+
 ### 3.2 Flickr30k Entities
 
 优先用 GitHub 拉取 Entities annotations，用 Hugging Face/Xet 下载 Flickr30k images/captions。HF 数据集不是唯一权威源，正式实验前要记录具体 repo、revision 和 license。
