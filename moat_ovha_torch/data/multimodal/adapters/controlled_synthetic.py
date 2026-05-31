@@ -23,6 +23,29 @@ CONTROLLED_MULTIMODAL_FAMILIES = (
 )
 
 CONTROLLED_OPERATOR_ORDER = ("TLEO", "SPO", "LRIO", "CATO")
+CONTROLLED_FAMILY_ACTIVE_OPERATOR = {
+    "tleo_local_evidence": "TLEO",
+    "spo_global_prototype": "SPO",
+    "lrio_low_rank_interaction": "LRIO",
+    "cato_alignment_transport": "CATO",
+    "rceo_reliability_corruption": "LRIO",
+    "mixed_relation_operator": "mixed",
+}
+CONTROLLED_TRUE_ADAPTER_PARAM_KEYS = {
+    "TLEO": ("lengthscale", "local_temperature", "scale", "bias"),
+    "SPO": ("prototype_temperature", "prototype_logits_shift", "scale", "bias"),
+    "LRIO": ("rank_logits", "interaction_temperature", "scale", "bias"),
+    "CATO": ("alignment_temperature", "transport_scale", "scale", "bias"),
+}
+
+
+def required_true_adapter_param_keys_for_family(family: str) -> dict[str, tuple[str, ...]]:
+    if family not in CONTROLLED_FAMILY_ACTIVE_OPERATOR:
+        raise ValueError(f"unknown controlled multimodal family: {family}")
+    active_operator = CONTROLLED_FAMILY_ACTIVE_OPERATOR[family]
+    if active_operator == "mixed":
+        return dict(CONTROLLED_TRUE_ADAPTER_PARAM_KEYS)
+    return {active_operator: CONTROLLED_TRUE_ADAPTER_PARAM_KEYS[active_operator]}
 
 
 @dataclass(frozen=True)
@@ -96,15 +119,29 @@ class ControlledSyntheticMultimodalAdapter:
         candidate_values = _candidate_values(torch, text_x, region_x, audio_x, query_x, self.output_dim)
         router_weights, active = _router_truth(torch, family, batch_size, query_count, device)
         target_y = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
+        true_lengthscale = torch.full((batch_size, query_count, 1), 0.16, device=device)
+        true_rank_logits = torch.zeros(batch_size, query_count, 4, device=device)
+        true_prototype_logits = torch.zeros(batch_size, query_count, 4, device=device)
+        true_alignment_pairs = _alignment_pairs(torch, batch_size, query_count, token_count, device)
+        true_adapter_params = _true_adapter_params(
+            torch,
+            family,
+            batch_size,
+            query_count,
+            device,
+            true_lengthscale=true_lengthscale,
+            true_rank_logits=true_rank_logits,
+            true_prototype_logits=true_prototype_logits,
+        )
         hidden = {
             "true_active_operator": active,
             "true_router_weights": router_weights,
             "true_candidate_values": candidate_values,
-            "true_adapter_params": _true_adapter_params(torch, family, batch_size, query_count, device),
-            "true_alignment_pairs": _alignment_pairs(torch, batch_size, query_count, token_count, device),
-            "true_rank_logits": torch.zeros(batch_size, query_count, 4, device=device),
-            "true_prototype_logits": torch.zeros(batch_size, query_count, 4, device=device),
-            "true_lengthscale": torch.full((batch_size, query_count, 1), 0.16, device=device),
+            "true_adapter_params": true_adapter_params,
+            "true_alignment_pairs": true_alignment_pairs,
+            "true_rank_logits": true_rank_logits,
+            "true_prototype_logits": true_prototype_logits,
+            "true_lengthscale": true_lengthscale,
             "true_reliability": fields["audio"].quality.mean(dim=1),
             "true_corruption_level": torch.full((batch_size, 1), 0.7 if family == "rceo_reliability_corruption" else 0.0, device=device),
         }
@@ -123,7 +160,7 @@ class ControlledSyntheticMultimodalAdapter:
             source_dataset=self.name,
             supervision=SupervisionBank(
                 task_label=None,
-                alignment_pairs=hidden["true_alignment_pairs"] if family == "cato_alignment_transport" else None,
+                alignment_pairs=true_alignment_pairs if family == "cato_alignment_transport" else None,
                 alignment_weights=None,
                 bbox_targets=None,
                 region_targets=None,
@@ -162,17 +199,16 @@ def _candidate_values(torch, text_x, region_x, audio_x, query_x, output_dim: int
 
 
 def _router_truth(torch, family: str, batch_size: int, query_count: int, device: str):
-    active_by_family = {
-        "tleo_local_evidence": 0,
-        "spo_global_prototype": 1,
-        "lrio_low_rank_interaction": 2,
-        "cato_alignment_transport": 3,
-        "rceo_reliability_corruption": 2,
-    }
     if family == "mixed_relation_operator":
         active = torch.arange(query_count, device=device).view(1, query_count).repeat(batch_size, 1) % len(CONTROLLED_OPERATOR_ORDER)
     else:
-        active = torch.full((batch_size, query_count), active_by_family[family], dtype=torch.long, device=device)
+        active_operator = CONTROLLED_FAMILY_ACTIVE_OPERATOR[family]
+        active = torch.full(
+            (batch_size, query_count),
+            CONTROLLED_OPERATOR_ORDER.index(active_operator),
+            dtype=torch.long,
+            device=device,
+        )
     weights = torch.nn.functional.one_hot(active, num_classes=len(CONTROLLED_OPERATOR_ORDER)).float()
     if family == "rceo_reliability_corruption":
         weights = 0.85 * weights + 0.15 / len(CONTROLLED_OPERATOR_ORDER)
@@ -185,11 +221,53 @@ def _quality_for_family(torch, family: str, batch_size: int, token_count: int, d
     return torch.full((batch_size, token_count, 1), value, device=device)
 
 
-def _true_adapter_params(torch, family: str, batch_size: int, query_count: int, device: str):
+def _true_adapter_params(
+    torch,
+    family: str,
+    batch_size: int,
+    query_count: int,
+    device: str,
+    *,
+    true_lengthscale,
+    true_rank_logits,
+    true_prototype_logits,
+):
+    keys_by_operator = required_true_adapter_param_keys_for_family(family)
+    scale = torch.ones(batch_size, query_count, 1, device=device)
+    bias = torch.zeros(batch_size, query_count, 1, device=device)
+    params_by_operator = {
+        "TLEO": {
+            "lengthscale": true_lengthscale,
+            "local_temperature": torch.ones(batch_size, query_count, 1, device=device),
+            "scale": scale,
+            "bias": bias,
+        },
+        "SPO": {
+            "prototype_temperature": torch.ones(batch_size, query_count, 1, device=device),
+            "prototype_logits_shift": true_prototype_logits,
+            "scale": scale,
+            "bias": bias,
+        },
+        "LRIO": {
+            "rank_logits": true_rank_logits,
+            "interaction_temperature": torch.ones(batch_size, query_count, 1, device=device),
+            "scale": scale,
+            "bias": bias,
+        },
+        "CATO": {
+            "alignment_temperature": torch.ones(batch_size, query_count, 1, device=device),
+            "transport_scale": torch.ones(batch_size, query_count, 1, device=device),
+            "scale": scale,
+            "bias": bias,
+        },
+    }
     return {
         "family": family,
-        "scale": torch.ones(batch_size, query_count, 1, device=device),
-        "bias": torch.zeros(batch_size, query_count, 1, device=device),
+        "active_operator": CONTROLLED_FAMILY_ACTIVE_OPERATOR[family],
+        "params_by_operator": {
+            operator: {key: params_by_operator[operator][key] for key in keys}
+            for operator, keys in keys_by_operator.items()
+        },
     }
 
 
