@@ -726,6 +726,33 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_non_list_unvalidated_splits_manifest_entry(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            (layout.root / "splits.json").write_text(
+                json.dumps(
+                    {
+                        "train": ["train-source"],
+                        "test": ["test-source"],
+                        "iid": "iid-source",
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "splits.json iid must be a source_id list",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_non_string_source_ids_in_splits_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
