@@ -544,6 +544,47 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_topconf_main_entry_rejects_wrong_or_failed_public_gate_reports(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_root = Path(tmp) / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+            region_report = {
+                **_passing_region_text_public_gate_report(),
+                "name": "sentiment_emotion_public",
+                "checks": {
+                    **_passing_region_text_public_gate_report()["checks"],
+                    "full_beats_required_strong_baselines": {"passed": False},
+                },
+            }
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=_complete_controlled_public_entry_report(),
+                region_gate_report=region_report,
+                sentiment_gate_report=_passing_sentiment_public_gate_report(),
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("region_text_public gate report name mismatch", joined)
+        self.assertIn("region_text_public gate contains failed check: full_beats_required_strong_baselines", joined)
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
@@ -934,7 +975,9 @@ def _passing_region_text_public_gate_report() -> dict[str, object]:
         "passed": True,
         "checks": {
             "full_beats_same_feature_baseline": {"passed": True},
+            "full_beats_required_strong_baselines": {"passed": True},
             "no_cato_drops": {"passed": True},
+            "step14_public_diagnostics": {"passed": True},
             "robustness_passes": {"passed": True},
             "rceo_reliability_calibrated": {"passed": True},
         },
@@ -947,7 +990,9 @@ def _passing_sentiment_public_gate_report() -> dict[str, object]:
         "name": "sentiment_emotion_public",
         "passed": True,
         "checks": {
+            "full_beats_same_feature_baseline": {"passed": True},
             "full_beats_lmf_or_mult_baseline": {"passed": True},
+            "step14_public_diagnostics": {"passed": True},
             "robustness_passes": {"passed": True},
             "rceo_reliability_calibrated": {"passed": True},
         },
