@@ -215,6 +215,26 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("SPO top prototype differentiation missing", joined)
         self.assertIn("RCEO reliability calibration missing", joined)
 
+    def test_sentiment_gate_requires_rceo_calibration_curve(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        robustness = {
+            **_passing_sentiment_robustness(),
+            "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+        }
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=_summary("sentiment_emotion", "test", full=0.76, baseline=0.74),
+            diagnostics_rows=_passing_sentiment_diagnostics(),
+            ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
+            robustness_summary=robustness,
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn("RCEO reliability calibration curve missing", "\n".join(report["reasons"]))
+
     def test_sentiment_gate_rejects_robustness_without_stress_family_coverage(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
 
