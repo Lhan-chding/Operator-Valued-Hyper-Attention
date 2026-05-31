@@ -62,6 +62,7 @@ FORBIDDEN_MODEL_INPUT_MODALITIES = frozenset(
 )
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 CHECKSUM_MANIFEST_NAME = "checksums.json"
+PSEUDO_LABEL_ALLOWED_SOURCE_SPLITS = frozenset({"train"})
 
 
 @dataclass(frozen=True)
@@ -487,10 +488,26 @@ def _validate_pseudo_label_provenance(
     for split in generated_from:
         if split not in known_splits:
             errors.append(f"pseudo_label_versions.json generated_from_splits contains unknown split: {split}")
+            continue
+        if not _is_allowed_pseudo_label_source_split(split):
+            if _is_test_split_name(split):
+                errors.append("pseudo labels must not be generated from test split")
+            else:
+                errors.append(f"pseudo labels must not be generated from evaluation split: {split}")
     if generated_from and (not isinstance(payload.get("version"), str) or not payload.get("version")):
         errors.append("pseudo_label_versions.json version must be a non-empty string")
-    if "test" in set(generated_from):
-        errors.append("pseudo labels must not be generated from test split")
+
+
+def _is_allowed_pseudo_label_source_split(split: str) -> bool:
+    return _normalized_split_name(split) in PSEUDO_LABEL_ALLOWED_SOURCE_SPLITS
+
+
+def _is_test_split_name(split: str) -> bool:
+    return _normalized_split_name(split) == "test"
+
+
+def _normalized_split_name(split: str) -> str:
+    return split.strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _read_split_manifest_names(layout: MultimodalCacheLayout) -> set[str]:
