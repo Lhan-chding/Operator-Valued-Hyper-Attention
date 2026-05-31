@@ -90,6 +90,34 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "hidden loss is controlled-only"):
             MultimodalExperimentConfig.from_mapping(invalid)
 
+    def test_region_text_public_alignment_ce_requires_declared_alignment_labels(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+
+        base_public = json.loads((ROOT / "configs" / "multimodal_refcoco_public_smoke.json").read_text())
+        missing_alignment_label_contract = {
+            **base_public,
+            "require_public_alignment_labels": False,
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "public_alignment_ce requires require_public_alignment_labels=true",
+        ):
+            MultimodalExperimentConfig.from_mapping(missing_alignment_label_contract)
+
+        contrastive_public = {
+            **base_public,
+            "name": "refcoco_contrastive_public",
+            "require_public_alignment_labels": False,
+            "losses_by_stage": {
+                "T0": ["cache_validation"],
+                "T5": ["task_loss", "public_contrastive_retrieval", "candidate_individual_loss"],
+            },
+        }
+        config = MultimodalExperimentConfig.from_mapping(contrastive_public)
+
+        self.assertIn("public_contrastive_retrieval", config.losses_by_stage["T5"])
+
     def test_same_feature_baseline_registry_matches_plan(self):
         from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task, external_reference_names_for_task
 
