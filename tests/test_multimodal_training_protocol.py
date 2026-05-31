@@ -164,6 +164,83 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
         self.assertIn("hidden loss is controlled-only", joined)
         self.assertIn("weak reliability loss must be explicitly marked", joined)
 
+    def test_public_protocol_rejects_section13_controlled_only_loss_aliases(self):
+        from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
+
+        controlled_only_aliases = (
+            "active_operator_ce",
+            "router_ce_active_operator",
+            "true_active_operator_ce",
+            "adapter_huber_true_params",
+            "true_adapter_params_kl",
+            "true_adapter_params_huber",
+            "cato_alignment_ce",
+            "cato_alignment_kl",
+            "cato_true_alignment_kl",
+            "true_rank_logits_kl",
+            "true_prototype_logits_kl",
+            "tleo_log_lengthscale_huber",
+            "true_lengthscale_huber",
+            "true_reliability_huber",
+            "rceo_reliability_monotonic_loss",
+        )
+
+        for loss_name in controlled_only_aliases:
+            with self.subTest(loss_name=loss_name):
+                report = validate_training_protocol(
+                    {
+                        "task_type": "sentiment_emotion",
+                        "training_stages": ["T0", "T5"],
+                        "losses_by_stage": {
+                            "T0": ["cache_validation"],
+                            "T5": ["task_loss", "candidate_individual_loss", loss_name],
+                        },
+                        "adapter_params_by_candidate": _valid_adapter_params(),
+                    }
+                )
+
+                self.assertFalse(report.ok)
+                self.assertIn(
+                    f"hidden loss is controlled-only and forbidden for public data: {loss_name} in T5",
+                    "\n".join(report.errors),
+                )
+
+    def test_controlled_protocol_accepts_section13_controlled_loss_aliases(self):
+        from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
+
+        report = validate_training_protocol(
+            {
+                "task_type": "controlled_multimodal",
+                "training_stages": ["T0", "T1", "T2", "T3", "T4"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T1": ["task_loss", "candidate_individual_loss"],
+                    "T2": [
+                        "task_loss",
+                        "router_ce_true_active_operator",
+                        "adapter_kl_true_params",
+                        "active_operator_ce",
+                        "adapter_huber_true_params",
+                    ],
+                    "T3": ["task_loss", "router_ce_true_active_operator", "router_ce_active_operator"],
+                    "T4": [
+                        "task_loss",
+                        "cato_alignment_ce",
+                        "cato_alignment_kl",
+                        "lrio_rank_kl",
+                        "spo_prototype_kl",
+                        "tleo_lengthscale_huber",
+                        "tleo_log_lengthscale_huber",
+                        "rceo_reliability_huber",
+                        "rceo_reliability_monotonic_loss",
+                    ],
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+
+        self.assertTrue(report.ok, report.errors)
+
     def test_public_weak_losses_require_structured_marking_metadata(self):
         from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
 
@@ -205,6 +282,40 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
         )
 
         self.assertTrue(marked.ok, marked.errors)
+
+    def test_public_rceo_weak_losses_accept_marked_plan_signals(self):
+        from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
+
+        report = validate_training_protocol(
+            {
+                "task_type": "sentiment_emotion",
+                "training_stages": ["T0", "T5"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T5": [
+                        "task_loss",
+                        "candidate_individual_loss",
+                        "weak_unimodal_entropy_calibration_marked",
+                        "weak_cross_modal_disagreement_marked",
+                    ],
+                },
+                "loss_metadata": {
+                    "weak_unimodal_entropy_calibration_marked": {
+                        "supervision_type": "weak",
+                        "source": "unimodal_entropy_calibration_v1",
+                        "must_report_as": "weak",
+                    },
+                    "weak_cross_modal_disagreement_marked": {
+                        "supervision_type": "weak",
+                        "source": "cross_modal_disagreement_pseudo_label_v1",
+                        "must_report_as": "weak",
+                    },
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+
+        self.assertTrue(report.ok, report.errors)
 
     def test_v1_adapter_params_reject_forbidden_v2_dynamic_params(self):
         from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
