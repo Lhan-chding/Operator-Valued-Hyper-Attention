@@ -83,7 +83,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_shift": -0.25,
-                "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+                "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
                 "required_ablation_degradation": {"passed": True, "reasons": []},
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
@@ -134,7 +134,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_shift": -0.25,
-                "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+                "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
                 "required_ablation_degradation": {"passed": True, "reasons": []},
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
@@ -257,7 +257,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
             robustness_summary={
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
-                "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+                "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_ablation_degradation": {"passed": True, "reasons": []},
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
             },
@@ -278,7 +278,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
             robustness_summary={
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
-                "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+                "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
                 "required_ablation_degradation": {"passed": True, "reasons": []},
             },
@@ -302,7 +302,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
             robustness_summary={
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
-                "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+                "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
                 "required_ablation_degradation": {"passed": True, "reasons": []},
                 "operator_load_shift": {"LRIO": 0.00, "SPO": 0.12},
@@ -327,7 +327,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
             robustness_summary={
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
-                "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+                "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
                 "required_ablation_degradation": {"passed": True, "reasons": []},
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
@@ -1213,11 +1213,25 @@ def _passing_sentiment_robustness() -> dict[str, object]:
         "full_drop_less_than_baseline": True,
         "rceo_reliability_monotonic": True,
         "rceo_reliability_shift": -0.25,
-        "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+        "rceo_reliability_calibration": _passing_rceo_calibration(),
         "required_stress_coverage": {"passed": True, "reasons": []},
         "required_ablation_degradation": {"passed": True, "reasons": []},
         "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
         "candidate_loss_shift": {"LRIO": 0.04, "SPO": -0.06},
+    }
+
+
+def _passing_rceo_calibration() -> dict[str, object]:
+    return {
+        "ece": 0.05,
+        "bin_count": 5,
+        "calibration_curve": [
+            {"bin": 0, "mean_confidence": 0.10, "observed_accuracy": 0.08, "count": 12},
+            {"bin": 1, "mean_confidence": 0.30, "observed_accuracy": 0.28, "count": 14},
+            {"bin": 2, "mean_confidence": 0.50, "observed_accuracy": 0.49, "count": 16},
+            {"bin": 3, "mean_confidence": 0.70, "observed_accuracy": 0.72, "count": 13},
+            {"bin": 4, "mean_confidence": 0.90, "observed_accuracy": 0.88, "count": 11},
+        ],
     }
 
 

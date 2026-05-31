@@ -339,25 +339,64 @@ def _rceo_reliability_calibrated(
     calibration = summary.get("rceo_reliability_calibration")
     if not isinstance(calibration, dict):
         return {"passed": False, "reason": "RCEO reliability calibration missing"}
+    reasons: list[str] = []
     ece = _finite_float(calibration.get("ece", calibration.get("expected_calibration_error")))
     if ece is None:
-        return {"passed": False, "reason": "RCEO reliability calibration missing ECE"}
+        reasons.append("RCEO reliability calibration missing ECE")
     bin_count = _safe_int(calibration.get("bin_count", calibration.get("bins")))
     if bin_count is None or bin_count < min_bin_count:
-        return {
-            "passed": False,
-            "value": ece,
-            "threshold": max_ece,
-            "reason": f"RCEO reliability calibration requires at least {min_bin_count} bins",
-        }
-    passed = ece <= max_ece
+        reasons.append(f"RCEO reliability calibration requires at least {min_bin_count} bins")
+    reasons.extend(_rceo_calibration_curve_reasons(calibration.get("calibration_curve", calibration.get("curve")), min_bin_count=min_bin_count))
+    if ece is not None and ece > max_ece:
+        reasons.append("RCEO reliability calibration ECE exceeds threshold")
+    passed = not reasons
     return {
         "passed": passed,
         "value": ece,
         "threshold": max_ece,
         "bin_count": bin_count,
-        "reason": "RCEO reliability calibration ECE exceeds threshold" if not passed else "",
+        "reason": "; ".join(reasons) if not passed else "",
     }
+
+
+def _rceo_calibration_curve_reasons(value: Any, *, min_bin_count: int) -> list[str]:
+    if not isinstance(value, list) or not value:
+        return ["RCEO reliability calibration curve missing"]
+    if len(value) < min_bin_count:
+        return [f"RCEO reliability calibration curve requires at least {min_bin_count} bins"]
+    reasons: list[str] = []
+    previous_confidence: float | None = None
+    for index, row in enumerate(value):
+        if not isinstance(row, dict):
+            reasons.append("RCEO reliability calibration curve bins must be objects")
+            break
+        confidence = _calibration_bin_value(row, ("mean_confidence", "predicted_reliability", "confidence"))
+        observed = _calibration_bin_value(row, ("observed_accuracy", "observed_reliability", "accuracy"))
+        if confidence is None or observed is None:
+            reasons.append("RCEO reliability calibration curve bins require finite confidence and observed accuracy")
+            break
+        if confidence < 0.0 or confidence > 1.0 or observed < 0.0 or observed > 1.0:
+            reasons.append("RCEO reliability calibration curve values must be probabilities")
+            break
+        if previous_confidence is not None and confidence < previous_confidence:
+            reasons.append("RCEO reliability calibration curve confidence bins must be ordered")
+            break
+        previous_confidence = confidence
+        count = row.get("count")
+        if count is not None and (_positive_integer(count) is None):
+            reasons.append("RCEO reliability calibration curve bin counts must be positive integers")
+            break
+        if "bin" in row and _safe_int(row.get("bin")) != index:
+            reasons.append("RCEO reliability calibration curve bin indices must be contiguous")
+            break
+    return reasons
+
+
+def _calibration_bin_value(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        if key in row:
+            return _finite_float(row.get(key))
+    return None
 
 
 def _entropy_improves(rows: list[dict[str, Any]], candidate: str, key: str) -> dict[str, Any]:
