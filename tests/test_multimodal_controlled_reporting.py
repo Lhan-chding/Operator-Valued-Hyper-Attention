@@ -500,6 +500,37 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertAlmostEqual(summary["corrupted_score"]["ovha_full"], 0.50)
         self.assertAlmostEqual(summary["auc_over_corruption_strength"]["ovha_full"], 0.625)
 
+    def test_robustness_summary_emits_rceo_reliability_calibration_curve(self):
+        from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+        rows = []
+        for strength, predicted, observed in (
+            (0.0, 0.10, 0.00),
+            (0.1, 0.30, 0.40),
+            (0.2, 0.50, 0.60),
+            (0.3, 0.70, 0.80),
+            (0.4, 0.90, 1.00),
+        ):
+            row = _robustness_row("ovha_full", strength, 0.80 - strength, reliability=predicted)
+            row["rceo_observed_reliability"] = observed
+            rows.append(row)
+
+        summary = summarize_robustness_rows(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        calibration = summary["rceo_reliability_calibration"]
+
+        self.assertAlmostEqual(calibration["ece"], 0.10)
+        self.assertEqual(calibration["bin_count"], 5)
+        self.assertEqual(
+            calibration["calibration_curve"],
+            [
+                {"bin": 0, "mean_confidence": 0.10, "observed_accuracy": 0.00, "count": 1},
+                {"bin": 1, "mean_confidence": 0.30, "observed_accuracy": 0.40, "count": 1},
+                {"bin": 2, "mean_confidence": 0.50, "observed_accuracy": 0.60, "count": 1},
+                {"bin": 3, "mean_confidence": 0.70, "observed_accuracy": 0.80, "count": 1},
+                {"bin": 4, "mean_confidence": 0.90, "observed_accuracy": 1.00, "count": 1},
+            ],
+        )
+
     def test_robustness_summary_requires_plan_stress_family_coverage(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 
