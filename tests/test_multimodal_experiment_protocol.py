@@ -598,6 +598,61 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(metrics_rows[0]["stage"], "T5")
         self.assertEqual(metrics_rows[0]["split"], "train")
 
+    def test_sentiment_public_train_smoke_maps_missing_modality_to_rceo_reliability(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for public training smoke")
+
+        import numpy as np
+
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "sentiment_training_artifacts"
+            _write_valid_cmu_mosei_public_cache(cache_root)
+            layout = MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1")
+            missing_mask_path = layout.root / "supervision" / "missing_modality_mask_train.npy"
+            np.save(missing_mask_path, np.array([[False, True, False]], dtype=bool))
+            checksums_path = layout.root / "checksums.json"
+            checksums = json.loads(checksums_path.read_text())
+            checksums[str(missing_mask_path.relative_to(layout.root))] = file_sha256(missing_mask_path)
+            checksums_path.write_text(json.dumps(checksums, sort_keys=True) + "\n")
+            controlled_report_path = tmp_path / "controlled_report.json"
+            controlled_report_path.write_text(
+                json.dumps(_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"), sort_keys=True) + "\n"
+            )
+            command = [
+                sys.executable,
+                str(ROOT / "scripts" / "multimodal" / "run_public_smoke.py"),
+                str(ROOT / "configs" / "multimodal_cmu_mosei_public_smoke.json"),
+                "--cache-root",
+                str(cache_root),
+                "--controlled-report",
+                str(controlled_report_path),
+                "--train-smoke-steps",
+                "1",
+                "--train-split",
+                "train",
+                "--artifact-root",
+                str(artifact_root),
+            ]
+            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            metrics_path = Path(payload["training"]["artifacts"]["metrics"]["path"])
+            metrics_rows = [json.loads(line) for line in metrics_path.read_text().splitlines() if line.strip()]
+
+        self.assertEqual(len(metrics_rows), 1)
+        row = metrics_rows[0]
+        self.assertEqual(row["stage"], "T5")
+        self.assertEqual(row["split"], "train")
+        self.assertEqual(row["rceo_modality_order"], ["text", "audio", "vision"])
+        self.assertEqual(row["rceo_modality_reliability"], {"text": 1.0, "audio": 0.0, "vision": 1.0})
+        self.assertAlmostEqual(row["rceo_reliability_mean"], 2.0 / 3.0)
+        self.assertAlmostEqual(row["rceo_corruption_response"], 1.0 / 3.0)
+
     def test_public_smoke_runner_rejects_unverified_controlled_artifact_descriptors(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
