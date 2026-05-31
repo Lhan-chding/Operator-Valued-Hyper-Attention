@@ -434,6 +434,17 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_public_entry_rejects_controlled_report_without_artifact_provenance(self):
+        from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+
+        report_payload = _complete_controlled_public_entry_report()
+        report_payload.pop("evidence_artifacts", None)
+
+        report = validate_public_entry_requirements("phrase_region_grounding", report_payload)
+
+        self.assertFalse(report.ok)
+        self.assertIn("controlled report evidence_artifacts is required", "\n".join(report.errors))
+
     def test_public_smoke_runner_requires_controlled_report_after_cache_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_root = Path(tmp) / "cache"

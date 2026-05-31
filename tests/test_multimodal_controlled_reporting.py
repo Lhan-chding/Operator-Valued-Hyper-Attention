@@ -788,7 +788,13 @@ class MultimodalControlledReportingTests(unittest.TestCase):
 
         self.assertEqual(controlled.returncode, 0, controlled.stderr)
         self.assertEqual(robustness.returncode, 0, robustness.stderr)
-        self.assertIn("go_no_go", json.loads(controlled.stdout))
+        controlled_payload = json.loads(controlled.stdout)
+        self.assertIn("go_no_go", controlled_payload)
+        artifacts = controlled_payload["evidence_artifacts"]
+        self.assertEqual(artifacts["task"], "controlled_multimodal")
+        self.assertIn("summarize_controlled_report.py", artifacts["generated_by"])
+        self.assertRegex(artifacts["controlled_rows"]["sha256"], r"^[a-f0-9]{64}$")
+        self.assertRegex(artifacts["diagnostics_report"]["sha256"], r"^[a-f0-9]{64}$")
         self.assertIn("relative_drop", json.loads(robustness.stdout))
 
 
