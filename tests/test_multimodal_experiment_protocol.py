@@ -602,6 +602,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(len(metrics_rows), 1)
         self.assertEqual(metrics_rows[0]["stage"], "T5")
         self.assertEqual(metrics_rows[0]["split"], "train")
+        self.assertGreater(metrics_rows[0]["public_alignment_ce"], 0.0)
         self.assertEqual(len(diagnostics_rows), 1)
         self.assertEqual(diagnostics_summary["artifact_type"], "public_smoke_diagnostics_summary")
         self.assertEqual(diagnostics_summary["source_rows_path"], str(diagnostics_path))
