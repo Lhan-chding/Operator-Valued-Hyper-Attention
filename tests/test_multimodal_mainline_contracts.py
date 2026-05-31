@@ -24,7 +24,9 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "flickr30k_entities.py",
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "visual_genome.py",
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "cmu_mosei.py",
+            ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "cmu_mosi.py",
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "meld.py",
+            ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "iemocap.py",
             ROOT / "moat_ovha_torch" / "models" / "multimodal" / "ovha_multimodal.py",
             ROOT / "scripts" / "multimodal" / "validate_cache.py",
         ]
@@ -141,6 +143,8 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
     def test_public_dataset_adapters_expose_cache_required_supervision_shards(self):
         from moat_ovha_torch.data.multimodal.adapters import (
             CMUMOSEIAdapter,
+            CMUMOSIAdapter,
+            IEMOCAPAdapter,
             Flickr30kEntitiesAdapter,
             MELDAdapter,
             RefCOCOAdapter,
@@ -156,7 +160,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                     self.assertEqual(supervision.bbox_targets_path, cache_root / "bbox_targets_train.npy")
                     self.assertEqual(supervision.region_targets_path, cache_root / "region_targets_train.npy")
 
-            for adapter in (CMUMOSEIAdapter(), MELDAdapter()):
+            for adapter in (CMUMOSEIAdapter(), CMUMOSIAdapter(), MELDAdapter(), IEMOCAPAdapter()):
                 with self.subTest(adapter=adapter.name):
                     supervision = adapter.extract_supervision({"cache_root": cache_root}, "train")
                     self.assertEqual(supervision.task_label_path, cache_root / "sentiment_train.npy")
@@ -168,7 +172,10 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
 
     def test_public_dataset_adapters_use_dataset_specific_raw_manifests(self):
         from moat_ovha_torch.data.multimodal.adapters import (
+            CMUMOSEIAdapter,
+            CMUMOSIAdapter,
             Flickr30kEntitiesAdapter,
+            IEMOCAPAdapter,
             MELDAdapter,
             MissingMultimodalDataError,
         )
@@ -190,6 +197,63 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             self.assertIn("labels/emotion.npy", meld_message)
             self.assertIn("metadata/dialogues.json", meld_message)
             self.assertNotIn("labels/sentiment.npy", meld_message)
+
+            sentiment_manifest_expectations = {
+                "cmu_mosei": (
+                    CMUMOSEIAdapter(),
+                    (
+                        "labels/sentiment.npy",
+                        "labels/emotion.npy",
+                        "metadata/utterances.json",
+                        "metadata/dialogues.json",
+                        "metadata/feature_versions.json",
+                        "metadata/missing_modality_mask.npy",
+                        "metadata/corruption_transforms.json",
+                    ),
+                ),
+                "cmu_mosi": (
+                    CMUMOSIAdapter(),
+                    (
+                        "labels/sentiment.npy",
+                        "labels/emotion.npy",
+                        "metadata/utterances.json",
+                        "metadata/dialogues.json",
+                        "metadata/feature_versions.json",
+                        "metadata/missing_modality_mask.npy",
+                        "metadata/corruption_transforms.json",
+                    ),
+                ),
+                "meld": (
+                    MELDAdapter(),
+                    (
+                        "labels/emotion.npy",
+                        "metadata/dialogues.json",
+                        "metadata/feature_versions.json",
+                        "metadata/missing_modality_mask.npy",
+                        "metadata/corruption_transforms.json",
+                    ),
+                ),
+                "iemocap": (
+                    IEMOCAPAdapter(),
+                    (
+                        "labels/sentiment.npy",
+                        "labels/emotion.npy",
+                        "metadata/sessions.json",
+                        "metadata/speakers.json",
+                        "metadata/dialogues.json",
+                        "metadata/feature_versions.json",
+                        "metadata/missing_modality_mask.npy",
+                        "metadata/corruption_transforms.json",
+                    ),
+                ),
+            }
+            for dataset_name, (adapter, required_paths) in sentiment_manifest_expectations.items():
+                with self.subTest(dataset_name=dataset_name):
+                    with self.assertRaises(MissingMultimodalDataError) as error:
+                        adapter.discover_raw(raw_root)
+                    message = str(error.exception)
+                    for required_path in required_paths:
+                        self.assertIn(required_path, message)
 
     def test_pde_feasibility_note_uses_non_main_claim_framing(self):
         note = (ROOT / "reports" / "pdebench_architecture_feasibility_note.md").read_text()
