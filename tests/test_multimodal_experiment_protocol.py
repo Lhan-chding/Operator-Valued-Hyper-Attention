@@ -2013,12 +2013,16 @@ def _gate_evidence_artifacts(task: str, artifact_root: Path | None = None) -> di
         statistics = artifact_root / f"{task}_statistics_summary.json"
         diagnostics = artifact_root / f"{task}_diagnostics.jsonl"
         robustness = artifact_root / f"{task}_robustness_summary.json"
+        robustness_rows = artifact_root / f"{task}_robustness_rows.jsonl"
         raw_metrics = artifact_root / f"{task}_raw_metrics_seed1.jsonl"
         statistics.write_text(
             json.dumps(_gate_statistics_summary(task, raw_metrics), sort_keys=True)
             + "\n"
         )
         diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in _gate_diagnostic_rows(task)) + "\n")
+        robustness_rows.write_text(
+            "\n".join(json.dumps(row, sort_keys=True) for row in _gate_robustness_rows()) + "\n"
+        )
         robustness.write_text(json.dumps(_gate_robustness_summary(task), sort_keys=True) + "\n")
         raw_metrics.write_text(json.dumps({"task": task, "seed": 1, "score": 1.0}, sort_keys=True) + "\n")
         return {
@@ -2028,6 +2032,7 @@ def _gate_evidence_artifacts(task: str, artifact_root: Path | None = None) -> di
             "statistics_summary": {"path": str(statistics), "sha256": file_sha256(statistics)},
             "diagnostics": {"path": str(diagnostics), "sha256": file_sha256(diagnostics)},
             "robustness_summary": {"path": str(robustness), "sha256": file_sha256(robustness)},
+            "robustness_rows": {"path": str(robustness_rows), "sha256": file_sha256(robustness_rows)},
             "raw_metrics": [{"path": str(raw_metrics), "sha256": file_sha256(raw_metrics)}],
         }
     return {
@@ -2037,6 +2042,7 @@ def _gate_evidence_artifacts(task: str, artifact_root: Path | None = None) -> di
         "statistics_summary": {"path": f"artifacts/{task}_statistics_summary.json", "sha256": "a" * 64},
         "diagnostics": {"path": f"artifacts/{task}_diagnostics.jsonl", "sha256": "b" * 64},
         "robustness_summary": {"path": f"artifacts/{task}_robustness_summary.json", "sha256": "c" * 64},
+        "robustness_rows": {"path": f"artifacts/{task}_robustness_rows.jsonl", "sha256": "e" * 64},
         "raw_metrics": [{"path": f"artifacts/{task}_raw_metrics_seed1.jsonl", "sha256": "d" * 64}],
     }
 
@@ -2362,6 +2368,37 @@ def _gate_robustness_summary(task: str) -> dict[str, object]:
             ],
         },
     }
+
+
+def _gate_robustness_rows() -> list[dict[str, object]]:
+    return [
+        {
+            "model": "ovha_full",
+            "corruption_type": "image_blur",
+            "corruption_strength": 0.0,
+            "score": 0.75,
+            "rceo_reliability": 0.90,
+        },
+        {
+            "model": "ovha_full",
+            "corruption_type": "image_blur",
+            "corruption_strength": 0.5,
+            "score": 0.69,
+            "rceo_reliability": 0.65,
+        },
+        {
+            "model": "cross_attention_transformer",
+            "corruption_type": "image_blur",
+            "corruption_strength": 0.0,
+            "score": 0.75,
+        },
+        {
+            "model": "cross_attention_transformer",
+            "corruption_type": "image_blur",
+            "corruption_strength": 0.5,
+            "score": 0.63,
+        },
+    ]
 
 
 def _complete_diagnostic_row() -> dict[str, object]:

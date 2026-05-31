@@ -60,7 +60,7 @@ SENTIMENT_TOPCONF_CHECKS = (
     "rceo_reliability_calibrated",
     "robustness_passes",
 )
-TOPCONF_GATE_EVIDENCE_ARTIFACTS = ("statistics_summary", "diagnostics", "robustness_summary")
+TOPCONF_GATE_EVIDENCE_ARTIFACTS = ("statistics_summary", "diagnostics", "robustness_summary", "robustness_rows")
 _SHA256_HEX_RE = re.compile(r"^[a-f0-9]{64}$")
 _EXPECTED_GATE_TASK_TYPES = {
     "region_text_public": REGION_TEXT_TASK_TYPES,
@@ -535,6 +535,8 @@ def _require_gate_evidence_artifacts(label: str, evidence: Any, errors: list[str
         _validate_diagnostics_artifact_content(label, artifact_paths["diagnostics"], errors)
     if "robustness_summary" in artifact_paths:
         _validate_robustness_artifact_content(label, artifact_paths["robustness_summary"], errors)
+    if "robustness_rows" in artifact_paths:
+        _validate_robustness_rows_artifact_content(label, artifact_paths["robustness_rows"], errors)
     if (
         isinstance(task, str)
         and _non_empty_text(evidence.get("split"))
@@ -965,6 +967,12 @@ def _validate_robustness_artifact_content(label: str, path: Path, errors: list[s
         errors.append(f"{label} gate robustness_summary missing required ablation degradation pass")
     if not isinstance(summary.get("rceo_reliability_calibration"), Mapping):
         errors.append(f"{label} gate robustness_summary missing RCEO reliability calibration")
+
+
+def _validate_robustness_rows_artifact_content(label: str, path: Path, errors: list[str]) -> None:
+    rows = _read_jsonl_artifact(label, "robustness_rows", path, errors)
+    if not rows:
+        errors.append(f"{label} gate robustness_rows artifact must contain JSONL rows")
 
 
 def _validate_robustness_stress_coverage(label: str, coverage: Mapping[str, Any], errors: list[str]) -> None:

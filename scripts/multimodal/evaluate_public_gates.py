@@ -29,6 +29,7 @@ def main() -> int:
     parser.add_argument("--no-spo-score", type=float)
     parser.add_argument("--no-rceo-score", type=float)
     parser.add_argument("--robustness-summary", type=Path)
+    parser.add_argument("--robustness-rows", type=Path)
     args = parser.parse_args()
 
     statistics = json.loads(args.statistics_summary.read_text())
@@ -62,6 +63,7 @@ def main() -> int:
         statistics_path=args.statistics_summary,
         diagnostics_path=args.diagnostics_jsonl,
         robustness_path=args.robustness_summary,
+        robustness_rows_path=args.robustness_rows,
         task=args.task,
         split=args.split,
     )
@@ -84,6 +86,7 @@ def _evidence_artifacts(
     statistics_path: Path,
     diagnostics_path: Path,
     robustness_path: Path | None,
+    robustness_rows_path: Path | None,
     task: str,
     split: str,
 ) -> dict[str, Any]:
@@ -100,6 +103,8 @@ def _evidence_artifacts(
     }
     if robustness_path is not None:
         evidence["robustness_summary"] = _artifact_descriptor(robustness_path)
+    if robustness_rows_path is not None:
+        evidence["robustness_rows"] = _artifact_descriptor(robustness_rows_path)
     return evidence
 
 

@@ -1266,12 +1266,17 @@ class MultimodalPublicGateTests(unittest.TestCase):
             stats_path = root / "stats.json"
             diagnostics_path = root / "diagnostics.jsonl"
             robustness_path = root / "robustness.json"
+            robustness_rows_path = root / "robustness_rows.jsonl"
             raw_metrics_path = root / "raw_metrics_seed1.jsonl"
             summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
             summary["metadata"] = {"raw_metric_paths": [str(raw_metrics_path)]}
             raw_metrics_path.write_text(json.dumps({"seed": 1, "score": 0.80}) + "\n")
             stats_path.write_text(json.dumps(summary))
             robustness_path.write_text(json.dumps(_passing_sentiment_robustness()))
+            robustness_rows_path.write_text(
+                json.dumps({"model": "ovha_full", "corruption_type": "image_blur", "corruption_strength": 0.0, "score": 0.80})
+                + "\n"
+            )
             diagnostics_path.write_text(
                 json.dumps(
                     _diagnostic(
@@ -1322,6 +1327,8 @@ class MultimodalPublicGateTests(unittest.TestCase):
                     str(summary["main_table"]["phrase_region_grounding"]["test"]["ovha_no_cato"]["mean"]),
                     "--robustness-summary",
                     str(robustness_path),
+                    "--robustness-rows",
+                    str(robustness_rows_path),
                 ],
                 cwd=ROOT,
                 text=True,
@@ -1339,6 +1346,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertRegex(artifacts["statistics_summary"]["sha256"], r"^[a-f0-9]{64}$")
         self.assertRegex(artifacts["diagnostics"]["sha256"], r"^[a-f0-9]{64}$")
         self.assertRegex(artifacts["robustness_summary"]["sha256"], r"^[a-f0-9]{64}$")
+        self.assertRegex(artifacts["robustness_rows"]["sha256"], r"^[a-f0-9]{64}$")
         self.assertEqual(len(artifacts["raw_metrics"]), 1)
         self.assertRegex(artifacts["raw_metrics"][0]["sha256"], r"^[a-f0-9]{64}$")
 
