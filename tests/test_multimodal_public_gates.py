@@ -135,6 +135,29 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertTrue(report["checks"]["no_lrio_drops"]["passed"], report["reasons"])
         self.assertGreater(report["checks"]["full_beats_same_feature_baseline"]["value"], 0.0)
 
+    def test_sentiment_gate_requires_full_to_beat_lmf_or_mult_baseline(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        summary = _summary("sentiment_emotion", "test", full=0.76, baseline=0.74)
+        models = summary["main_table"]["sentiment_emotion"]["test"]
+        models["tfn_lmf"]["mean"] = 0.78
+        models["mult_style_crossmodal_transformer"]["mean"] = 0.79
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_sentiment_diagnostics(),
+            ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
+            robustness_summary=_passing_sentiment_robustness(),
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "full model must beat at least one required sentiment baseline: tfn_lmf or mult_style_crossmodal_transformer",
+            "\n".join(report["reasons"]),
+        )
+
     def test_sentiment_gate_rejects_missing_plan_diagnostics_and_calibration(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
 
