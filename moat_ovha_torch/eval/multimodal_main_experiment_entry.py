@@ -609,10 +609,110 @@ def _validate_statistics_summary_content(
     if not isinstance(split_table, Mapping) or not split_table:
         errors.append(f"{label} gate statistics_summary missing main_table entry for task/split: {task}/{split}")
 
-    referenced_paths = _statistics_raw_metric_paths(summary, base_dir=path.parent)
+    base_dir = path.parent
+    referenced_paths = _statistics_raw_metric_paths(summary, base_dir=base_dir)
     for index, raw_metric_path in enumerate(raw_metric_paths):
         if raw_metric_path.resolve() not in referenced_paths:
             errors.append(f"{label} gate statistics_summary does not reference raw_metrics[{index}]")
+        _validate_raw_metrics_cover_statistics_appendix(
+            label,
+            index,
+            raw_metric_path,
+            summary,
+            base_dir=base_dir,
+            errors=errors,
+        )
+
+
+def _validate_raw_metrics_cover_statistics_appendix(
+    label: str,
+    index: int,
+    raw_metric_path: Path,
+    summary: Mapping[str, Any],
+    *,
+    base_dir: Path,
+    errors: list[str],
+) -> None:
+    rows = _read_jsonl_artifact(label, f"raw_metrics[{index}]", raw_metric_path, errors)
+    if not rows:
+        errors.append(f"{label} gate raw_metrics[{index}] artifact must contain JSONL rows")
+        return
+    appendix_rows = _per_seed_rows_for_raw_metric(summary, raw_metric_path, base_dir=base_dir)
+    expected = _metric_row_signature(appendix_rows)
+    observed = _metric_row_signature(rows)
+    if not expected:
+        return
+    if not expected.issubset(observed):
+        errors.append(f"{label} gate raw_metrics[{index}] rows must cover statistics_summary per_seed_appendix")
+
+
+def _per_seed_rows_for_raw_metric(
+    summary: Mapping[str, Any],
+    raw_metric_path: Path,
+    *,
+    base_dir: Path,
+) -> list[Mapping[str, Any]]:
+    appendix_rows = summary.get("per_seed_appendix")
+    if not isinstance(appendix_rows, list):
+        return []
+    resolved_raw_metric_path = raw_metric_path.resolve()
+    matched_rows: list[Mapping[str, Any]] = []
+    for row in appendix_rows:
+        if not isinstance(row, Mapping):
+            continue
+        raw_path = row.get("raw_metric_path")
+        if not _non_empty_text(raw_path):
+            continue
+        if _resolve_artifact_path(str(raw_path), base_dir=base_dir) == resolved_raw_metric_path:
+            matched_rows.append(row)
+    return matched_rows
+
+
+def _metric_row_signature(rows: Any) -> set[tuple[str, str, str, int, float]]:
+    if not isinstance(rows, list):
+        return set()
+    signature: set[tuple[str, str, str, int, float]] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        if not (
+            _non_empty_text(row.get("task"))
+            and _non_empty_text(row.get("split"))
+            and _non_empty_text(row.get("model"))
+        ):
+            continue
+        seed = _integer_value(row.get("seed"))
+        score = _finite_float(row.get("score"))
+        if seed is None or score is None:
+            continue
+        signature.add(
+            (
+                str(row.get("task")),
+                str(row.get("split")),
+                str(row.get("model")),
+                seed,
+                score,
+            )
+        )
+    return signature
+
+
+def _integer_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return int(stripped)
+        except ValueError:
+            return None
+    return None
 
 
 def _statistics_raw_metric_paths(summary: Mapping[str, Any], *, base_dir: Path) -> set[Path]:

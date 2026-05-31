@@ -2110,16 +2110,17 @@ def _gate_evidence_artifacts(task: str, artifact_root: Path | None = None) -> di
         robustness = artifact_root / f"{task}_robustness_summary.json"
         robustness_rows = artifact_root / f"{task}_robustness_rows.jsonl"
         raw_metrics = artifact_root / f"{task}_raw_metrics_seed1.jsonl"
-        statistics.write_text(
-            json.dumps(_gate_statistics_summary(task, raw_metrics), sort_keys=True)
-            + "\n"
-        )
+        statistics_summary = _gate_statistics_summary(task, raw_metrics)
+        statistics.write_text(json.dumps(statistics_summary, sort_keys=True) + "\n")
         diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in _gate_diagnostic_rows(task)) + "\n")
         robustness_rows.write_text(
             "\n".join(json.dumps(row, sort_keys=True) for row in _gate_robustness_rows()) + "\n"
         )
         robustness.write_text(json.dumps(_gate_robustness_summary(task), sort_keys=True) + "\n")
-        raw_metrics.write_text(json.dumps({"task": task, "seed": 1, "score": 1.0}, sort_keys=True) + "\n")
+        raw_metrics.write_text(
+            "\n".join(json.dumps(row, sort_keys=True) for row in statistics_summary["per_seed_appendix"])
+            + "\n"
+        )
         return {
             "task": task,
             "split": "test",
