@@ -667,6 +667,8 @@ def _validate_failed_sample_manifests(
             if payload.get("split") != split:
                 errors.append(f"{path.name} line {line_number} split must match {split}")
             source_id = payload.get("source_id")
+            if isinstance(source_id, str) and (not source_id or source_id != source_id.strip()):
+                errors.append(f"{path.name} line {line_number} source_id must be a non-empty normalized source_id")
             if isinstance(source_id, str) and source_id and source_id in retained_source_ids:
                 errors.append(
                     f"{path.name} source_id must not also appear in retained "
