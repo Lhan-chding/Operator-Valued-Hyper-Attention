@@ -939,6 +939,12 @@ def _validate_supervision_artifacts(
     checksums: dict[str, Any] | None,
     errors: list[str],
 ) -> None:
+    for split in splits:
+        weak_label_path = layout.root / "supervision" / WEAK_LABEL_SUPERVISION_PATTERN.format(split=split)
+        if weak_label_path.exists() and checksums:
+            weak_label_relative = str(weak_label_path.relative_to(layout.root))
+            if weak_label_relative not in checksums:
+                errors.append(f"checksums.json missing hash for weak label artifact: {weak_label_relative}")
     if not isinstance(data_card, dict) or not data_card:
         return
     for split in splits:
