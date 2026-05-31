@@ -1415,6 +1415,34 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
 
         self.assertTrue(torch.equal(output.logit_parts["memory"].argmax(dim=-1), torch.arange(4).view(1, 4)))
 
+    def test_evidence_encoder_uses_explicit_query_relation_code_as_router_prior(self):
+        import torch
+
+        from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import ControlledSyntheticMultimodalAdapter
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceEncoder
+
+        batch = ControlledSyntheticMultimodalAdapter(seed=123, field_dim=4, output_dim=3).sample_batch(
+            family="mixed_relation_operator",
+            batch_size=2,
+            query_count=4,
+            device="cpu",
+        )
+        encoder = MultimodalEvidenceEncoder(
+            field_dims={"text": 4, "region": 4, "audio": 4},
+            query_dim=4,
+            d_model=8,
+        )
+
+        evidence = encoder(batch)
+
+        self.assertTrue(
+            torch.equal(
+                evidence.candidate_evidence_logits.argmax(dim=-1),
+                batch.hidden["true_active_operator"],
+            )
+        )
+        self.assertNotIn("true_active_operator", str(batch.model_inputs()))
+
     def test_oracle_matrix_true_true_reconstructs_controlled_targets(self):
         import torch
 
