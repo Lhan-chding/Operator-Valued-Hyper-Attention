@@ -23,6 +23,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             ROOT / "moat_ovha_torch" / "models" / "multimodal" / "baselines.py",
             ROOT / "moat_ovha_torch" / "eval" / "multimodal_diagnostics.py",
             ROOT / "scripts" / "multimodal" / "run_public_smoke.py",
+            ROOT / "scripts" / "multimodal" / "run_robustness_stress_smoke.py",
             ROOT / "scripts" / "multimodal" / "summarize_diagnostics.py",
         ]
         for path in expected:
@@ -743,6 +744,73 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn(
             "not valid top-conference robustness evidence",
             smoke_robustness_summary["evidence_limitations"],
+        )
+
+    def test_robustness_stress_smoke_cli_generates_step6_rows_from_public_raw_metrics(self):
+        from moat_ovha_torch.eval.multimodal_robustness import DEFAULT_REQUIRED_STRESS_TARGETS
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_metrics = tmp_path / "raw_metrics.jsonl"
+            output_rows = tmp_path / "robustness_rows.jsonl"
+            output_summary = tmp_path / "robustness_summary.json"
+            rows = _robustness_stress_raw_metric_rows()
+            raw_metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "run_robustness_stress_smoke.py"),
+                    str(ROOT / "configs" / "multimodal_robustness_smoke.json"),
+                    "--raw-metrics",
+                    str(raw_metrics),
+                    "--output-rows",
+                    str(output_rows),
+                    "--output-summary",
+                    str(output_summary),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            stress_rows = [json.loads(line) for line in output_rows.read_text().splitlines() if line.strip()]
+            summary = json.loads(output_summary.read_text())
+
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "public_robustness_stress_smoke")
+        self.assertEqual(payload["artifacts"]["robustness_rows"]["path"], str(output_rows))
+        self.assertEqual(payload["artifacts"]["robustness_summary"]["path"], str(output_summary))
+        self.assertEqual(payload["stress_family_count"], len(DEFAULT_REQUIRED_STRESS_TARGETS))
+        self.assertEqual(
+            len(stress_rows),
+            len(_robustness_stress_raw_metric_rows()) * (1 + len(DEFAULT_REQUIRED_STRESS_TARGETS)),
+        )
+        self.assertTrue(all(row["artifact_type"] == "public_robustness_stress_smoke_row" for row in stress_rows))
+        self.assertTrue(all(row["not_topconf_main_table"] for row in stress_rows))
+        self.assertTrue(
+            all(row["evidence_scope"] == "robustness_stress_smoke_protocol_only_not_topconf_gate" for row in stress_rows)
+        )
+        observed = set(summary["required_stress_coverage"]["observed"])
+        self.assertTrue(set(DEFAULT_REQUIRED_STRESS_TARGETS).issubset(observed))
+        self.assertTrue(summary["required_stress_coverage"]["passed"], summary["required_stress_coverage"])
+        self.assertEqual(summary["robustness_significance"]["common_seed_count"], 3)
+        self.assertGreater(summary["robustness_significance"]["drop_delta"], 0.0)
+        self.assertIn("hard_negative_caption_mismatch", {row["corruption_type"] for row in stress_rows})
+        mismatch_row = next(row for row in stress_rows if row["corruption_type"] == "hard_negative_caption_mismatch")
+        self.assertIn("mismatch_source_id", mismatch_row)
+        missing_audio = next(row for row in stress_rows if row["corruption_type"] == "missing_audio")
+        self.assertEqual(missing_audio["missing_modalities"], ["audio"])
+        self.assertEqual(set(missing_audio["router_load_by_candidate"]), {"TLEO", "SPO", "LRIO", "CATO"})
+        self.assertEqual(set(missing_audio["candidate_loss"]), {"TLEO", "SPO", "LRIO", "CATO"})
+        self.assertEqual(summary["artifact_type"], "public_robustness_stress_smoke_summary")
+        self.assertEqual(summary["source_rows_path"], str(output_rows))
+        self.assertIn(
+            "not valid top-conference robustness evidence",
+            summary["evidence_limitations"],
         )
 
     def test_public_smoke_runner_can_execute_all_config_seeds_for_dev_multiseed_evidence(self):
@@ -3195,6 +3263,65 @@ def _gate_robustness_rows() -> list[dict[str, object]]:
             },
         ]
     )
+    return rows
+
+
+def _robustness_stress_raw_metric_rows() -> list[dict[str, object]]:
+    corruptions = [
+        "missing_text",
+        "missing_vision",
+        "missing_audio",
+        "image_blur",
+        "image_crop",
+        "image_occlusion",
+        "audio_noise",
+        "audio_masking",
+        "text_token_mask",
+        "text_paraphrase",
+        "hard_negative_caption_mismatch",
+        "hard_negative_region_mismatch",
+        "hard_negative_audio_mismatch",
+    ]
+    model_drops = {
+        "ovha_full": 0.06,
+        "cross_attention_transformer": 0.18,
+        "ovha_no_rceo": 0.20,
+        "ovha_no_evidence_router": 0.22,
+    }
+    rows = []
+    for seed, clean_score in ((401, 0.80), (402, 0.78), (403, 0.76)):
+        for model, drop in model_drops.items():
+            stress_scores = {corruption: clean_score * (1.0 - drop) for corruption in corruptions}
+            reliability = {
+                corruption: 0.90 if corruption.startswith("missing_") and model != "ovha_full" else 0.55
+                for corruption in corruptions
+            }
+            reliability.update({corruption: 0.62 for corruption in corruptions if model == "ovha_full"})
+            rows.append(
+                {
+                    "artifact_type": "public_raw_metric_fixture",
+                    "dataset": "refcoco",
+                    "task": "phrase_region_grounding",
+                    "model": model,
+                    "split": "test",
+                    "seed": seed,
+                    "source_id": f"refcoco-{seed}-{model}",
+                    "metric_name": "acc_at_0_5",
+                    "score": clean_score,
+                    "higher_is_better": True,
+                    "public_metrics": {
+                        "clean_robustness_score": clean_score,
+                        "robustness_score_by_corruption_type": stress_scores,
+                        "corruption_strength_by_type": {corruption: 0.5 for corruption in corruptions},
+                        "rceo_reliability_by_corruption_type": reliability,
+                        "router_load_by_corruption_type": {
+                            corruption: {"TLEO": 0.20, "SPO": 0.35, "LRIO": 0.25, "CATO": 0.20}
+                            for corruption in corruptions
+                        },
+                    },
+                    "raw_metric_path": "raw_metrics.jsonl",
+                }
+            )
     return rows
 
 
