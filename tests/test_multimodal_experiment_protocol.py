@@ -680,6 +680,7 @@ def _complete_controlled_public_entry_report() -> dict[str, object]:
         "LRIO collapse",
         "CATO collapse",
         "Router gate",
+        "Router decomposition ablations",
         "RCEO gate",
         "Memory gate",
         "Adapter gate",
@@ -719,6 +720,10 @@ def _complete_controlled_family_row(*, rceo: bool = False) -> dict[str, object]:
         "SPO_oracle_gap": 0.1,
         "LRIO_oracle_gap": 0.1,
         "CATO_oracle_gap": 0.1,
+        "no_evidence_router_delta": 0.1,
+        "no_reliability_prior_delta": 0.1,
+        "memory_only_router_delta": 0.1,
+        "evidence_only_router_delta": 0.1,
     }
     if rceo:
         row["rceo_prior_effect"] = 0.1
