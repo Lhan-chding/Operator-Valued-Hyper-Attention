@@ -177,6 +177,13 @@ def _validate_controlled_report_matches_artifacts(
         recomputed_row = recomputed_families.get(family)
         if not isinstance(supplied_row, Mapping) or not isinstance(recomputed_row, Mapping):
             continue
+        _validate_controlled_report_field_matches_artifacts(
+            family,
+            "stackability_passed",
+            supplied_row,
+            recomputed_row,
+            errors,
+        )
         for key in _required_controlled_diagnostic_keys(family):
             _validate_controlled_report_field_matches_artifacts(family, key, supplied_row, recomputed_row, errors)
         _validate_controlled_report_oracle_matrix_matches_artifacts(
