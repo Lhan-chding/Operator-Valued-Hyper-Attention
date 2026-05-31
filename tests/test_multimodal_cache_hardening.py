@@ -800,6 +800,28 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_blank_data_card_tasks(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                data_card_overrides={"tasks": ["   "]},
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "data_card.json tasks must be a non-empty list of strings",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_source_ids_that_disagree_with_splits_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
