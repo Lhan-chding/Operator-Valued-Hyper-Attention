@@ -450,6 +450,10 @@ def _robustness_passes(
     summary_baseline_model = str(summary.get("baseline_model") or baseline_model)
     metric_reasons = _robustness_metric_reasons(summary, summary_full_model, summary_baseline_model)
     reliability_shift_reasons = _rceo_reliability_shift_reasons(summary.get("rceo_reliability_shift"))
+    reliability_curve_reasons = _rceo_reliability_curve_reasons(
+        summary.get("rceo_reliability_curve"),
+        summary.get("rceo_reliability_shift"),
+    )
     operator_load_shift_reasons = _operator_load_shift_reasons(summary.get("operator_load_shift"))
     candidate_loss_shift_reasons = _candidate_loss_shift_reasons(summary.get("candidate_loss_shift"))
     ablation_degradation_reasons = _required_robustness_ablation_reasons(ablations)
@@ -459,6 +463,7 @@ def _robustness_passes(
         and coverage_pass
         and not metric_reasons
         and not reliability_shift_reasons
+        and not reliability_curve_reasons
         and not operator_load_shift_reasons
         and not candidate_loss_shift_reasons
         and not ablation_degradation_reasons
@@ -472,6 +477,7 @@ def _robustness_passes(
         reason_parts.append("robustness stress family coverage missing")
     reason_parts.extend(metric_reasons)
     reason_parts.extend(reliability_shift_reasons)
+    reason_parts.extend(reliability_curve_reasons)
     reason_parts.extend(operator_load_shift_reasons)
     reason_parts.extend(candidate_loss_shift_reasons)
     reason_parts.extend(ablation_degradation_reasons)
@@ -551,6 +557,51 @@ def _rceo_reliability_shift_reasons(value: Any, *, minimum_drop: float = 0.05) -
     if shift > -minimum_drop:
         return ["robustness RCEO reliability shift must be a finite negative drop under corruption"]
     return []
+
+
+def _rceo_reliability_curve_reasons(
+    value: Any,
+    shift_value: Any,
+    *,
+    minimum_drop: float = 0.05,
+) -> list[str]:
+    if not isinstance(value, list) or len(value) < 2:
+        return ["robustness RCEO reliability curve missing"]
+    reasons: list[str] = []
+    previous_strength: float | None = None
+    previous_reliability: float | None = None
+    parsed: list[tuple[float, float]] = []
+    for index, point in enumerate(value):
+        if not isinstance(point, dict):
+            reasons.append("robustness RCEO reliability curve points must be objects")
+            break
+        strength = _finite_float(point.get("corruption_strength"))
+        reliability = _finite_float(point.get("mean_reliability", point.get("rceo_reliability")))
+        if strength is None:
+            reasons.append(f"robustness RCEO reliability curve[{index}].corruption_strength must be finite")
+            break
+        if reliability is None or reliability < 0.0 or reliability > 1.0:
+            reasons.append(f"robustness RCEO reliability curve[{index}].mean_reliability must be finite in [0, 1]")
+            break
+        if previous_strength is not None and strength <= previous_strength:
+            reasons.append("robustness RCEO reliability curve corruption_strength must be strictly increasing")
+            break
+        if previous_reliability is not None and reliability > previous_reliability + 1e-12:
+            reasons.append("robustness RCEO reliability curve must be non-increasing as corruption_strength increases")
+            break
+        parsed.append((strength, reliability))
+        previous_strength = strength
+        previous_reliability = reliability
+    if len(parsed) < 2:
+        reasons.append("robustness RCEO reliability curve must include at least two valid corruption points")
+        return reasons
+    curve_shift = parsed[-1][1] - parsed[0][1]
+    if curve_shift > -minimum_drop:
+        reasons.append("robustness RCEO reliability curve must show a non-trivial reliability drop")
+    reported_shift = _finite_float(shift_value)
+    if reported_shift is not None and not math.isclose(curve_shift, reported_shift, rel_tol=1e-9, abs_tol=1e-9):
+        reasons.append("robustness RCEO reliability curve shift disagrees with rceo_reliability_shift")
+    return reasons
 
 
 def _operator_load_shift_reasons(value: Any, *, minimum_abs_shift: float = 0.05) -> list[str]:

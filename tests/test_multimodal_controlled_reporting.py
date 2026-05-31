@@ -462,6 +462,24 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("missing robustness ablation rows: ovha_no_rceo", joined)
         self.assertIn("missing robustness ablation rows: ovha_no_evidence_router", joined)
 
+    def test_robustness_summary_aggregates_rceo_curve_by_corruption_strength(self):
+        from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+        rows = [
+            _robustness_row("ovha_full", 0.0, 0.80, reliability=0.90),
+            _robustness_row("ovha_full", 0.0, 0.78, reliability=0.80),
+            _robustness_row("ovha_full", 0.5, 0.70, reliability=0.60),
+            _robustness_row("ovha_full", 0.5, 0.68, reliability=0.50),
+        ]
+
+        summary = summarize_robustness_rows(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+
+        self.assertEqual([point["corruption_strength"] for point in summary["rceo_reliability_curve"]], [0.0, 0.5])
+        self.assertAlmostEqual(summary["rceo_reliability_curve"][0]["mean_reliability"], 0.85)
+        self.assertAlmostEqual(summary["rceo_reliability_curve"][1]["mean_reliability"], 0.55)
+        self.assertAlmostEqual(summary["rceo_reliability_shift"], -0.30)
+        self.assertTrue(summary["rceo_reliability_monotonic"])
+
     def test_robustness_summary_requires_plan_stress_family_coverage(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 

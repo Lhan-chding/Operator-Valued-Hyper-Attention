@@ -39,7 +39,8 @@ def summarize_robustness_rows(
     relative_drop = {model: _relative_drop(model_rows) for model, model_rows in by_model.items()}
     auc = {model: _auc_over_corruption(model_rows) for model, model_rows in by_model.items()}
     full_rows = sorted(by_model.get(full_model, []), key=lambda row: float(row["corruption_strength"]))
-    reliability_monotonic = _non_increasing([float(row.get("rceo_reliability", 0.0)) for row in full_rows])
+    reliability_curve = _rceo_reliability_curve(full_rows)
+    reliability_monotonic = _non_increasing([point["mean_reliability"] for point in reliability_curve])
     reliability_shift = _rceo_reliability_shift(full_rows)
     load_shift = _operator_load_shift(full_rows)
     candidate_loss_shift = _candidate_loss_shift(full_rows)
@@ -60,6 +61,7 @@ def summarize_robustness_rows(
         "auc_over_corruption_strength": auc,
         "rceo_reliability_monotonic": reliability_monotonic,
         "rceo_reliability_shift": reliability_shift,
+        "rceo_reliability_curve": reliability_curve,
         "operator_load_shift": load_shift,
         "candidate_loss_shift": candidate_loss_shift,
         "required_stress_coverage": required_stress_coverage,
@@ -98,6 +100,24 @@ def _non_increasing(values: list[float]) -> bool:
     return all(right <= left + 1e-12 for left, right in zip(values, values[1:]))
 
 
+def _rceo_reliability_curve(rows: list[dict[str, Any]]) -> list[dict[str, float]]:
+    reliability_by_strength: dict[float, list[float]] = defaultdict(list)
+    for row in rows:
+        try:
+            strength = float(row["corruption_strength"])
+            reliability = float(row["rceo_reliability"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        reliability_by_strength[strength].append(reliability)
+    return [
+        {
+            "corruption_strength": strength,
+            "mean_reliability": sum(values) / len(values),
+        }
+        for strength, values in sorted(reliability_by_strength.items())
+    ]
+
+
 def _operator_load_shift(rows: list[dict[str, Any]]) -> dict[str, float]:
     if len(rows) < 2:
         return {}
@@ -108,14 +128,10 @@ def _operator_load_shift(rows: list[dict[str, Any]]) -> dict[str, float]:
 
 
 def _rceo_reliability_shift(rows: list[dict[str, Any]]) -> float | None:
-    if len(rows) < 2:
+    curve = _rceo_reliability_curve(rows)
+    if len(curve) < 2:
         return None
-    try:
-        first = float(rows[0]["rceo_reliability"])
-        last = float(rows[-1]["rceo_reliability"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    return last - first
+    return curve[-1]["mean_reliability"] - curve[0]["mean_reliability"]
 
 
 def _candidate_loss_shift(rows: list[dict[str, Any]]) -> dict[str, float]:

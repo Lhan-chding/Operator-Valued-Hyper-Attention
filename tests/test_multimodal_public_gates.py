@@ -83,6 +83,10 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_shift": -0.25,
+                "rceo_reliability_curve": [
+                    {"corruption_strength": 0.0, "mean_reliability": 0.90},
+                    {"corruption_strength": 0.5, "mean_reliability": 0.65},
+                ],
                 "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
                 "required_ablation_degradation": _passing_required_ablation_degradation(),
@@ -134,6 +138,10 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_shift": -0.25,
+                "rceo_reliability_curve": [
+                    {"corruption_strength": 0.0, "mean_reliability": 0.90},
+                    {"corruption_strength": 0.5, "mean_reliability": 0.65},
+                ],
                 "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
                 "required_ablation_degradation": _passing_required_ablation_degradation(),
@@ -1313,6 +1321,10 @@ def _passing_sentiment_robustness() -> dict[str, object]:
         "full_drop_less_than_baseline": True,
         "rceo_reliability_monotonic": True,
         "rceo_reliability_shift": -0.25,
+        "rceo_reliability_curve": [
+            {"corruption_strength": 0.0, "mean_reliability": 0.90},
+            {"corruption_strength": 0.5, "mean_reliability": 0.65},
+        ],
         "rceo_reliability_calibration": _passing_rceo_calibration(),
         "required_stress_coverage": {"passed": True, "reasons": []},
         "required_ablation_degradation": _passing_required_ablation_degradation(),
