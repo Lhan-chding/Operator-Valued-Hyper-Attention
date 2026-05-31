@@ -1061,6 +1061,36 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("pseudo labels must not be generated from test split", "\n".join(report.errors))
 
+    def test_cache_validator_rejects_pseudo_label_eval_split_alias_leakage(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            (layout.root / "splits.json").write_text(
+                json.dumps(
+                    {
+                        "train": ["train-source"],
+                        "test": ["test-source"],
+                        "iid": ["iid-eval-source"],
+                        "validation": ["validation-eval-source"],
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            (layout.root / "provenance" / "pseudo_label_versions.json").write_text(
+                json.dumps({"generated_from_splits": ["train", "iid", "validation"], "version": "bad"}) + "\n"
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("pseudo labels must not be generated from evaluation split: iid", joined)
+        self.assertIn("pseudo labels must not be generated from evaluation split: validation", joined)
+
     def test_cache_validator_rejects_non_object_pseudo_label_versions(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
