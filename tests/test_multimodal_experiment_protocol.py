@@ -476,7 +476,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             _write_valid_refcoco_public_cache(cache_root)
 
             report = validate_topconf_main_experiment_entry(
-                controlled_report=_complete_controlled_public_entry_report(),
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
                 region_gate_report=_passing_region_text_public_gate_report(tmp_path / "artifacts"),
                 sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
                 cache_targets={
@@ -510,7 +510,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             _write_valid_cmu_mosei_public_cache(cache_root)
 
             report = validate_topconf_main_experiment_entry(
-                controlled_report=_complete_controlled_public_entry_report(),
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
                 region_gate_report=_passing_region_text_public_gate_report(tmp_path / "artifacts"),
                 sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
                 cache_targets={
@@ -535,11 +535,12 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp:
-            cache_root = Path(tmp) / "cache"
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
             _write_valid_refcoco_public_cache(cache_root)
 
             report = validate_topconf_main_experiment_entry(
-                controlled_report=_complete_controlled_public_entry_report(),
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
                 region_gate_report=_passing_region_text_public_gate_report(),
                 sentiment_gate_report=_passing_sentiment_public_gate_report(),
                 cache_targets={
@@ -564,7 +565,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp:
-            cache_root = Path(tmp) / "cache"
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
             _write_valid_refcoco_public_cache(cache_root)
             _write_valid_cmu_mosei_public_cache(cache_root)
             region_report = {
@@ -577,7 +579,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             }
 
             report = validate_topconf_main_experiment_entry(
-                controlled_report=_complete_controlled_public_entry_report(),
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
                 region_gate_report=region_report,
                 sentiment_gate_report=_passing_sentiment_public_gate_report(),
                 cache_targets={
@@ -605,7 +607,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp:
-            cache_root = Path(tmp) / "cache"
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
             _write_valid_refcoco_public_cache(cache_root)
             _write_valid_cmu_mosei_public_cache(cache_root)
             region_report = _passing_region_text_public_gate_report()
@@ -614,7 +617,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             sentiment_report["checks"].pop("no_rceo_drops")
 
             report = validate_topconf_main_experiment_entry(
-                controlled_report=_complete_controlled_public_entry_report(),
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
                 region_gate_report=region_report,
                 sentiment_gate_report=sentiment_report,
                 cache_targets={
@@ -642,7 +645,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp:
-            cache_root = Path(tmp) / "cache"
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
             _write_valid_refcoco_public_cache(cache_root)
             _write_valid_cmu_mosei_public_cache(cache_root)
             region_report = {**_passing_region_text_public_gate_report(), "reasons": "hidden failure"}
@@ -653,7 +657,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             }
 
             report = validate_topconf_main_experiment_entry(
-                controlled_report=_complete_controlled_public_entry_report(),
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
                 region_gate_report=region_report,
                 sentiment_gate_report=sentiment_report,
                 cache_targets={
@@ -684,7 +688,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp:
-            cache_root = Path(tmp) / "cache"
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
             _write_valid_refcoco_public_cache(cache_root)
             _write_valid_cmu_mosei_public_cache(cache_root)
             region_report = _passing_region_text_public_gate_report()
@@ -700,7 +705,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             }
 
             report = validate_topconf_main_experiment_entry(
-                controlled_report=_complete_controlled_public_entry_report(),
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
                 region_gate_report=region_report,
                 sentiment_gate_report=sentiment_report,
                 cache_targets={
@@ -747,7 +752,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             ]
 
             report = validate_topconf_main_experiment_entry(
-                controlled_report=_complete_controlled_public_entry_report(),
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
                 region_gate_report=region_report,
                 sentiment_gate_report=sentiment_report,
                 cache_targets={
@@ -816,7 +821,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             sentiment_report["evidence_artifacts"]["statistics_summary"]["sha256"] = file_sha256(sentiment_statistics)
 
             report = validate_topconf_main_experiment_entry(
-                controlled_report=_complete_controlled_public_entry_report(),
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
                 region_gate_report=region_report,
                 sentiment_gate_report=sentiment_report,
                 cache_targets={
@@ -877,7 +882,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             sentiment_report["evidence_artifacts"]["robustness_summary"]["sha256"] = file_sha256(sentiment_robustness)
 
             report = validate_topconf_main_experiment_entry(
-                controlled_report=_complete_controlled_public_entry_report(),
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
                 region_gate_report=region_report,
                 sentiment_gate_report=sentiment_report,
                 cache_targets={
@@ -925,7 +930,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             region_report["evidence_artifacts"]["diagnostics"]["sha256"] = file_sha256(region_diagnostics)
 
             report = validate_topconf_main_experiment_entry(
-                controlled_report=_complete_controlled_public_entry_report(),
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
                 region_gate_report=region_report,
                 sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
                 cache_targets={

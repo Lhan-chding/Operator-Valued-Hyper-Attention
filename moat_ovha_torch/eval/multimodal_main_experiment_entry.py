@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
 from moat_ovha_torch.eval.multimodal_public_entry import (
     REGION_TEXT_TASK_TYPES,
     SENTIMENT_EMOTION_TASK_TYPES,
@@ -21,6 +22,7 @@ from moat_ovha_torch.eval.multimodal_public_gates import (
 )
 
 
+CONTROLLED_TOPCONF_EVIDENCE_ARTIFACTS = ("controlled_rows", "diagnostics_report")
 REGION_TEXT_TOPCONF_CHECKS = (
     "full_beats_same_feature_baseline",
     "full_beats_required_strong_baselines",
@@ -85,6 +87,7 @@ def validate_topconf_main_experiment_entry(
         if not report.ok:
             errors.extend(f"controlled entry {task_type}: {error}" for error in report.errors)
         warnings.extend(f"controlled entry {task_type}: {warning}" for warning in report.warnings)
+    _require_controlled_artifact_evidence(controlled_report, errors)
 
     _require_public_gate_report(
         "region_text_public",
@@ -101,6 +104,94 @@ def validate_topconf_main_experiment_entry(
     _validate_all_cache_targets(cache_targets, errors, warnings)
 
     return TopConfMainExperimentEntryReport(ok=not errors, errors=errors, warnings=warnings)
+
+
+def _require_controlled_artifact_evidence(controlled_report: dict[str, Any] | None, errors: list[str]) -> None:
+    report = _controlled_report_payload(controlled_report)
+    if report is None:
+        return
+    evidence = report.get("evidence_artifacts")
+    if not isinstance(evidence, Mapping):
+        errors.append("controlled report evidence_artifacts is required for top-conference main experiments")
+        return
+    task = evidence.get("task")
+    if not isinstance(task, str) or task.strip() != "controlled_multimodal":
+        errors.append("controlled report evidence_artifacts task must be controlled_multimodal")
+    if not _non_empty_text(evidence.get("generated_by")):
+        errors.append("controlled report evidence_artifacts generated_by must identify the evaluator")
+
+    artifact_paths: dict[str, Path] = {}
+    for artifact_name in CONTROLLED_TOPCONF_EVIDENCE_ARTIFACTS:
+        artifact = evidence.get(artifact_name)
+        if artifact is None:
+            errors.append(f"controlled report evidence_artifacts missing artifact: {artifact_name}")
+            continue
+        artifact_path = _validate_controlled_artifact_descriptor(artifact_name, artifact, errors)
+        if artifact_path is not None:
+            artifact_paths[artifact_name] = artifact_path
+
+    controlled_rows_path = artifact_paths.get("controlled_rows")
+    diagnostics_path = artifact_paths.get("diagnostics_report")
+    if controlled_rows_path is None or diagnostics_path is None:
+        return
+    rows = _read_jsonl_artifact("controlled report", "controlled_rows", controlled_rows_path, errors)
+    diagnostics_rows = _read_jsonl_artifact("controlled report", "diagnostics_report", diagnostics_path, errors)
+    if not rows:
+        errors.append("controlled report controlled_rows artifact must contain JSONL rows")
+        return
+    if not diagnostics_rows:
+        errors.append("controlled report diagnostics_report artifact must contain JSONL rows")
+        return
+
+    recomputed = build_controlled_report(rows, evidence_artifacts=dict(evidence))
+    for task_type in ("phrase_region_grounding", "sentiment_emotion"):
+        validation = validate_public_entry_requirements(task_type, recomputed)
+        if not validation.ok:
+            errors.extend(
+                f"controlled report artifact recomputation failed: {error}"
+                for error in validation.errors
+            )
+
+
+def _controlled_report_payload(controlled_report: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(controlled_report, dict):
+        return None
+    nested = controlled_report.get("controlled_report")
+    if nested is None:
+        return controlled_report
+    return nested if isinstance(nested, dict) else None
+
+
+def _validate_controlled_artifact_descriptor(
+    artifact_name: str,
+    artifact: Any,
+    errors: list[str],
+) -> Path | None:
+    if not isinstance(artifact, Mapping):
+        errors.append(f"controlled report evidence_artifacts {artifact_name} must include path and sha256")
+        return None
+    path_value = artifact.get("path")
+    if not _non_empty_text(path_value):
+        errors.append(f"controlled report evidence_artifacts {artifact_name}.path must be a non-empty string")
+        artifact_path = None
+    else:
+        artifact_path = Path(path_value)
+    sha256 = artifact.get("sha256")
+    if not isinstance(sha256, str) or not _SHA256_HEX_RE.fullmatch(sha256):
+        errors.append(f"controlled report evidence_artifacts {artifact_name}.sha256 must be lowercase SHA-256")
+        return None
+    if artifact_path is None:
+        return None
+    if not artifact_path.exists():
+        errors.append(f"controlled report evidence_artifacts {artifact_name}.path does not exist")
+        return None
+    if not artifact_path.is_file():
+        errors.append(f"controlled report evidence_artifacts {artifact_name}.path must point to a file")
+        return None
+    if _sha256(artifact_path) != sha256:
+        errors.append(f"controlled report evidence_artifacts {artifact_name}.sha256 does not match file content")
+        return None
+    return artifact_path
 
 
 def _require_public_gate_report(
