@@ -80,6 +80,31 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("tleo_local_evidence missing oracle gap evidence: TLEO_oracle_gap", joined)
         self.assertIn("rceo_reliability_corruption missing RCEO prior effect", joined)
 
+    def test_collapse_gate_uses_true_router_learned_adapter_oracle_cell(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+
+        rows = [
+            _row("tleo_local_evidence", "TLEO", 0.300, 0.010),
+            _row("spo_global_prototype", "SPO", 0.300, 0.020),
+            _row("lrio_low_rank_interaction", "LRIO", 0.300, 0.030),
+            _row("cato_alignment_transport", "CATO", 0.300, 0.040),
+            _row("rceo_reliability_corruption", "LRIO", 0.050, 0.050, rceo=True),
+            _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy=0.85),
+        ]
+        report = build_controlled_report(rows)
+
+        for gate_name, expected_value in (
+            ("TLEO collapse", 0.010),
+            ("SPO collapse", 0.020),
+            ("LRIO collapse", 0.030),
+            ("CATO collapse", 0.040),
+        ):
+            with self.subTest(gate=gate_name):
+                gate = report["gate_table"][gate_name]
+                self.assertTrue(gate["passed"], gate)
+                self.assertEqual(gate["value"], expected_value)
+                self.assertEqual(gate["oracle_cell"], "true_learned")
+
     def test_controlled_report_emits_sentiment_entry_ablation_gates(self):
         from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
         from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
