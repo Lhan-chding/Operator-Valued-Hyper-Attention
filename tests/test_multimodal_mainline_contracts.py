@@ -100,6 +100,31 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                     )
                     self.assertEqual(supervision.corruption_metadata_path, cache_root / "corruption_train.parquet")
 
+    def test_public_dataset_adapters_use_dataset_specific_raw_manifests(self):
+        from moat_ovha_torch.data.multimodal.adapters import (
+            Flickr30kEntitiesAdapter,
+            MELDAdapter,
+            MissingMultimodalDataError,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_root = Path(tmp)
+
+            with self.assertRaises(MissingMultimodalDataError) as flickr_error:
+                Flickr30kEntitiesAdapter().discover_raw(raw_root)
+            flickr_message = str(flickr_error.exception)
+            self.assertIn("annotations/phrase_regions.json", flickr_message)
+            self.assertIn("annotations/captions.json", flickr_message)
+            self.assertNotIn("annotations/instances.json", flickr_message)
+            self.assertNotIn("annotations/refs.json", flickr_message)
+
+            with self.assertRaises(MissingMultimodalDataError) as meld_error:
+                MELDAdapter().discover_raw(raw_root)
+            meld_message = str(meld_error.exception)
+            self.assertIn("labels/emotion.npy", meld_message)
+            self.assertIn("metadata/dialogues.json", meld_message)
+            self.assertNotIn("labels/sentiment.npy", meld_message)
+
     def test_pde_feasibility_note_uses_non_main_claim_framing(self):
         note = (ROOT / "reports" / "pdebench_architecture_feasibility_note.md").read_text()
 
