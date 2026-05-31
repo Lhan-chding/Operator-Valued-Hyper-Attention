@@ -260,6 +260,45 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "query.query_type shape must be"):
             batch.model_inputs()
 
+    def test_typed_batch_rejects_normalized_hidden_metadata_aliases(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import (
+            TokenField,
+            assert_no_multimodal_metadata_leakage,
+            validate_multimodal_batch_contract,
+        )
+
+        batch = _static_batch(
+            fields={
+                "true-active-operator": TokenField(
+                    modality="true-active-operator",
+                    x=_Shape((2, 6, 4)),
+                    pos=_Shape((2, 6, 2)),
+                    mask=_Shape((2, 6)),
+                    attrs={"corruption strength": _Shape((2, 6, 1))},
+                )
+            },
+        )
+
+        report = validate_multimodal_batch_contract(batch)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "fields.true-active-operator must not expose controlled or hidden metadata as model input",
+            joined,
+        )
+        self.assertIn(
+            "fields.true-active-operator.modality must not expose controlled or hidden metadata as model input",
+            joined,
+        )
+        self.assertIn(
+            "fields.true-active-operator.attrs must not expose controlled or hidden metadata as model input: "
+            "corruption strength",
+            joined,
+        )
+        with self.assertRaisesRegex(ValueError, "true-active-operator"):
+            assert_no_multimodal_metadata_leakage({"fields": {"true-active-operator": object()}})
+
     def test_typed_batch_rejects_malformed_provenance_values(self):
         from moat_ovha_torch.data.multimodal.typed_batch import ProvenanceBank, validate_multimodal_batch_contract
 
