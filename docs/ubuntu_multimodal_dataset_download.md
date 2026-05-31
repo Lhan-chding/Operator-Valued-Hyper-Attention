@@ -519,35 +519,17 @@ python scripts/multimodal/validate_topconf_entry.py \
   --cache-target cmu_mosei data/multimodal_cache cmu_mosei v0.1 val,test
 ```
 
-为了归档复现，推荐同时保存一个 manifest。路径可以相对 manifest 文件所在目录：
+为了归档复现，推荐用脚本生成并立即验证 manifest。脚本会把路径写成相对 `topconf_entry_manifest.json` 所在目录的形式：
 
 ```bash
-cat > outputs/multimodal/topconf_entry_manifest.json <<'JSON'
-{
-  "controlled_report": "controlled_v1_smoke/seed_101/controlled_report.json",
-  "region_gate_bundle": "refcoco_main/gate_bundle",
-  "sentiment_gate_bundle": "cmu_mosei_main/gate_bundle",
-  "cache_targets": [
-    {
-      "name": "refcoco",
-      "cache_root": "../../data/multimodal_cache",
-      "dataset": "refcoco",
-      "version": "v0.1",
-      "splits": ["val", "test"]
-    },
-    {
-      "name": "cmu_mosei",
-      "cache_root": "../../data/multimodal_cache",
-      "dataset": "cmu_mosei",
-      "version": "v0.1",
-      "splits": ["val", "test"]
-    }
-  ]
-}
-JSON
-
-python scripts/multimodal/validate_topconf_entry.py \
-  --manifest outputs/multimodal/topconf_entry_manifest.json
+python scripts/multimodal/build_topconf_entry_manifest.py \
+  --output outputs/multimodal/topconf_entry_manifest.json \
+  --controlled-report outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json \
+  --region-gate-bundle outputs/multimodal/refcoco_main/gate_bundle \
+  --sentiment-gate-bundle outputs/multimodal/cmu_mosei_main/gate_bundle \
+  --cache-target refcoco data/multimodal_cache refcoco v0.1 val,test \
+  --cache-target cmu_mosei data/multimodal_cache cmu_mosei v0.1 val,test \
+  --validate
 ```
 
 ## 6. 速度与稳定性建议

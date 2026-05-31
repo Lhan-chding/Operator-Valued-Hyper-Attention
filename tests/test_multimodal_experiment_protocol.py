@@ -1640,6 +1640,75 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             str(sentiment_bundle / "sentiment_gate_report.json"),
         )
 
+    def test_topconf_entry_manifest_builder_writes_relative_manifest_and_validates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "artifacts"
+            manifest_path = tmp_path / "topconf_entry_manifest.json"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+            controlled_report_path = tmp_path / "controlled_report.json"
+            controlled_report_path.write_text(
+                json.dumps(_complete_controlled_public_entry_report(artifact_root / "controlled"), sort_keys=True) + "\n"
+            )
+            region_bundle = _build_public_gate_bundle_fixture(
+                tmp_path,
+                gate="region_text",
+                task="phrase_region_grounding",
+            )
+            sentiment_bundle = _build_public_gate_bundle_fixture(
+                tmp_path,
+                gate="sentiment",
+                task="sentiment_emotion",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_topconf_entry_manifest.py"),
+                    "--output",
+                    str(manifest_path),
+                    "--controlled-report",
+                    str(controlled_report_path),
+                    "--region-gate-bundle",
+                    str(region_bundle),
+                    "--sentiment-gate-bundle",
+                    str(sentiment_bundle),
+                    "--cache-target",
+                    "refcoco",
+                    str(cache_root),
+                    "refcoco",
+                    "v0.1",
+                    "val,test",
+                    "--cache-target",
+                    "cmu_mosei",
+                    str(cache_root),
+                    "cmu_mosei",
+                    "v0.1",
+                    "val,test",
+                    "--validate",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            manifest = json.loads(manifest_path.read_text())
+
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "topconf_entry_manifest_build")
+        self.assertEqual(payload["manifest"], str(manifest_path))
+        self.assertTrue(payload["validation"]["ok"], payload["validation"])
+        self.assertEqual(manifest["controlled_report"], "controlled_report.json")
+        self.assertEqual(manifest["region_gate_bundle"], "region_text_bundle")
+        self.assertEqual(manifest["sentiment_gate_bundle"], "sentiment_bundle")
+        self.assertEqual(manifest["cache_targets"][0]["cache_root"], "cache")
+        self.assertEqual(manifest["cache_targets"][0]["splits"], ["val", "test"])
+
     def test_topconf_main_entry_cli_rejects_missing_required_cache_family(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
