@@ -913,6 +913,70 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertTrue(all(row["artifact_type"] == "controlled_training_diagnostics" for row in diagnostics_rows))
         self.assertTrue(all("active_operator" not in row for row in diagnostics_rows))
 
+    def test_controlled_training_smoke_consumes_formal_config_and_stage_protocol(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for controlled training smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact_root = Path(tmp) / "controlled_training_artifacts"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "run_controlled_training_smoke.py"),
+                    "--config",
+                    str(ROOT / "configs" / "multimodal_controlled_v1_smoke.json"),
+                    "--steps-per-stage",
+                    "1",
+                    "--batch-size",
+                    "2",
+                    "--query-count",
+                    "4",
+                    "--d-model",
+                    "16",
+                    "--artifact-root",
+                    str(artifact_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            rows = payload["rows"]
+
+        training = payload["training"]
+        stages = {stage["stage"]: stage for stage in training["stage_history"]}
+        self.assertEqual(training["config_name"], "multimodal_controlled_v1_smoke")
+        self.assertEqual(training["validated_training_stages"], ["T0", "T1", "T2", "T3", "T4"])
+        self.assertEqual(training["optimizer_steps"], 4)
+        self.assertEqual(len(training["loss_history"]), 4)
+        self.assertEqual(stages["T0"]["loss_names_observed"], ["cache_validation"])
+        self.assertEqual(stages["T0"]["optimizer_steps"], 0)
+        self.assertEqual(stages["T1"]["loss_names_observed"], ["candidate_individual_loss", "task_loss"])
+        self.assertEqual(
+            stages["T2"]["loss_names_observed"],
+            ["adapter_kl_true_params", "router_ce_true_active_operator", "task_loss"],
+        )
+        self.assertEqual(
+            stages["T3"]["loss_names_observed"],
+            ["router_ce_true_active_operator", "task_loss"],
+        )
+        self.assertEqual(
+            stages["T4"]["loss_names_observed"],
+            [
+                "cato_alignment_ce",
+                "lrio_rank_kl",
+                "rceo_reliability_huber",
+                "spo_prototype_kl",
+                "task_loss",
+                "tleo_lengthscale_huber",
+            ],
+        )
+        self.assertTrue(all(entry["stage"] in {"T1", "T2", "T3", "T4"} for entry in training["loss_history"]))
+        self.assertTrue(all(row["training_config_name"] == "multimodal_controlled_v1_smoke" for row in rows))
+
 
 def _row(
     family: str,
