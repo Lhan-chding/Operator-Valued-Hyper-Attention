@@ -315,6 +315,46 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("paired comparison missing metric_direction", joined)
         self.assertIn("paired comparison missing mean_delta", joined)
 
+    def test_public_gate_rejects_paired_mean_delta_without_positive_improvement(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["paired_tests"]["phrase_region_grounding"]["test"]["mean_delta"] = -0.08
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "paired comparison mean_delta must be positive for claimed improvement",
+            "\n".join(report["reasons"]),
+        )
+
+    def test_public_gate_rejects_bootstrap_ci_crossing_zero_for_main_delta(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["paired_tests"]["phrase_region_grounding"]["test"]["paired_bootstrap_ci95"] = [-0.01, 0.12]
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "paired comparison bootstrap CI must be strictly positive for claimed improvement",
+            "\n".join(report["reasons"]),
+        )
+
     def test_public_gate_requires_topconf_reporting_metadata_not_only_mean(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
