@@ -213,6 +213,9 @@ class ControlledSyntheticMultimodalAdapter:
         query_x = torch.randn(batch_size, query_count, self.field_dim, generator=generator).to(device)
         query_pos = torch.linspace(0.0, 1.0, query_count).view(1, query_count, 1).repeat(batch_size, 1, 2).to(device)
 
+        router_weights, active = _router_truth(torch, family, batch_size, query_count, device)
+        if family == "mixed_relation_operator":
+            query_x = _inject_relation_query_code(torch, query_x, active)
         fields = {
             "text": TokenField("text", text_x, text_pos, torch.ones(batch_size, token_count, dtype=torch.bool, device=device)),
             "region": TokenField(
@@ -231,7 +234,6 @@ class ControlledSyntheticMultimodalAdapter:
             ),
         }
         candidate_values = _candidate_values(torch, text_x, region_x, audio_x, query_x, self.output_dim)
-        router_weights, active = _router_truth(torch, family, batch_size, query_count, device)
         target_y = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
         true_lengthscale = torch.full((batch_size, query_count, 1), 0.16, device=device)
         true_rank_logits = torch.zeros(batch_size, query_count, 4, device=device)
@@ -473,6 +475,19 @@ def _router_truth(torch, family: str, batch_size: int, query_count: int, device:
         weights = 0.85 * weights + 0.15 / len(CONTROLLED_OPERATOR_ORDER)
         weights = weights / weights.sum(dim=-1, keepdim=True)
     return weights, active
+
+
+def _inject_relation_query_code(torch, query_x, active):
+    width = min(int(query_x.shape[-1]), len(CONTROLLED_OPERATOR_ORDER))
+    if width <= 0:
+        return query_x
+    relation_code = torch.nn.functional.one_hot(active, num_classes=len(CONTROLLED_OPERATOR_ORDER)).to(
+        dtype=query_x.dtype,
+        device=query_x.device,
+    )
+    coded = query_x.clone()
+    coded[..., :width] = relation_code[..., :width]
+    return coded
 
 
 def _quality_for_family(torch, family: str, batch_size: int, token_count: int, device: str):
