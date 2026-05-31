@@ -424,7 +424,20 @@ hf download reeha-parkar/cmu-mosei-comp-seq \
   --local-dir-use-symlinks False
 ```
 
-CMU SDK 下载完成后，把 computational sequences 显式转成 `stage_cmu_sentiment_raw.py` 需要的 `.npy` 输入。下面的四个 `.csd` 文件名需要按你实际下载目录替换；不要让脚本自动猜特征文件：
+CMU SDK 下载完成后，先检查下载目录里的 `.csd` / `.h5` / `.json` sequence 文件。这个检查脚本会列出 sample count、feature shape，并按文件名给出 text/audio/vision/labels 候选和下一条 extract 命令；正式执行前仍要人工审阅候选是否符合你选定的特征方案：
+
+```bash
+python scripts/multimodal/inspect_cmu_sdk_sequences.py \
+  cmu_mosei \
+  data/raw_multimodal/_downloads/cmu_sdk/cmu_mosei \
+  --splits data/raw_multimodal/_downloads/cmu_mosei_splits.json \
+  --stage-output-dir data/raw_multimodal/_downloads/cmu_mosei_stage_inputs \
+  --temporal-policy mean \
+  --preprocessing-version cmu-mosei-cmu-sdk-mean-v0.1 \
+  --output data/raw_multimodal/_downloads/cmu_mosei_sequence_inspection.json
+```
+
+然后把 computational sequences 显式转成 `stage_cmu_sentiment_raw.py` 需要的 `.npy` 输入。可以直接审阅并复制 inspection JSON 里的 `suggested_extract_command`；如果手工写命令，下面的四个 `.csd` 文件名需要按实际下载目录替换：
 
 ```bash
 TEXT_FEATURE_CSD=data/raw_multimodal/_downloads/cmu_sdk/cmu_mosei/replace_with_text_feature.csd
