@@ -399,6 +399,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         for key in (
             "router_entropy",
             "router_load_by_candidate",
+            "router_memory_logit_norm",
+            "router_evidence_logit_norm",
+            "router_reliability_logit_norm",
             "router_logit_parts",
             "candidate_loss",
             "adapter_params",
@@ -410,7 +413,11 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
 
         report = validate_diagnostic_row({"router_entropy": 1.0})
         self.assertFalse(report.ok)
-        self.assertIn("router_load_by_candidate", "\n".join(report.errors))
+        joined = "\n".join(report.errors)
+        self.assertIn("router_load_by_candidate", joined)
+        self.assertIn("missing diagnostic key: router_memory_logit_norm", joined)
+        self.assertIn("missing diagnostic key: router_evidence_logit_norm", joined)
+        self.assertIn("missing diagnostic key: router_reliability_logit_norm", joined)
 
     def test_diagnostics_schema_rejects_missing_nested_plan_fields(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import validate_diagnostic_row
@@ -490,6 +497,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
 
         row = _complete_diagnostic_row()
         row["router_entropy"] = "nan"
+        row["router_memory_logit_norm"] = -0.1
+        row["router_evidence_logit_norm"] = "inf"
+        row["router_reliability_logit_norm"] = "bad"
         row["router_load_by_candidate"] = {"TLEO": -0.1, "SPO": 0.4, "LRIO": 0.4, "CATO": 0.4}
         row["router_logit_parts"]["reliability"] = "inf"
         row["candidate_loss"]["LRIO"] = "nan"
@@ -503,6 +513,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertFalse(report.ok)
         joined = "\n".join(report.errors)
         self.assertIn("router_entropy must be finite", joined)
+        self.assertIn("router_memory_logit_norm must be finite non-negative", joined)
+        self.assertIn("router_evidence_logit_norm must be finite non-negative", joined)
+        self.assertIn("router_reliability_logit_norm must be finite non-negative", joined)
         self.assertIn("router_load_by_candidate.TLEO must be a finite probability", joined)
         self.assertIn("router_load_by_candidate values must sum to 1", joined)
         self.assertIn("router_logit_parts.reliability must be finite", joined)
@@ -640,6 +653,9 @@ def _complete_controlled_public_entry_report() -> dict[str, object]:
 def _complete_diagnostic_row() -> dict[str, object]:
     return {
         "router_entropy": 1.0,
+        "router_memory_logit_norm": 0.1,
+        "router_evidence_logit_norm": 0.2,
+        "router_reliability_logit_norm": 0.3,
         "router_load_by_candidate": {"TLEO": 0.25, "SPO": 0.25, "LRIO": 0.25, "CATO": 0.25},
         "router_logit_parts": {"memory": 0.1, "evidence": 0.2, "reliability": 0.3},
         "candidate_loss": {"TLEO": 0.1, "SPO": 0.2, "LRIO": 0.3, "CATO": 0.4},
