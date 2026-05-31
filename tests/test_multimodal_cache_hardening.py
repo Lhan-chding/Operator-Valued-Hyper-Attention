@@ -94,6 +94,31 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_blank_failed_sample_reason(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+            )
+            (layout.root / "provenance" / "failed_samples_train.jsonl").write_text(
+                json.dumps({"source_id": "failed-train", "split": "train", "reason": "   "}, sort_keys=True)
+                + "\n"
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "failed_samples_train.jsonl line 1 required fields must be non-empty strings: reason",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_unnormalized_failed_sample_source_id(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
