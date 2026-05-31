@@ -1157,7 +1157,19 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             raw_root_base = tmp_path / "raw"
             cache_root = tmp_path / "cache"
             controlled_report = tmp_path / "controlled_report.json"
-            controlled_report.write_text(json.dumps({"ok": True}, sort_keys=True) + "\n")
+            controlled_report.write_text(
+                json.dumps(
+                    {
+                        "go_no_go": {
+                            "controlled_multimodal_passed": True,
+                            "enter_public_multimodal": True,
+                            "reasons": [],
+                        }
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
             _write_refcoco_raw_fixture(raw_root_base / "refcoco")
             _write_cmu_mosei_raw_fixture(raw_root_base / "cmu_mosei")
             for dataset_name in ("refcoco", "cmu_mosei"):
@@ -1214,6 +1226,8 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertTrue(payload["ok"], payload)
         self.assertTrue(payload["datasets"]["refcoco"]["phases"]["cache"]["ok"])
         self.assertTrue(payload["datasets"]["cmu_mosei"]["phases"]["cache"]["ok"])
+        self.assertIn("scripts/multimodal/accept_public_data.py", payload["datasets"]["refcoco"]["next_action"])
+        self.assertIn("scripts/multimodal/accept_public_data.py", payload["datasets"]["cmu_mosei"]["next_action"])
         self.assertIn("scripts/multimodal/accept_public_data.py", joined_commands)
         self.assertIn("configs/multimodal_refcoco_public_smoke.json", joined_commands)
         self.assertIn("configs/multimodal_cmu_mosei_public_smoke.json", joined_commands)
