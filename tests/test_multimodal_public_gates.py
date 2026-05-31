@@ -597,7 +597,13 @@ def _summary(
         else baseline + 0.01 * index
     )
     model_scores = {
-        model: (full if model == "ovha_full" else non_full_score(index))
+        model: (
+            full
+            if model == "ovha_full"
+            else baseline
+            if model == "cross_attention_transformer"
+            else non_full_score(index)
+        )
         for index, model in enumerate(models)
     }
     model_rows = {

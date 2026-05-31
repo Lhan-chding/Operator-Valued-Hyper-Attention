@@ -363,8 +363,11 @@ def _statistical_evidence_reasons(
     if not isinstance(paired, dict) or not paired:
         reasons.append("paired comparison missing")
         return reasons
-    if int(paired.get("common_seed_count", 0)) < 3:
+    common_seed_count = _safe_int(paired.get("common_seed_count")) or 0
+    if common_seed_count < 3:
         reasons.append("paired comparison requires at least 3 common seeds")
+    if common_seed_count != min(full_seed_count, baseline_seed_count):
+        reasons.append("paired comparison common_seed_count must cover full and baseline main_table seeds")
     for key in ("metric_direction", "mean_delta", "paired_permutation_p", "paired_bootstrap_ci95"):
         if key not in paired:
             reasons.append(f"paired comparison missing {key}")
@@ -380,6 +383,10 @@ def _statistical_evidence_reasons(
             reasons.append("paired comparison mean_delta must be a finite number")
         elif mean_delta <= 0.0:
             reasons.append("paired comparison mean_delta must be positive for claimed improvement")
+        else:
+            expected_delta = _expected_main_table_delta(main_models, full_model, baseline_model)
+            if expected_delta is not None and not math.isclose(mean_delta, expected_delta, rel_tol=1e-9, abs_tol=1e-9):
+                reasons.append("paired comparison mean_delta disagrees with main_table mean delta")
     if "paired_bootstrap_ci95" in paired:
         bootstrap_ci = _finite_interval(paired.get("paired_bootstrap_ci95"))
         if bootstrap_ci is None:
@@ -387,6 +394,25 @@ def _statistical_evidence_reasons(
         elif bootstrap_ci[0] <= 0.0:
             reasons.append("paired comparison bootstrap CI must be strictly positive for claimed improvement")
     return reasons
+
+
+def _expected_main_table_delta(
+    main_models: Any,
+    full_model: str,
+    baseline_model: str,
+) -> float | None:
+    if not isinstance(main_models, dict):
+        return None
+    full_row = main_models.get(full_model)
+    baseline_row = main_models.get(baseline_model)
+    if not isinstance(full_row, dict) or not isinstance(baseline_row, dict):
+        return None
+    full_mean = _finite_float(full_row.get("mean"))
+    baseline_mean = _finite_float(baseline_row.get("mean"))
+    higher_is_better = full_row.get("higher_is_better")
+    if full_mean is None or baseline_mean is None or not isinstance(higher_is_better, bool):
+        return None
+    return _directional_improvement(full_mean, baseline_mean, higher_is_better)
 
 
 def _metric_direction_reasons(main_models: Any) -> tuple[list[str], str | None]:
