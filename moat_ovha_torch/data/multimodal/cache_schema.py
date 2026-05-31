@@ -712,6 +712,12 @@ def _validate_sample_record_manifests(
                     f"{path.name} line {line_number} required fields must be non-empty strings: "
                     f"{', '.join(invalid_string_fields)}"
                 )
+            original_split = payload.get("original_split")
+            if isinstance(original_split, str) and (not original_split or original_split != original_split.strip()):
+                errors.append(
+                    f"{path.name} line {line_number} original_split "
+                    "must be a non-empty normalized split provenance"
+                )
             if payload.get("split") != split:
                 errors.append(f"{path.name} line {line_number} split must match {split}")
             _validate_sentiment_sample_record(layout, split, path.name, line_number, payload, data_card, errors)
