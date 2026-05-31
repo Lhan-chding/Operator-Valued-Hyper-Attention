@@ -621,6 +621,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         import numpy as np
 
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256
+        from moat_ovha_torch.eval.multimodal_statistics import SENTIMENT_REQUIRED_PUBLIC_METRICS
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -630,9 +631,12 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             layout = MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1")
             missing_mask_path = layout.root / "supervision" / "missing_modality_mask_train.npy"
             np.save(missing_mask_path, np.array([[False, True, False]], dtype=bool))
+            val_missing_mask_path = layout.root / "supervision" / "missing_modality_mask_val.npy"
+            np.save(val_missing_mask_path, np.array([[False, True, False]], dtype=bool))
             checksums_path = layout.root / "checksums.json"
             checksums = json.loads(checksums_path.read_text())
             checksums[str(missing_mask_path.relative_to(layout.root))] = file_sha256(missing_mask_path)
+            checksums[str(val_missing_mask_path.relative_to(layout.root))] = file_sha256(val_missing_mask_path)
             checksums_path.write_text(json.dumps(checksums, sort_keys=True) + "\n")
             controlled_report_path = tmp_path / "controlled_report.json"
             controlled_report_path.write_text(
@@ -650,6 +654,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "1",
                 "--train-split",
                 "train",
+                "--eval-smoke-split",
+                "val",
                 "--artifact-root",
                 str(artifact_root),
             ]
@@ -658,7 +664,17 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             payload = json.loads(result.stdout)
             metrics_path = Path(payload["training"]["artifacts"]["metrics"]["path"])
+            smoke_raw_metrics_path = Path(payload["training"]["artifacts"]["smoke_raw_metrics"]["path"])
+            smoke_baseline_metrics_path = Path(
+                payload["training"]["artifacts"]["smoke_baseline_raw_metrics"]["path"]
+            )
             metrics_rows = [json.loads(line) for line in metrics_path.read_text().splitlines() if line.strip()]
+            smoke_raw_rows = [
+                json.loads(line) for line in smoke_raw_metrics_path.read_text().splitlines() if line.strip()
+            ]
+            smoke_baseline_rows = [
+                json.loads(line) for line in smoke_baseline_metrics_path.read_text().splitlines() if line.strip()
+            ]
 
         self.assertEqual(len(metrics_rows), 1)
         row = metrics_rows[0]
@@ -668,6 +684,29 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(row["rceo_modality_reliability"], {"text": 1.0, "audio": 0.0, "vision": 1.0})
         self.assertAlmostEqual(row["rceo_reliability_mean"], 2.0 / 3.0)
         self.assertAlmostEqual(row["rceo_corruption_response"], 1.0 / 3.0)
+        self.assertEqual(len(smoke_raw_rows), 1)
+        smoke_raw = smoke_raw_rows[0]
+        self.assertEqual(smoke_raw["task"], "sentiment_emotion")
+        self.assertEqual(set(smoke_raw["public_metrics"]), set(SENTIMENT_REQUIRED_PUBLIC_METRICS))
+        self.assertEqual(
+            smoke_raw["public_metrics_scope"],
+            "sentiment_emotion_smoke_proxy_not_topconf_main_table",
+        )
+        self.assertIn("audio_missing_smoke", smoke_raw["public_metrics"]["router_load_by_corruption_type"])
+        self.assertEqual(
+            set(smoke_raw["public_metrics"]["router_load_by_corruption_type"]["audio_missing_smoke"]),
+            {"TLEO", "SPO", "LRIO", "CATO"},
+        )
+        self.assertGreaterEqual(smoke_raw["public_metrics"]["rceo_reliability_calibration"]["bin_count"], 1)
+        self.assertEqual(len(smoke_baseline_rows), len(payload["baselines"]))
+        for baseline_row in smoke_baseline_rows:
+            self.assertEqual(baseline_row["task"], "sentiment_emotion")
+            self.assertEqual(set(baseline_row["public_metrics"]), set(SENTIMENT_REQUIRED_PUBLIC_METRICS))
+            self.assertEqual(
+                baseline_row["public_metrics_scope"],
+                "sentiment_emotion_smoke_proxy_not_topconf_main_table",
+            )
+            self.assertIn("audio_missing_smoke", baseline_row["public_metrics"]["router_load_by_corruption_type"])
 
     def test_public_smoke_runner_can_execute_all_config_seeds_for_dev_multiseed_evidence(self):
         if importlib.util.find_spec("torch") is None:
