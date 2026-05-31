@@ -180,6 +180,26 @@ class MultimodalControlledReportingTests(unittest.TestCase):
             "\n".join(report["gate_table"]["no-RCEO ablation"]["reasons"]),
         )
 
+    def test_controlled_report_requires_router_decomposition_ablation_evidence(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+
+        rows = [
+            _row("tleo_local_evidence", "TLEO", 0.010, 0.010),
+            _row("spo_global_prototype", "SPO", 0.020, 0.020),
+            _row("lrio_low_rank_interaction", "LRIO", 0.030, 0.030),
+            _row("cato_alignment_transport", "CATO", 0.040, 0.040),
+            _row("rceo_reliability_corruption", "LRIO", 0.050, 0.050, rceo=True),
+            _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy=0.85),
+        ]
+        rows[0].pop("no_reliability_prior_delta")
+
+        report = build_controlled_report(rows)
+
+        self.assertFalse(report["go_no_go"]["controlled_multimodal_passed"])
+        self.assertIn("Router decomposition ablations", report["gate_table"])
+        joined = "\n".join(report["go_no_go"]["reasons"])
+        self.assertIn("no_reliability_prior_delta must be finite positive for tleo_local_evidence", joined)
+
     def test_rceo_gate_requires_reliability_corruption_curve_evidence(self):
         from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
 
@@ -783,6 +803,10 @@ def _row(
     stackability_passed: object = True,
     no_operator_memory_delta: object = 0.1,
     no_hyper_adapter_delta: object = 0.1,
+    no_evidence_router_delta: object = 0.1,
+    no_reliability_prior_delta: object = 0.1,
+    memory_only_router_delta: object = 0.1,
+    evidence_only_router_delta: object = 0.1,
     router_accuracy_value: object | None = None,
     rceo_reliability_monotonic: object = True,
     rceo_router_load_shift: object = 0.1,
@@ -810,6 +834,10 @@ def _row(
         "stackability_passed": stackability_passed,
         "no_operator_memory_delta": no_operator_memory_delta,
         "no_hyper_adapter_delta": no_hyper_adapter_delta,
+        "no_evidence_router_delta": no_evidence_router_delta,
+        "no_reliability_prior_delta": no_reliability_prior_delta,
+        "memory_only_router_delta": memory_only_router_delta,
+        "evidence_only_router_delta": evidence_only_router_delta,
     }
     if include_oracle_gap_evidence:
         row.update(
