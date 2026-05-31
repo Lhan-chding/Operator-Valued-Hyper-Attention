@@ -562,6 +562,38 @@ class MultimodalControlledReportingTests(unittest.TestCase):
             ],
         )
 
+    def test_robustness_summary_reports_paired_drop_significance_by_seed(self):
+        from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+        rows = []
+        for seed, clean in ((11, 1.00), (12, 0.98), (13, 0.96)):
+            for model, drop in (("ovha_full", 0.10), ("cross_attention_transformer", 0.30)):
+                clean_row = _robustness_row(model, 0.0, clean, reliability=0.90 if model == "ovha_full" else 0.0)
+                clean_row["seed"] = seed
+                corrupted_row = _robustness_row(model, 0.5, clean * (1.0 - drop), reliability=0.65 if model == "ovha_full" else 0.0)
+                corrupted_row["seed"] = seed
+                rows.extend((clean_row, corrupted_row))
+
+        summary = summarize_robustness_rows(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        significance = summary["robustness_significance"]
+
+        self.assertEqual(
+            significance["model_delta"],
+            "cross_attention_transformer_relative_drop_minus_ovha_full_relative_drop",
+        )
+        self.assertEqual(significance["metric"], "relative_drop_delta")
+        self.assertEqual(significance["delta_interpretation"], "positive means ovha_full drops less under robustness stress")
+        self.assertEqual(significance["common_seed_count"], 3)
+        self.assertAlmostEqual(significance["drop_delta"], 0.20)
+        self.assertAlmostEqual(significance["paired_permutation_p"], 0.25)
+        self.assertEqual(len(significance["per_seed_drop_delta"]), 3)
+        for row in significance["per_seed_drop_delta"]:
+            self.assertAlmostEqual(row["full_relative_drop"], 0.10)
+            self.assertAlmostEqual(row["baseline_relative_drop"], 0.30)
+            self.assertAlmostEqual(row["drop_delta"], 0.20)
+        self.assertAlmostEqual(significance["paired_bootstrap_ci95"][0], 0.20)
+        self.assertAlmostEqual(significance["paired_bootstrap_ci95"][1], 0.20)
+
     def test_robustness_summary_requires_plan_stress_family_coverage(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 

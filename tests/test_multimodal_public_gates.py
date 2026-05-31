@@ -1435,6 +1435,93 @@ class MultimodalPublicGateTests(unittest.TestCase):
             "\n".join(payload["reasons"]),
         )
 
+    def test_public_gate_cli_rejects_robustness_significance_disagreeing_with_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stats_path = root / "stats.json"
+            diagnostics_path = root / "diagnostics.jsonl"
+            robustness_path = root / "robustness.json"
+            robustness_rows_path = root / "robustness_rows.jsonl"
+            raw_metrics_path = root / "raw_metrics_seed1.jsonl"
+            summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+            summary["metadata"] = {"raw_metric_paths": [str(raw_metrics_path)]}
+            raw_metrics_path.write_text(json.dumps({"seed": 1, "score": 0.80}) + "\n")
+            stats_path.write_text(json.dumps(summary))
+            robustness_rows = _cli_robustness_rows()
+            for row in robustness_rows:
+                row["seed"] = 7
+            robustness_summary = _cli_robustness_summary(robustness_rows)
+            robustness_summary["robustness_significance"]["drop_delta"] = 0.99
+            robustness_path.write_text(json.dumps(robustness_summary, sort_keys=True))
+            robustness_rows_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in robustness_rows))
+            diagnostics_path.write_text(
+                json.dumps(
+                    _diagnostic(
+                        "clean",
+                        {"CATO": 0.55, "TLEO": 0.2, "SPO": 0.15, "LRIO": 0.1},
+                        cato_entropy=0.30,
+                        grounding_accuracy=0.74,
+                        top_alignment_accuracy=0.72,
+                        rceo_reliability=0.90,
+                    )
+                )
+                + "\n"
+                + json.dumps(
+                    _diagnostic(
+                        "no_cato",
+                        {"CATO": 0.0, "TLEO": 0.4, "SPO": 0.4, "LRIO": 0.2},
+                        cato_entropy=0.90,
+                        grounding_accuracy=0.52,
+                        top_alignment_accuracy=0.20,
+                    )
+                )
+                + "\n"
+                + json.dumps(
+                    _diagnostic(
+                        "corrupted_visual",
+                        {"CATO": 0.28, "TLEO": 0.30, "SPO": 0.32, "LRIO": 0.10},
+                        cato_entropy=0.58,
+                        grounding_accuracy=0.61,
+                        top_alignment_accuracy=0.56,
+                        rceo_reliability=0.55,
+                        rceo_corruption_response=0.35,
+                    )
+                )
+                + "\n"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "evaluate_public_gates.py"),
+                    "region_text",
+                    str(stats_path),
+                    str(diagnostics_path),
+                    "--task",
+                    "phrase_region_grounding",
+                    "--split",
+                    "test",
+                    "--no-cato-score",
+                    str(summary["main_table"]["phrase_region_grounding"]["test"]["ovha_no_cato"]["mean"]),
+                    "--robustness-summary",
+                    str(robustness_path),
+                    "--robustness-rows",
+                    str(robustness_rows_path),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["passed"])
+        self.assertIn(
+            "top-conference gate evidence robustness_summary.robustness_significance.drop_delta "
+            "disagrees with robustness_rows recomputation",
+            "\n".join(payload["reasons"]),
+        )
+
     def test_public_gate_cli_rejects_passing_gate_without_topconf_evidence_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
