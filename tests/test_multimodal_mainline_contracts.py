@@ -295,6 +295,27 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn('"adapter_params_detail": _adapter_param_details(', model_source)
         self.assertNotIn("diagnostics[name] = {}", model_source)
 
+    def test_oracle_matrix_uses_learned_and_true_router_candidate_combinations(self):
+        from moat_ovha_torch.eval.multimodal_oracle import evaluate_oracle_matrix
+
+        batch = _oracle_batch(
+            true_candidate_values=_ArrayTensor([[[[0.0], [2.0], [3.0], [4.0]]]]),
+            true_router_weights=_ArrayTensor([[[0.0, 0.0, 0.0, 1.0]]]),
+            target_y=_ArrayTensor([[[4.0]]]),
+        )
+        report = evaluate_oracle_matrix(
+            batch,
+            learned_candidate_values=_ArrayTensor([[[[1.0], [2.0], [3.0], [3.0]]]]),
+            learned_router_weights=_ArrayTensor([[[1.0, 0.0, 0.0, 0.0]]]),
+        )
+
+        self.assertEqual(float(report["true_true"]["mse"]), 0.0)
+        self.assertEqual(float(report["true_learned"]["mse"]), 1.0)
+        self.assertEqual(float(report["learned_true"]["mse"]), 16.0)
+        self.assertEqual(float(report["learned_learned"]["mse"]), 9.0)
+        self.assertIn("learned router + learned adapter/candidates", report["learned_learned"]["purpose"])
+        self.assertNotIn("placeholder", report["learned_learned"]["purpose"])
+
     def test_stackability_guard_source_checks_candidate_feature_batch_query_axes(self):
         operator_source = (ROOT / "moat_ovha_torch" / "models" / "multimodal" / "operator_bank.py").read_text()
 
@@ -788,6 +809,70 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
         self.assertLess(float(report["true_true"]["mse"]), 1e-8)
         self.assertIn("TLEO_oracle_gap", report)
         self.assertIn("CATO_oracle_gap", report)
+
+
+class _ArrayTensor:
+    def __init__(self, value):
+        import numpy as np
+
+        self.value = np.asarray(value, dtype=float)
+
+    @property
+    def shape(self):
+        return self.value.shape
+
+    def unsqueeze(self, dim):
+        import numpy as np
+
+        return _ArrayTensor(np.expand_dims(self.value, axis=dim))
+
+    def sum(self, dim=None):
+        return _ArrayTensor(self.value.sum(axis=dim))
+
+    def square(self):
+        return _ArrayTensor(self.value * self.value)
+
+    def mean(self):
+        return _ArrayTensor(self.value.mean())
+
+    def item(self):
+        return float(self.value.item())
+
+    def detach(self):
+        return self
+
+    def reshape(self, *shape):
+        return _ArrayTensor(self.value.reshape(*shape))
+
+    def __getitem__(self, index):
+        return _ArrayTensor(self.value[index])
+
+    def __mul__(self, other):
+        if isinstance(other, _ArrayTensor):
+            other = other.value
+        return _ArrayTensor(self.value * other)
+
+    def __sub__(self, other):
+        if isinstance(other, _ArrayTensor):
+            other = other.value
+        return _ArrayTensor(self.value - other)
+
+    def __float__(self):
+        return self.item()
+
+
+def _oracle_batch(true_candidate_values, true_router_weights, target_y):
+    class Batch:
+        pass
+
+    batch = Batch()
+    batch.hidden = {
+        "true_candidate_values": true_candidate_values,
+        "true_router_weights": true_router_weights,
+    }
+    batch.target_y = target_y
+    batch.task_type = "mixed_relation_operator"
+    return batch
 
 
 def _batch(torch):
