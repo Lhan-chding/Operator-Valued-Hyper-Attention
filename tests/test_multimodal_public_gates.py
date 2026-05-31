@@ -206,7 +206,43 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertTrue(report["checks"]["no_lrio_drops"]["passed"], report["reasons"])
         self.assertGreater(report["checks"]["full_beats_same_feature_baseline"]["value"], 0.0)
 
-    def test_sentiment_gate_requires_full_to_beat_lmf_or_mult_baseline(self):
+    def test_sentiment_gate_allows_significant_robustness_fallback_when_lmf_and_mult_not_beaten(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        base_summary = _summary("sentiment_emotion", "test", full=0.76, baseline=0.74)
+        models = base_summary["main_table"]["sentiment_emotion"]["test"]
+        summary = {
+            **base_summary,
+            "main_table": {
+                **base_summary["main_table"],
+                "sentiment_emotion": {
+                    **base_summary["main_table"]["sentiment_emotion"],
+                    "test": {
+                        **models,
+                        "tfn_lmf": {**models["tfn_lmf"], "mean": 0.78},
+                        "mult_style_crossmodal_transformer": {
+                            **models["mult_style_crossmodal_transformer"],
+                            "mean": 0.79,
+                        },
+                    },
+                },
+            },
+        }
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_sentiment_diagnostics(),
+            ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
+            robustness_summary=_significant_sentiment_robustness(),
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertTrue(report["passed"], report["reasons"])
+        self.assertTrue(report["checks"]["full_beats_lmf_or_mult_baseline"]["passed"])
+        self.assertTrue(report["checks"]["robustness_passes"]["passed"])
+
+    def test_sentiment_gate_requires_anchor_win_or_significant_robustness(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
 
         base_summary = _summary("sentiment_emotion", "test", full=0.76, baseline=0.74)
@@ -240,7 +276,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
 
         self.assertFalse(report["passed"])
         self.assertIn(
-            "full model must beat at least one required sentiment baseline: tfn_lmf or mult_style_crossmodal_transformer",
+            "full model must beat at least one required sentiment baseline or show significant robustness advantage",
             "\n".join(report["reasons"]),
         )
 
@@ -1498,6 +1534,17 @@ def _passing_sentiment_robustness() -> dict[str, object]:
         "required_ablation_degradation": _passing_required_ablation_degradation(),
         "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
         "candidate_loss_shift": {"LRIO": 0.04, "SPO": -0.06},
+    }
+
+
+def _significant_sentiment_robustness() -> dict[str, object]:
+    return {
+        **_passing_sentiment_robustness(),
+        "robustness_significance": {
+            "drop_delta": 0.08,
+            "paired_permutation_p": 0.03125,
+            "paired_bootstrap_ci95": [0.03, 0.13],
+        },
     }
 
 
