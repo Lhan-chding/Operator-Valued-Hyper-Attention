@@ -578,8 +578,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             metrics_path = Path(payload["training"]["artifacts"]["metrics"]["path"])
             diagnostics_path = Path(payload["training"]["artifacts"]["diagnostics"]["path"])
+            diagnostics_summary_path = Path(payload["training"]["artifacts"]["diagnostics_summary"]["path"])
             metrics_rows = [json.loads(line) for line in metrics_path.read_text().splitlines() if line.strip()]
             diagnostics_rows = [json.loads(line) for line in diagnostics_path.read_text().splitlines() if line.strip()]
+            diagnostics_summary = json.loads(diagnostics_summary_path.read_text())
 
         training = payload["training"]
         stages = {stage["stage"]: stage for stage in training["stage_history"]}
@@ -601,6 +603,11 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(metrics_rows[0]["stage"], "T5")
         self.assertEqual(metrics_rows[0]["split"], "train")
         self.assertEqual(len(diagnostics_rows), 1)
+        self.assertEqual(diagnostics_summary["artifact_type"], "public_smoke_diagnostics_summary")
+        self.assertEqual(diagnostics_summary["source_rows_path"], str(diagnostics_path))
+        self.assertEqual(diagnostics_summary["row_count"], 1)
+        self.assertEqual(diagnostics_summary["valid_row_count"], 1)
+        self.assertEqual(diagnostics_summary["errors"], [])
         diagnostic = diagnostics_rows[0]
         self.assertEqual(diagnostic["artifact_type"], "public_training_diagnostics")
         self.assertEqual(diagnostic["stage"], "T5")
@@ -901,6 +908,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             smoke_baseline_metrics_path = Path(
                 payload["training"]["artifacts"]["smoke_baseline_raw_metrics"]["path"]
             )
+            eval_diagnostics_summary_path = Path(
+                payload["training"]["artifacts"]["eval_diagnostics_summary"]["path"]
+            )
             smoke_statistics_preview_path = Path(
                 payload["training"]["artifacts"]["smoke_statistics_preview"]["path"]
             )
@@ -912,6 +922,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             smoke_baseline_rows = [
                 json.loads(line) for line in smoke_baseline_metrics_path.read_text().splitlines() if line.strip()
             ]
+            eval_diagnostics_summary = json.loads(eval_diagnostics_summary_path.read_text())
             smoke_statistics_preview = json.loads(smoke_statistics_preview_path.read_text())
 
         training = payload["training"]
@@ -928,6 +939,11 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(eval_diagnostics[0]["stage"], "T5_eval")
         self.assertEqual(eval_diagnostics[0]["split"], "val")
         self.assertTrue(eval_diagnostics[0]["stackability_passed"])
+        self.assertEqual(eval_diagnostics_summary["artifact_type"], "public_smoke_diagnostics_summary")
+        self.assertEqual(eval_diagnostics_summary["source_rows_path"], str(eval_diagnostics_path))
+        self.assertEqual(eval_diagnostics_summary["row_count"], 1)
+        self.assertEqual(eval_diagnostics_summary["valid_row_count"], 1)
+        self.assertEqual(eval_diagnostics_summary["errors"], [])
         self.assertEqual(len(smoke_raw_rows), 1)
         smoke_raw = smoke_raw_rows[0]
         self.assertEqual(smoke_raw["artifact_type"], "public_smoke_raw_metric")
