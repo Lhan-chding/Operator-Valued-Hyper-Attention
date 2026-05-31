@@ -157,6 +157,53 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             {"MDETR", "GLIP", "GroundingDINO"},
         )
 
+    def test_visual_genome_uses_region_text_public_protocol_contracts(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+        from moat_ovha_torch.eval.multimodal_statistics import REQUIRED_PUBLIC_METRICS_BY_TASK
+        from moat_ovha_torch.models.multimodal.baselines import (
+            baseline_names_for_task,
+            external_reference_names_for_task,
+        )
+
+        region_baselines = baseline_names_for_task("phrase_region_grounding")
+        self.assertEqual(baseline_names_for_task("visual_genome"), region_baselines)
+        self.assertEqual(
+            external_reference_names_for_task("visual_genome"),
+            external_reference_names_for_task("phrase_region_grounding"),
+        )
+        self.assertEqual(
+            REQUIRED_PUBLIC_METRICS_BY_TASK["visual_genome"],
+            REQUIRED_PUBLIC_METRICS_BY_TASK["phrase_region_grounding"],
+        )
+
+        public_entry = validate_public_entry_requirements(
+            "visual_genome",
+            _complete_controlled_public_entry_report(),
+        )
+        self.assertTrue(public_entry.ok, public_entry.errors)
+
+        config = MultimodalExperimentConfig.from_mapping(
+            {
+                "name": "visual_genome_public_smoke",
+                "dataset_name": "visual_genome",
+                "task_type": "visual_genome",
+                "seeds": [1, 2, 3],
+                "training_stages": ["T0", "T5"],
+                "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
+                "baseline_names": list(region_baselines),
+                "eval_episode_count": 16,
+                "require_public_alignment_labels": True,
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss"],
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+
+        self.assertEqual(config.training_stages, ("T0", "T5"))
+
     def test_controlled_baselines_include_router_decomposition_ablations(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
         from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
