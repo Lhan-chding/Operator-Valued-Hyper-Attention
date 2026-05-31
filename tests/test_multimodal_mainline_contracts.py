@@ -29,6 +29,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "iemocap.py",
             ROOT / "moat_ovha_torch" / "models" / "multimodal" / "ovha_multimodal.py",
             ROOT / "scripts" / "multimodal" / "validate_cache.py",
+            ROOT / "scripts" / "multimodal" / "extract_cmu_sdk_stage_inputs.py",
         ]
         for path in expected:
             with self.subTest(path=path):
@@ -558,6 +559,175 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual([row["source_id"] for row in utterances], ["mosei-train-1", "mosei-val-1", "mosei-test-1"])
         self.assertEqual(staged_missing.shape, (3, 3))
         self.assertTrue(task_labels_train_exists)
+
+    def test_extract_cmu_sdk_stage_inputs_cli_outputs_stage_ready_arrays(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sdk_root = tmp_path / "sdk"
+            stage_inputs = tmp_path / "stage_inputs"
+            raw_root = tmp_path / "raw_cmu_mosei"
+            cache_root = tmp_path / "cache"
+            sdk_root.mkdir()
+            source_ids = ("mosei-train-1", "mosei-val-1", "mosei-test-1")
+            _write_cmu_sequence_json(
+                sdk_root / "text.json",
+                {
+                    source_id: np.full((2, 4), float(index + 1), dtype=np.float32)
+                    for index, source_id in enumerate(source_ids)
+                },
+            )
+            _write_cmu_sequence_json(
+                sdk_root / "audio.json",
+                {
+                    source_id: np.full((3, 2), float(index + 2), dtype=np.float32)
+                    for index, source_id in enumerate(source_ids)
+                },
+            )
+            _write_cmu_sequence_json(
+                sdk_root / "vision.json",
+                {
+                    source_id: np.full((1, 5), float(index + 3), dtype=np.float32)
+                    for index, source_id in enumerate(source_ids)
+                },
+            )
+            _write_cmu_sequence_json(
+                sdk_root / "labels.json",
+                {
+                    source_id: np.array([[float(index - 1), *np.eye(7, dtype=np.float32)[index]]], dtype=np.float32)
+                    for index, source_id in enumerate(source_ids)
+                },
+            )
+            (sdk_root / "splits.json").write_text(
+                json.dumps(
+                    {
+                        "train": ["mosei-train-1"],
+                        "val": ["mosei-val-1"],
+                        "test": ["mosei-test-1"],
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+            extract_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "extract_cmu_sdk_stage_inputs.py"),
+                    "cmu_mosei",
+                    str(stage_inputs),
+                    "--splits",
+                    str(sdk_root / "splits.json"),
+                    "--text-sequence",
+                    str(sdk_root / "text.json"),
+                    "--audio-sequence",
+                    str(sdk_root / "audio.json"),
+                    "--visual-sequence",
+                    str(sdk_root / "vision.json"),
+                    "--label-sequence",
+                    str(sdk_root / "labels.json"),
+                    "--temporal-policy",
+                    "mean",
+                    "--sentiment-column",
+                    "0",
+                    "--emotion-columns",
+                    "1:8",
+                    "--preprocessing-version",
+                    "unit-cmu-sdk-mean-v1",
+                    "--license-tag",
+                    "unit-cmu-sdk",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            stage_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "stage_cmu_sentiment_raw.py"),
+                    "cmu_mosei",
+                    str(raw_root),
+                    "--splits",
+                    str(stage_inputs / "cmu_mosei_splits.json"),
+                    "--text-features",
+                    str(stage_inputs / "cmu_mosei_text_features.npy"),
+                    "--audio-features",
+                    str(stage_inputs / "cmu_mosei_audio_features.npy"),
+                    "--visual-features",
+                    str(stage_inputs / "cmu_mosei_visual_features.npy"),
+                    "--sentiment-labels",
+                    str(stage_inputs / "cmu_mosei_sentiment.npy"),
+                    "--emotion-labels",
+                    str(stage_inputs / "cmu_mosei_emotion.npy"),
+                    "--feature-version",
+                    "text=unit-text-json",
+                    "--feature-version",
+                    "audio=unit-audio-json",
+                    "--feature-version",
+                    "vision=unit-vision-json",
+                    "--license-tag",
+                    "unit-cmu-sdk",
+                    "--preprocessing-version",
+                    "unit-cmu-sdk-mean-v1",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            build_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "cmu_mosei",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(extract_result.stdout) if extract_result.stdout.strip() else {}
+            text_features = (
+                np.load(stage_inputs / "cmu_mosei_text_features.npy")
+                if (stage_inputs / "cmu_mosei_text_features.npy").exists()
+                else np.zeros((0, 0, 0), dtype=np.float32)
+            )
+            sentiment = (
+                np.load(stage_inputs / "cmu_mosei_sentiment.npy")
+                if (stage_inputs / "cmu_mosei_sentiment.npy").exists()
+                else np.zeros((0, 0), dtype=np.float32)
+            )
+            emotion = (
+                np.load(stage_inputs / "cmu_mosei_emotion.npy")
+                if (stage_inputs / "cmu_mosei_emotion.npy").exists()
+                else np.zeros((0, 0), dtype=np.float32)
+            )
+            manifest = (
+                json.loads((stage_inputs / "cmu_mosei_stage_input_manifest.json").read_text())
+                if (stage_inputs / "cmu_mosei_stage_input_manifest.json").exists()
+                else {}
+            )
+            validation = validate_cache_layout(
+                MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                splits=("train", "val", "test"),
+            )
+
+        self.assertEqual(extract_result.returncode, 0, extract_result.stdout + extract_result.stderr)
+        self.assertEqual(stage_result.returncode, 0, stage_result.stdout + stage_result.stderr)
+        self.assertEqual(build_result.returncode, 0, build_result.stdout + build_result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["sample_count"], 3)
+        self.assertEqual(text_features.shape, (3, 1, 4))
+        self.assertEqual(sentiment.tolist(), [[-1.0], [0.0], [1.0]])
+        self.assertEqual(emotion.shape, (3, 7))
+        self.assertEqual(manifest["temporal_policy"], "mean")
+        self.assertIn("next", payload)
+        self.assertTrue(validation.ok, validation.errors)
 
     def test_build_cache_cli_writes_valid_meld_cache_from_dialogue_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
@@ -1875,6 +2045,19 @@ def _write_cmu_mosei_raw_fixture(raw_root: Path) -> None:
     np.save(raw_root / "features" / "visual_features.npy", np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4))
     np.save(raw_root / "labels" / "sentiment.npy", np.array([[-1.0], [0.0], [1.0]], dtype=np.float32))
     np.save(raw_root / "labels" / "emotion.npy", np.eye(7, dtype=np.float32)[:3])
+
+
+def _write_cmu_sequence_json(path: Path, features_by_source_id: dict[str, object]) -> None:
+    payload = {
+        "data": {
+            source_id: {
+                "features": values.tolist(),
+                "intervals": [[0.0, 1.0] for _ in range(int(values.shape[0]))],
+            }
+            for source_id, values in features_by_source_id.items()
+        }
+    }
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def _write_meld_raw_fixture(raw_root: Path) -> None:
