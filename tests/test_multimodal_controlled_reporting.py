@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import math
 import subprocess
 import sys
 import tempfile
@@ -1029,6 +1030,25 @@ class MultimodalControlledReportingTests(unittest.TestCase):
                 "tleo_lengthscale_huber",
             ],
         )
+        self.assertEqual(stages["T4"]["oracle_matrix_monitoring"], "per_step")
+        self.assertEqual(
+            stages["T4"]["oracle_matrix_cells"],
+            ["learned_learned", "true_learned", "learned_true", "true_true"],
+        )
+        self.assertEqual(stages["T4"]["oracle_matrix_snapshot_count"], 1)
+        t4_rows = [entry for entry in training["loss_history"] if entry["stage"] == "T4"]
+        self.assertTrue(t4_rows)
+        for entry in t4_rows:
+            snapshot = entry.get("oracle_matrix_snapshot")
+            self.assertIsInstance(snapshot, dict)
+            self.assertEqual(
+                sorted(snapshot),
+                ["learned_learned", "learned_true", "true_learned", "true_true"],
+            )
+            for cell in ("learned_learned", "true_learned", "learned_true", "true_true"):
+                loss = snapshot[cell]["loss"]
+                self.assertTrue(math.isfinite(loss), cell)
+                self.assertGreaterEqual(loss, 0.0, cell)
         self.assertTrue(all(entry["stage"] in {"T1", "T2", "T3", "T4"} for entry in training["loss_history"]))
         self.assertTrue(
             all(
