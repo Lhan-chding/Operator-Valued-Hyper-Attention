@@ -59,7 +59,13 @@ class MultimodalDatasetAdapter(Protocol):
 
     def extract_supervision(self, rows: Any, split: str) -> SupervisionShard: ...
 
-    def write_cache(self, cache_root: Path, split: str) -> None: ...
+    def write_cache(
+        self,
+        manifest: RawDatasetManifest,
+        cache_root: Path,
+        split: str,
+        cache_version: str,
+    ) -> None: ...
 
     def validate_cache(self, cache_root: Path) -> ValidationReport: ...
 

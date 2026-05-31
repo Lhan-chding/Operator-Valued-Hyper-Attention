@@ -69,7 +69,13 @@ class ControlledSyntheticMultimodalAdapter:
     def extract_supervision(self, rows, split: str) -> SupervisionShard:
         raise NotImplementedError("controlled synthetic adapter generates tensors directly via sample_batch")
 
-    def write_cache(self, cache_root: Path, split: str) -> None:
+    def write_cache(
+        self,
+        manifest: RawDatasetManifest,
+        cache_root: Path,
+        split: str,
+        cache_version: str,
+    ) -> None:
         raise NotImplementedError("controlled synthetic cache writing is intentionally explicit in build_cache.py")
 
     def validate_cache(self, cache_root: Path) -> ValidationReport:

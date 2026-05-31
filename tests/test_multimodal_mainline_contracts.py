@@ -180,15 +180,18 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             )
             layout = MultimodalCacheLayout(cache_root, "refcoco", "v0.1")
             validation = validate_cache_layout(layout, splits=("train", "val", "test"))
+            checksums_exists = (layout.root / "checksums.json").exists()
+            sample_records_exists = (layout.root / "provenance" / "sample_records_train.jsonl").exists()
+            alignment_pairs_exists = (layout.root / "supervision" / "alignment_pairs_test.parquet").exists()
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         payload = json.loads(result.stdout)
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["policy"], "cache built and validated")
         self.assertTrue(validation.ok, validation.errors)
-        self.assertTrue((layout.root / "checksums.json").exists())
-        self.assertTrue((layout.root / "provenance" / "sample_records_train.jsonl").exists())
-        self.assertTrue((layout.root / "supervision" / "alignment_pairs_test.parquet").exists())
+        self.assertTrue(checksums_exists)
+        self.assertTrue(sample_records_exists)
+        self.assertTrue(alignment_pairs_exists)
 
     def test_controlled_true_adapter_param_contract_matches_v1_protocol(self):
         from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (

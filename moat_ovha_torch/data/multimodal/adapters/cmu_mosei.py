@@ -63,7 +63,13 @@ class CMUMOSEIAdapter:
             corruption_metadata_path=root / f"corruption_{split}.parquet",
         )
 
-    def write_cache(self, cache_root: Path, split: str) -> None:
+    def write_cache(
+        self,
+        manifest: RawDatasetManifest,
+        cache_root: Path,
+        split: str,
+        cache_version: str,
+    ) -> None:
         raise NotImplementedError("CMU-MOSEI cache writing requires frozen text/audio/visual features; use scripts/multimodal/build_cache.py")
 
     def validate_cache(self, cache_root: Path) -> ValidationReport:

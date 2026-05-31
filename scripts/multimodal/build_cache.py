@@ -68,8 +68,8 @@ def main() -> int:
     layout = MultimodalCacheLayout(args.cache_root, adapter.name, args.version)
     try:
         for split in _cache_splits_for(adapter.name):
-            adapter.write_cache(args.cache_root, split)
-    except NotImplementedError as exc:
+            adapter.write_cache(manifest, args.cache_root, split, args.version)
+    except (NotImplementedError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(
             json.dumps(
                 {
