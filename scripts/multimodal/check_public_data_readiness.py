@@ -297,7 +297,7 @@ def _next_commands_for_dataset(
     if phases["cache"]["ok"]:
         return [_acceptance_command(dataset_name, raw_root, cache_root, controlled_report)]
     if _needs_download_command(dataset_name, phases):
-        commands.append(_bootstrap_command(all_datasets, download_root))
+        commands.extend(_bootstrap_commands(all_datasets, download_root))
 
     if dataset_name == "refcoco":
         _append_refcoco_commands(commands, phases, download_root, raw_root, cache_root, controlled_report)
@@ -432,16 +432,21 @@ def _append_cache_or_acceptance_command(
         commands.append(_acceptance_command(dataset_name, raw_root, cache_root, controlled_report))
 
 
-def _bootstrap_command(datasets: list[str], download_root: Path) -> str:
-    return (
-        "python scripts/multimodal/bootstrap_public_downloads.py "
-        f"--datasets {' '.join(datasets)} "
-        "--repo-root \"$PWD\" "
-        f"--download-root {download_root} "
-        "--include-system-packages "
-        "--use-hf-mirror "
-        "--output /tmp/ovha_public_downloads.sh"
-    )
+def _bootstrap_commands(datasets: list[str], download_root: Path) -> list[str]:
+    output_script = "/tmp/ovha_public_downloads.sh"
+    return [
+        (
+            "python scripts/multimodal/bootstrap_public_downloads.py "
+            f"--datasets {' '.join(datasets)} "
+            "--repo-root \"$PWD\" "
+            f"--download-root {download_root} "
+            "--include-system-packages "
+            "--use-hf-mirror "
+            f"--output {output_script}"
+        ),
+        f"bash -n {output_script}",
+        f"bash {output_script}",
+    ]
 
 
 def _acceptance_command(dataset_name: str, raw_root: Path, cache_root: Path, controlled_report: Path) -> str:
