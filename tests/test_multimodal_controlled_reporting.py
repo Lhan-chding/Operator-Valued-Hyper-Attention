@@ -945,6 +945,41 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertTrue(all(row["training_mode"] == "trained_smoke" for row in controlled_rows))
         self.assertTrue(all(row["artifact_type"] == "controlled_training_diagnostics" for row in diagnostics_rows))
         self.assertTrue(all("active_operator" not in row for row in diagnostics_rows))
+        controlled_by_family = {row["family"]: row for row in controlled_rows}
+        diagnostics_by_family = {row["family"]: row for row in diagnostics_rows}
+        ablation_keys = (
+            "no_evidence_router_delta",
+            "no_reliability_prior_delta",
+            "memory_only_router_delta",
+            "evidence_only_router_delta",
+            "no_operator_memory_delta",
+            "no_hyper_adapter_delta",
+        )
+        for family, row in controlled_by_family.items():
+            measured = []
+            for key in ablation_keys:
+                self.assertIn(key, row, family)
+                self.assertIn(key, diagnostics_by_family[family], family)
+                value = float(row[key])
+                self.assertTrue(math.isfinite(value), f"{family}.{key}")
+                measured.append(abs(value))
+            self.assertTrue(any(value > 1e-12 for value in measured), family)
+        self.assertIn("prototype_kl_delta", controlled_by_family["spo_global_prototype"])
+        self.assertTrue(math.isfinite(float(controlled_by_family["spo_global_prototype"]["prototype_kl_delta"])))
+        self.assertIn("rank_logits_kl_delta", controlled_by_family["lrio_low_rank_interaction"])
+        self.assertTrue(math.isfinite(float(controlled_by_family["lrio_low_rank_interaction"]["rank_logits_kl_delta"])))
+        cato_row = controlled_by_family["cato_alignment_transport"]
+        self.assertIn("alignment_entropy_delta", cato_row)
+        self.assertIn("alignment_topk_delta", cato_row)
+        self.assertTrue(math.isfinite(float(cato_row["alignment_entropy_delta"])))
+        self.assertTrue(math.isfinite(float(cato_row["alignment_topk_delta"])))
+        rceo_row = controlled_by_family["rceo_reliability_corruption"]
+        self.assertIn("rceo_reliability_curve", rceo_row)
+        self.assertGreaterEqual(len(rceo_row["rceo_reliability_curve"]), 2)
+        self.assertEqual(rceo_row["rceo_reliability_monotonic"], True)
+        self.assertTrue(math.isfinite(float(rceo_row["rceo_router_load_shift"])))
+        self.assertIn("no_lrio_delta", controlled_by_family["lrio_low_rank_interaction"])
+        self.assertIn("no_rceo_delta", rceo_row)
 
     def test_controlled_training_smoke_consumes_formal_config_and_stage_protocol(self):
         if importlib.util.find_spec("torch") is None:
