@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -87,6 +88,8 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         missing_cells = _missing_oracle_cells(row)
         if missing_cells:
             reasons.append(f"{row.get('family', '<unknown>')} missing oracle matrix cells: {', '.join(missing_cells)}")
+        for matrix_reason in _oracle_matrix_value_reasons(row):
+            reasons.append(matrix_reason)
         for oracle_reason in _oracle_gap_reasons(row):
             reasons.append(oracle_reason)
         for rceo_reason in _rceo_prior_effect_reasons(row):
@@ -120,8 +123,9 @@ def _oracle_gap_reasons(row: dict[str, Any]) -> list[str]:
         if key not in row:
             reasons.append(f"{row.get('family', '<unknown>')} missing oracle gap evidence: {key}")
             continue
-        if float(row[key]) < 0.0:
-            reasons.append(f"{row.get('family', '<unknown>')} oracle gap must be non-negative: {key}")
+        value = _finite_float(row[key])
+        if value is None or value < 0.0:
+            reasons.append(f"{row.get('family', '<unknown>')} oracle gap must be finite non-negative: {key}")
     return reasons
 
 
@@ -130,7 +134,8 @@ def _rceo_prior_effect_reasons(row: dict[str, Any]) -> list[str]:
         return []
     if "rceo_prior_effect" not in row:
         return ["rceo_reliability_corruption missing RCEO prior effect"]
-    if float(row["rceo_prior_effect"]) <= 0.0:
+    value = _finite_float(row["rceo_prior_effect"])
+    if value is None or value <= 0.0:
         return ["rceo_reliability_corruption RCEO prior effect must be positive"]
     return []
 
@@ -250,3 +255,32 @@ def _operator_diagnostic_reasons(row: dict[str, Any], operator: str) -> list[str
         if float(row[key]) <= 0.0:
             reasons.append(f"diagnostic must improve: {key}")
     return reasons
+
+
+def _oracle_matrix_value_reasons(row: dict[str, Any]) -> list[str]:
+    family = str(row.get("family", "<unknown>"))
+    matrix = row.get("oracle_matrix", {})
+    if not isinstance(matrix, dict):
+        return [f"{family} oracle_matrix must be an object keyed by oracle cell"]
+    reasons: list[str] = []
+    for cell in ORACLE_MATRIX_CELLS:
+        if cell not in matrix:
+            continue
+        cell_values = matrix.get(cell)
+        if not isinstance(cell_values, dict):
+            reasons.append(f"{family} oracle_matrix.{cell} must be an object with loss")
+            continue
+        loss = _finite_float(cell_values.get("loss"))
+        if loss is None or loss < 0.0:
+            reasons.append(f"{family} oracle_matrix.{cell}.loss must be finite non-negative")
+    return reasons
+
+
+def _finite_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
