@@ -185,6 +185,37 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         joined = "\n".join(report["go_no_go"]["reasons"])
         self.assertIn("RCEO gate rceo_reliability_curve must include at least two corruption points", joined)
 
+    def test_rceo_gate_rejects_reliability_curve_that_increases_with_corruption(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+
+        rows = [
+            _row("tleo_local_evidence", "TLEO", 0.010, 0.010),
+            _row("spo_global_prototype", "SPO", 0.020, 0.020),
+            _row("lrio_low_rank_interaction", "LRIO", 0.030, 0.030),
+            _row("cato_alignment_transport", "CATO", 0.040, 0.040),
+            _row(
+                "rceo_reliability_corruption",
+                "LRIO",
+                0.050,
+                0.050,
+                rceo=True,
+                rceo_reliability_curve=[
+                    {"corruption_strength": 0.0, "mean_reliability": 0.70},
+                    {"corruption_strength": 0.5, "mean_reliability": 0.80},
+                ],
+            ),
+            _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy=0.85),
+        ]
+
+        report = build_controlled_report(rows)
+
+        self.assertFalse(report["go_no_go"]["controlled_multimodal_passed"])
+        joined = "\n".join(report["go_no_go"]["reasons"])
+        self.assertIn(
+            "RCEO gate rceo_reliability_curve must be non-increasing as corruption_strength increases",
+            joined,
+        )
+
     def test_collapse_gate_uses_true_router_learned_adapter_oracle_cell(self):
         from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
 
