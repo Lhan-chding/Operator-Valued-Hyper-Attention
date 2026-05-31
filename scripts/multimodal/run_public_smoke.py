@@ -34,6 +34,7 @@ def main() -> int:
     parser.add_argument("--cache-root", type=Path)
     parser.add_argument("--controlled-report", type=Path)
     parser.add_argument("--train-smoke-steps", type=int, default=0)
+    parser.add_argument("--train-all-config-seeds", action="store_true")
     parser.add_argument("--train-split", default="train")
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--d-model", type=int, default=16)
@@ -143,59 +144,76 @@ def _run_public_training_smoke(
     layout: MultimodalCacheLayout,
     args: argparse.Namespace,
 ) -> dict[str, Any]:
-    seed = int(args.seed if args.seed is not None else config.seeds[0])
-    torch.manual_seed(seed)
     device = torch.device(args.device)
-    batch = _load_public_batch(layout, config, args.train_split, device)
-    field_dims = {name: int(field.x.shape[-1]) for name, field in batch.fields.items()}
-    model = MultimodalOVHA(
-        field_dims=field_dims,
-        query_dim=int(batch.query.x.shape[-1]),
-        output_dim=int(batch.target_y.shape[-1]),
-        d_model=args.d_model,
-        memory_tokens=args.memory_tokens,
-    ).to(device)
-    initial_parameters = _parameter_vector(model)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    seed_values = tuple(int(seed) for seed in config.seeds) if args.train_all_config_seeds else (
+        int(args.seed if args.seed is not None else config.seeds[0]),
+    )
     loss_history: list[dict[str, object]] = []
     diagnostic_history: list[dict[str, object]] = []
+    parameter_deltas: dict[int, float] = {}
     max_grad_norm = 0.0
-    model.train()
-    for step in range(int(args.train_smoke_steps)):
-        optimizer.zero_grad(set_to_none=True)
-        output = model(batch)
-        components = _public_loss_components(output, batch, config)
-        total_loss = torch.stack([value for value in components.values()]).sum()
-        rceo_metrics = _rceo_training_metrics(output, batch)
-        diagnostic_history.append(_public_training_diagnostics_row(output, config, batch, step + 1))
-        total_loss.backward()
-        grad_norm = _grad_l2_norm(model)
-        max_grad_norm = max(max_grad_norm, grad_norm)
-        optimizer.step()
-        loss_history.append(
-            {
-                "step": step + 1,
-                "stage": "T5",
-                "split": args.train_split,
-                "loss_names_observed": sorted(components),
-                "total_loss": _as_float(total_loss),
-                "grad_l2_norm": grad_norm,
-                **rceo_metrics,
-                **{name: _as_float(value) for name, value in components.items()},
-            }
-        )
-    parameter_l2_delta = float(torch.linalg.vector_norm(_parameter_vector(model) - initial_parameters).item())
+
+    for seed in seed_values:
+        torch.manual_seed(seed)
+        batch = _load_public_batch(layout, config, args.train_split, device)
+        field_dims = {name: int(field.x.shape[-1]) for name, field in batch.fields.items()}
+        model = MultimodalOVHA(
+            field_dims=field_dims,
+            query_dim=int(batch.query.x.shape[-1]),
+            output_dim=int(batch.target_y.shape[-1]),
+            d_model=args.d_model,
+            memory_tokens=args.memory_tokens,
+        ).to(device)
+        initial_parameters = _parameter_vector(model)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+        model.train()
+        for step in range(int(args.train_smoke_steps)):
+            optimizer.zero_grad(set_to_none=True)
+            output = model(batch)
+            components = _public_loss_components(output, batch, config)
+            total_loss = torch.stack([value for value in components.values()]).sum()
+            rceo_metrics = _rceo_training_metrics(output, batch)
+            diagnostic_history.append(_public_training_diagnostics_row(output, config, batch, step + 1, seed))
+            total_loss.backward()
+            grad_norm = _grad_l2_norm(model)
+            max_grad_norm = max(max_grad_norm, grad_norm)
+            optimizer.step()
+            loss_history.append(
+                {
+                    "seed": seed,
+                    "step": step + 1,
+                    "stage": "T5",
+                    "split": args.train_split,
+                    "loss_names_observed": sorted(components),
+                    "total_loss": _as_float(total_loss),
+                    "grad_l2_norm": grad_norm,
+                    **rceo_metrics,
+                    **{name: _as_float(value) for name, value in components.items()},
+                }
+            )
+        parameter_deltas[seed] = float(torch.linalg.vector_norm(_parameter_vector(model) - initial_parameters).item())
+    parameter_l2_delta = float(sum(parameter_deltas.values()) / max(len(parameter_deltas), 1))
+    parameter_l2_delta_min = min(parameter_deltas.values()) if parameter_deltas else 0.0
+    expected_steps = int(args.train_smoke_steps) * len(seed_values)
     artifacts = _write_training_artifacts(args.artifact_root, loss_history, diagnostic_history) if args.artifact_root else {}
     return {
-        "ok": bool(parameter_l2_delta > 0.0 and max_grad_norm > 0.0 and len(loss_history) == args.train_smoke_steps),
+        "ok": bool(
+            parameter_l2_delta_min > 0.0
+            and max_grad_norm > 0.0
+            and len(loss_history) == expected_steps
+        ),
         "config_name": config.name,
         "train_split": args.train_split,
         "validated_training_stages": list(config.training_stages),
         "optimizer": "AdamW",
-        "optimizer_steps": int(args.train_smoke_steps),
+        "optimizer_steps": len(loss_history),
+        "optimizer_steps_per_seed": int(args.train_smoke_steps),
         "learning_rate": args.learning_rate,
-        "seed": seed,
+        "seed": seed_values[0],
+        "seeds": list(seed_values),
         "parameter_l2_delta": parameter_l2_delta,
+        "parameter_l2_delta_min": parameter_l2_delta_min,
+        "parameter_l2_delta_by_seed": {str(seed): value for seed, value in parameter_deltas.items()},
         "max_grad_norm": max_grad_norm,
         "stage_history": [
             {
@@ -208,6 +226,8 @@ def _run_public_training_smoke(
                 "stage": "T5",
                 "loss_names_observed": sorted({name for row in loss_history for name in row["loss_names_observed"]}),
                 "optimizer_steps": len(loss_history),
+                "optimizer_steps_per_seed": int(args.train_smoke_steps),
+                "seed_count": len(seed_values),
                 "mean_total_loss": float(sum(float(row["total_loss"]) for row in loss_history) / max(len(loss_history), 1)),
             },
         ],
@@ -350,6 +370,7 @@ def _public_training_diagnostics_row(
     config: MultimodalExperimentConfig,
     batch: MultimodalEpisodeBatch,
     step: int,
+    seed: int,
 ) -> dict[str, object]:
     diagnostics = output.diagnostics
     return {
@@ -359,6 +380,7 @@ def _public_training_diagnostics_row(
         "task": config.task_type,
         "stage": "T5",
         "split": batch.split,
+        "seed": seed,
         "step": step,
         "router_entropy": _json_ready(diagnostics["router_entropy"]),
         "router_load_by_candidate": _json_ready(diagnostics["router_load_by_candidate"]),
