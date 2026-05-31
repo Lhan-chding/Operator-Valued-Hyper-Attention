@@ -40,7 +40,7 @@ def summarize_robustness_rows(
     corrupted_score = {model: _endpoint_score(model_rows, first=False) for model, model_rows in by_model.items()}
     relative_drop = {model: _relative_drop(model_rows) for model, model_rows in by_model.items()}
     auc = {model: _auc_over_corruption(model_rows) for model, model_rows in by_model.items()}
-    full_rows = sorted(_finite_strength_rows(by_model.get(full_model, [])), key=lambda row: float(row["corruption_strength"]))
+    full_rows = sorted(_valid_strength_rows(by_model.get(full_model, [])), key=lambda row: float(row["corruption_strength"]))
     reliability_curve = _rceo_reliability_curve(full_rows)
     reliability_monotonic = _non_increasing([point["mean_reliability"] for point in reliability_curve])
     reliability_shift = _rceo_reliability_shift(full_rows)
@@ -75,11 +75,11 @@ def summarize_robustness_rows(
 
 
 def _relative_drop(rows: list[dict[str, Any]]) -> float:
-    finite_rows = _finite_strength_rows(rows)
-    if not finite_rows:
+    valid_rows = _valid_strength_rows(rows)
+    if not valid_rows:
         return float("inf")
-    clean = _endpoint_score(finite_rows, first=True)
-    corrupted = _endpoint_score(finite_rows, first=False)
+    clean = _endpoint_score(valid_rows, first=True)
+    corrupted = _endpoint_score(valid_rows, first=False)
     return (clean - corrupted) / max(abs(clean), 1e-12)
 
 
@@ -88,7 +88,7 @@ def _endpoint_score(rows: list[dict[str, Any]], *, first: bool) -> float:
         return float("inf")
     by_strength: dict[float, list[float]] = defaultdict(list)
     for row in rows:
-        strength = _finite_float(row.get("corruption_strength"))
+        strength = _valid_corruption_strength(row.get("corruption_strength"))
         score = _finite_float(row.get("score"))
         if strength is None or score is None:
             continue
@@ -101,7 +101,7 @@ def _endpoint_score(rows: list[dict[str, Any]], *, first: bool) -> float:
 
 
 def _auc_over_corruption(rows: list[dict[str, Any]]) -> float:
-    ordered = sorted(_finite_strength_rows(rows), key=lambda row: float(row["corruption_strength"]))
+    ordered = sorted(_valid_strength_rows(rows), key=lambda row: float(row["corruption_strength"]))
     if not ordered:
         return 0.0
     if len(ordered) == 1:
@@ -124,7 +124,7 @@ def _non_increasing(values: list[float]) -> bool:
 def _rceo_reliability_curve(rows: list[dict[str, Any]]) -> list[dict[str, float]]:
     reliability_by_strength: dict[float, list[float]] = defaultdict(list)
     for row in rows:
-        strength = _finite_float(row.get("corruption_strength"))
+        strength = _valid_corruption_strength(row.get("corruption_strength"))
         reliability = _finite_float(row.get("rceo_reliability"))
         if strength is None or reliability is None:
             continue
@@ -230,7 +230,7 @@ def _observed_stress_families(
     }
     for row in rows:
         corruption_type = _normalize_stress_name(row.get("corruption_type", ""))
-        if _finite_float(row.get("corruption_strength")) is None:
+        if _valid_corruption_strength(row.get("corruption_strength")) is None:
             continue
         target = alias_to_family.get(corruption_type)
         if target is not None and _target_metadata_present(row, target):
@@ -290,8 +290,15 @@ def _normalize_stress_name(value: Any) -> str:
     return str(value).strip().lower().replace("-", "_").replace(" ", "_")
 
 
-def _finite_strength_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [row for row in rows if _finite_float(row.get("corruption_strength")) is not None]
+def _valid_strength_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if _valid_corruption_strength(row.get("corruption_strength")) is not None]
+
+
+def _valid_corruption_strength(value: Any) -> float | None:
+    number = _finite_float(value)
+    if number is None or number < 0.0:
+        return None
+    return number
 
 
 def _finite_float(value: Any) -> float | None:
