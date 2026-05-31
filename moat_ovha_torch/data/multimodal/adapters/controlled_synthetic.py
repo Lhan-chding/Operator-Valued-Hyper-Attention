@@ -78,7 +78,7 @@ class ControlledSyntheticMultimodalAdapter:
     ) -> None:
         raise NotImplementedError("controlled synthetic cache writing is intentionally explicit in build_cache.py")
 
-    def validate_cache(self, cache_root: Path) -> ValidationReport:
+    def validate_cache(self, cache_root: Path, cache_version: str | None = None) -> ValidationReport:
         return ValidationReport(ok=True, errors=[], warnings=["controlled synthetic cache is generated, not discovered"])
 
     def sample_batch(

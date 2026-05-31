@@ -126,8 +126,9 @@ class CMUMOSEIAdapter:
         )
         _write_checksums(root)
 
-    def validate_cache(self, cache_root: Path) -> ValidationReport:
-        report = validate_cache_layout(MultimodalCacheLayout(cache_root, self.name, self.version), splits=("train", "val", "test"))
+    def validate_cache(self, cache_root: Path, cache_version: str | None = None) -> ValidationReport:
+        version = cache_version or self.version
+        report = validate_cache_layout(MultimodalCacheLayout(cache_root, self.name, version), splits=("train", "val", "test"))
         return ValidationReport(report.ok, report.errors, report.warnings)
 
 

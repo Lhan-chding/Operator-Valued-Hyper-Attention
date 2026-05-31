@@ -86,7 +86,7 @@ def main() -> int:
             )
         )
         return 2
-    validation = adapter.validate_cache(args.cache_root)
+    validation = adapter.validate_cache(args.cache_root, args.version)
     if not validation.ok:
         print(
             json.dumps(

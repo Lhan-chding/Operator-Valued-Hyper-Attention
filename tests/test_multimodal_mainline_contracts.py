@@ -205,14 +205,16 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             requested_layout = MultimodalCacheLayout(cache_root, "refcoco", "v0.2-test")
             default_layout = MultimodalCacheLayout(cache_root, "refcoco", "v0.1")
             requested_validation = validate_cache_layout(requested_layout, splits=("train", "val", "test"))
+            requested_data_card_exists = (requested_layout.root / "data_card.json").exists()
+            default_data_card_exists = (default_layout.root / "data_card.json").exists()
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         payload = json.loads(result.stdout)
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["cache_root"], str(requested_layout.root))
         self.assertTrue(requested_validation.ok, requested_validation.errors)
-        self.assertTrue((requested_layout.root / "data_card.json").exists())
-        self.assertFalse((default_layout.root / "data_card.json").exists())
+        self.assertTrue(requested_data_card_exists)
+        self.assertFalse(default_data_card_exists)
 
     def test_build_cache_cli_writes_valid_cmu_mosei_cache_from_raw_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
