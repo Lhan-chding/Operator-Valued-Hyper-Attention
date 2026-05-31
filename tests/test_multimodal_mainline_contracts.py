@@ -206,6 +206,20 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             sample_records_exists = (layout.root / "provenance" / "sample_records_train.jsonl").exists()
             missing_mask_exists = (layout.root / "supervision" / "missing_modality_mask_test.npy").exists()
             corruption_exists = (layout.root / "supervision" / "corruption_val.parquet").exists()
+            data_card = json.loads((layout.root / "data_card.json").read_text())
+            train_records = [
+                json.loads(line)
+                for line in (layout.root / "provenance" / "sample_records_train.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+            import numpy as np
+
+            text_train = np.load(layout.root / "token_fields" / "text_train.npy")
+            text_pos_train = np.load(layout.root / "positions" / "text_pos_train.npy")
+            text_mask_train = np.load(layout.root / "masks" / "text_mask_train.npy")
+            task_labels_train = np.load(layout.root / "supervision" / "task_labels_train.npy")
+            emotion_labels_train = np.load(layout.root / "supervision" / "emotion_labels_train.npy")
+            missing_modality_mask_test = np.load(layout.root / "supervision" / "missing_modality_mask_test.npy")
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         payload = json.loads(result.stdout)
@@ -216,6 +230,15 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertTrue(sample_records_exists)
         self.assertTrue(missing_mask_exists)
         self.assertTrue(corruption_exists)
+        self.assertEqual(text_train.shape, (1, 4, 5))
+        self.assertEqual(text_pos_train.shape, (1, 4, 1))
+        self.assertEqual(text_mask_train.shape, (1, 4))
+        self.assertTrue(text_mask_train.all())
+        self.assertEqual(task_labels_train.shape, (1, 1))
+        self.assertEqual(emotion_labels_train.shape, (1, 7))
+        self.assertEqual(missing_modality_mask_test.shape, (1, 3))
+        self.assertEqual(data_card["metadata_availability"]["speaker_id"], True)
+        self.assertEqual(train_records[0]["speaker_id"], "speaker-train")
 
     def test_controlled_true_adapter_param_contract_matches_v1_protocol(self):
         from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
@@ -1092,6 +1115,8 @@ def _write_refcoco_raw_fixture(raw_root: Path) -> None:
 
 
 def _write_cmu_mosei_raw_fixture(raw_root: Path) -> None:
+    import numpy as np
+
     for folder in ("features", "labels", "metadata"):
         (raw_root / folder).mkdir(parents=True, exist_ok=True)
     split_source_ids = {
@@ -1113,6 +1138,7 @@ def _write_cmu_mosei_raw_fixture(raw_root: Path) -> None:
                     "preprocessing_version": "fixture-sentiment-preprocess-v1",
                     "utterance_id": source_id,
                     "dialogue_id": f"dialogue-{split}",
+                    "speaker_id": f"speaker-{split}",
                     "transcript_source": "official_transcript",
                 }
             )
@@ -1129,15 +1155,15 @@ def _write_cmu_mosei_raw_fixture(raw_root: Path) -> None:
         )
         + "\n"
     )
-    (raw_root / "metadata" / "missing_modality_mask.npy").write_text("fixture missing modality mask\n")
+    np.save(raw_root / "metadata" / "missing_modality_mask.npy", np.zeros((3, 3), dtype=bool))
     (raw_root / "metadata" / "corruption_transforms.json").write_text(
         json.dumps({"version": "fixture-corruption-v1"}, sort_keys=True) + "\n"
     )
-    (raw_root / "features" / "text_features.npy").write_text("fixture text features\n")
-    (raw_root / "features" / "audio_features.npy").write_text("fixture audio features\n")
-    (raw_root / "features" / "visual_features.npy").write_text("fixture visual features\n")
-    (raw_root / "labels" / "sentiment.npy").write_text("fixture sentiment labels\n")
-    (raw_root / "labels" / "emotion.npy").write_text("fixture emotion labels\n")
+    np.save(raw_root / "features" / "text_features.npy", np.arange(3 * 4 * 5, dtype=np.float32).reshape(3, 4, 5))
+    np.save(raw_root / "features" / "audio_features.npy", np.arange(3 * 6 * 3, dtype=np.float32).reshape(3, 6, 3))
+    np.save(raw_root / "features" / "visual_features.npy", np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4))
+    np.save(raw_root / "labels" / "sentiment.npy", np.array([[-1.0], [0.0], [1.0]], dtype=np.float32))
+    np.save(raw_root / "labels" / "emotion.npy", np.eye(7, dtype=np.float32)[:3])
 
 
 class _Shape:
