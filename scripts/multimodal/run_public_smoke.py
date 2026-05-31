@@ -31,6 +31,7 @@ from moat_ovha_torch.eval.multimodal_statistics import (
     summarize_public_results,
     validate_public_summary,
 )
+from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 from moat_ovha_torch.models.multimodal.baselines import assert_same_feature_baseline_policy
 from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
 from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA, MultimodalOVHAOutput
@@ -588,7 +589,155 @@ def _write_training_artifacts(
             "path": str(smoke_statistics_preview),
             "sha256": file_sha256(smoke_statistics_preview),
         }
+        smoke_robustness_rows_path = artifact_root / "public_smoke_robustness_rows.jsonl"
+        smoke_robustness_rows = _public_smoke_robustness_rows([*smoke_raw_rows, *baseline_raw_rows])
+        smoke_robustness_rows_path.write_text(
+            "\n".join(json.dumps(row, sort_keys=True) for row in smoke_robustness_rows) + "\n"
+        )
+        smoke_robustness_summary = artifact_root / "public_smoke_robustness_summary.json"
+        _write_smoke_robustness_summary(
+            smoke_robustness_summary,
+            rows=smoke_robustness_rows,
+            source_rows_path=smoke_robustness_rows_path,
+        )
+        artifacts["smoke_robustness_rows"] = {
+            "path": str(smoke_robustness_rows_path),
+            "sha256": file_sha256(smoke_robustness_rows_path),
+        }
+        artifacts["smoke_robustness_summary"] = {
+            "path": str(smoke_robustness_summary),
+            "sha256": file_sha256(smoke_robustness_summary),
+        }
     return artifacts
+
+
+def _public_smoke_robustness_rows(raw_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    robustness_rows: list[dict[str, object]] = []
+    for row in raw_rows:
+        strength = _robustness_strength(row)
+        corrupted_score = _robustness_score(row)
+        clean_score = min(1.0, corrupted_score + 0.10 * strength)
+        corrupted_type = _robustness_corruption_type(row)
+        missing_modalities = _missing_modalities_from_corruption(corrupted_type)
+        router_load = _robustness_router_load(row, corrupted_type)
+        candidate_loss = _robustness_candidate_loss(corrupted_score)
+        common = {
+            "artifact_type": "public_smoke_robustness_row",
+            "evidence_scope": "smoke_robustness_preview_only_not_topconf_gate",
+            "not_topconf_main_table": True,
+            "dataset": str(row["dataset"]),
+            "task": str(row["task"]),
+            "split": str(row["split"]),
+            "seed": int(row["seed"]),
+            "model": str(row["model"]),
+            "source_metric_artifact_type": str(row.get("artifact_type", "")),
+            "source_raw_metric_path": str(row.get("raw_metric_path", "")),
+            "router_load_by_candidate": router_load,
+            "candidate_loss": candidate_loss,
+            "evidence_limitations": [
+                "not valid top-conference robustness evidence",
+                "clean and corrupted endpoints are smoke proxies derived from one eval batch",
+            ],
+        }
+        robustness_rows.append(
+            {
+                **common,
+                "corruption_type": "clean_smoke",
+                "corruption_strength": 0.0,
+                "missing_modalities": [],
+                "score": clean_score,
+                "rceo_reliability": 1.0,
+                "rceo_observed_reliability": clean_score,
+            }
+        )
+        robustness_rows.append(
+            {
+                **common,
+                "corruption_type": corrupted_type,
+                "corruption_strength": strength,
+                "missing_modalities": missing_modalities,
+                "score": corrupted_score,
+                "rceo_reliability": max(0.0, min(1.0, 1.0 - strength)),
+                "rceo_observed_reliability": corrupted_score,
+            }
+        )
+    return robustness_rows
+
+
+def _write_smoke_robustness_summary(
+    path: Path,
+    *,
+    rows: list[dict[str, object]],
+    source_rows_path: Path,
+) -> None:
+    full_model = "ovha_full"
+    baseline_model = _preview_baseline_model(rows)
+    summary = summarize_robustness_rows(rows, full_model=full_model, baseline_model=baseline_model)
+    payload = {
+        **summary,
+        "artifact_type": "public_smoke_robustness_summary",
+        "evidence_scope": "smoke_robustness_preview_only_not_topconf_gate",
+        "not_topconf_main_table": True,
+        "source_rows_path": str(source_rows_path),
+        "evidence_limitations": [
+            "not valid top-conference robustness evidence",
+            "robustness rows are smoke proxies and do not cover all Step 6 stress targets",
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def _robustness_strength(row: dict[str, object]) -> float:
+    metrics = row.get("public_metrics", {})
+    if isinstance(metrics, dict):
+        value = metrics.get("missing_modality_performance_drop")
+        if value is not None:
+            return max(0.0, min(1.0, _as_float(value)))
+    return 0.5
+
+
+def _robustness_score(row: dict[str, object]) -> float:
+    metrics = row.get("public_metrics", {})
+    if isinstance(metrics, dict):
+        for key in ("accuracy", "acc_at_0_5", "f1", "mean_iou"):
+            if key in metrics:
+                return max(0.0, min(1.0, _as_float(metrics[key])))
+    return _bounded_score_from_loss(torch.tensor(float(row.get("score", 0.0))))
+
+
+def _robustness_corruption_type(row: dict[str, object]) -> str:
+    metrics = row.get("public_metrics", {})
+    if isinstance(metrics, dict):
+        loads = metrics.get("router_load_by_corruption_type")
+        if isinstance(loads, dict) and loads:
+            return str(next(iter(loads)))
+    return "smoke_corruption"
+
+
+def _missing_modalities_from_corruption(corruption_type: str) -> list[str]:
+    text = corruption_type.removesuffix("_smoke")
+    for suffix in ("_missing", "missing_"):
+        if text.endswith(suffix):
+            return [text.removesuffix(suffix)]
+        if text.startswith(suffix):
+            return [text.removeprefix(suffix)]
+    return []
+
+
+def _robustness_router_load(row: dict[str, object], corruption_type: str) -> dict[str, float]:
+    metrics = row.get("public_metrics", {})
+    if isinstance(metrics, dict):
+        loads = metrics.get("router_load_by_corruption_type")
+        if isinstance(loads, dict) and isinstance(loads.get(corruption_type), dict):
+            return _complete_candidate_probability_map(loads[corruption_type])
+    if str(row.get("model")) == "ovha_full":
+        return _complete_candidate_probability_map({})
+    return _complete_candidate_probability_map(_probe_router_load_by_candidate(str(row.get("model"))))
+
+
+def _robustness_candidate_loss(score: float) -> dict[str, float]:
+    loss = max(0.0, 1.0 - score)
+    return {candidate: loss for candidate in ("TLEO", "SPO", "LRIO", "CATO")}
 
 
 def _write_smoke_statistics_preview(
@@ -634,9 +783,8 @@ def _preview_baseline_model(rows: list[dict[str, object]]) -> str:
     models = {str(row.get("model")) for row in rows}
     if "cross_attention_transformer" in models:
         return "cross_attention_transformer"
-    for model in sorted(models):
-        if model != "ovha_full":
-            return model
+    # Public gates use cross-attention as the canonical anchor; do not silently
+    # replace it with a weaker arbitrary smoke baseline when it is absent.
     return "cross_attention_transformer"
 
 
