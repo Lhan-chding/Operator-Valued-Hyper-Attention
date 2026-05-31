@@ -66,6 +66,8 @@ Region-text public entry requires passed stackability, CATO collapse, and CATO a
 
 Sentiment/emotion public entry requires passed LRIO collapse, SPO collapse, RCEO gate, no-LRIO ablation degradation, and no-RCEO ablation degradation evidence. Sentiment/emotion public gates must include clean-setting LRIO rank entropy, SPO prototype entropy, SPO top-prototype differentiation across emotion classes, and RCEO reliability calibration with expected calibration error evidence. Router-load or ablation deltas alone are not enough to claim LRIO/SPO/RCEO validity.
 
+Public weak training losses must include structured `loss_metadata` with `supervision_type: weak`, a non-empty `source`, and `must_report_as: weak`; a loss name ending in `_marked` is not sufficient evidence by itself. This applies to weak RCEO reliability signals such as unimodal disagreement and modality-dropout consistency.
+
 ## Cache Requirements
 
 Every formal cache must include:

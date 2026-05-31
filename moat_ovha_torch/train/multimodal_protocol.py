@@ -47,6 +47,10 @@ PUBLIC_ALLOWED_LOSSES = (
     "weak_rceo_unimodal_disagreement_marked",
     "weak_modality_dropout_consistency_marked",
 )
+PUBLIC_MARKED_WEAK_LOSSES = (
+    "weak_rceo_unimodal_disagreement_marked",
+    "weak_modality_dropout_consistency_marked",
+)
 
 CONTROLLED_ALLOWED_EXTRA_LOSSES = HIDDEN_CONTROLLED_ONLY_LOSSES + (
     "cache_validation",
@@ -72,7 +76,7 @@ def validate_training_protocol(plan: dict[str, Any]) -> TrainingProtocolReport:
     stages = tuple(plan.get("training_stages", ()))
     _validate_stage_sequence(task_type, stages, errors)
     losses_by_stage = plan.get("losses_by_stage", {})
-    _validate_losses(task_type, losses_by_stage, errors)
+    _validate_losses(task_type, losses_by_stage, plan.get("loss_metadata", {}), errors)
     _validate_adapter_params(plan.get("adapter_params_by_candidate", {}), errors)
     return TrainingProtocolReport(ok=not errors, errors=errors, warnings=warnings)
 
@@ -86,7 +90,12 @@ def _validate_stage_sequence(task_type: str, stages: tuple[str, ...], errors: li
         errors.append(f"{task_type} training_stages must be {expected}, got {stages}")
 
 
-def _validate_losses(task_type: str, losses_by_stage: dict[str, list[str]], errors: list[str]) -> None:
+def _validate_losses(
+    task_type: str,
+    losses_by_stage: dict[str, list[str]],
+    loss_metadata: dict[str, dict[str, Any]],
+    errors: list[str],
+) -> None:
     for stage, losses in sorted(losses_by_stage.items()):
         for loss in losses:
             if task_type == "controlled_multimodal":
@@ -102,6 +111,25 @@ def _validate_losses(task_type: str, losses_by_stage: dict[str, list[str]], erro
                     errors.append("weak reliability loss must be explicitly marked: use weak_rceo_unimodal_disagreement_marked")
                 elif loss not in PUBLIC_ALLOWED_LOSSES:
                     errors.append(f"unknown or unmarked public loss {loss} in {stage}")
+                elif loss in PUBLIC_MARKED_WEAK_LOSSES:
+                    _validate_marked_weak_loss(loss, loss_metadata, errors)
+
+
+def _validate_marked_weak_loss(
+    loss: str,
+    loss_metadata: dict[str, dict[str, Any]],
+    errors: list[str],
+) -> None:
+    metadata = loss_metadata.get(loss)
+    if not isinstance(metadata, dict):
+        errors.append(f"weak loss requires structured marking metadata: {loss}")
+        return
+    if metadata.get("supervision_type") != "weak":
+        errors.append(f"weak loss metadata must set supervision_type=weak: {loss}")
+    if not str(metadata.get("source", "")).strip():
+        errors.append(f"weak loss metadata must include non-empty source: {loss}")
+    if metadata.get("must_report_as") != "weak":
+        errors.append(f"weak loss metadata must set must_report_as=weak: {loss}")
 
 
 def _validate_adapter_params(params_by_candidate: dict[str, list[str]], errors: list[str]) -> None:
