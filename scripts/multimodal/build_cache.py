@@ -16,6 +16,7 @@ from moat_ovha_torch.data.multimodal.adapters import (
     ControlledSyntheticMultimodalAdapter,
     Flickr30kEntitiesAdapter,
     MELDAdapter,
+    MissingMultimodalDataError,
     RefCOCOAdapter,
     VisualGenomeAdapter,
 )
@@ -42,7 +43,24 @@ def main() -> int:
     parser.add_argument("--version", default="v0.1")
     args = parser.parse_args()
     adapter = ADAPTERS[args.dataset_name]()
-    manifest = adapter.discover_raw(args.raw_root)
+    try:
+        manifest = adapter.discover_raw(args.raw_root)
+    except MissingMultimodalDataError as exc:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "policy": "fail-fast: raw data manifest must be complete before cache initialization",
+                    "dataset_name": args.dataset_name,
+                    "raw_root": str(args.raw_root),
+                    "errors": [str(exc)],
+                    "warnings": [],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
     layout = MultimodalCacheLayout(args.cache_root, adapter.name, args.version)
     layout.root.mkdir(parents=True, exist_ok=True)
     card = default_data_card(adapter.name, args.version, _modalities_for(adapter.name), _tasks_for(adapter.name))
