@@ -224,7 +224,7 @@ def _observed_stress_families(
     for row in rows:
         corruption_type = _normalize_stress_name(row.get("corruption_type", ""))
         target = alias_to_family.get(corruption_type)
-        if target is not None and (not _requires_mismatch_source(target) or _has_mismatch_metadata(row)):
+        if target is not None and _target_metadata_present(row, target):
             observed.add(target)
         observed.update(_families_from_missing_modalities(row, alias_to_family))
         if _has_temporal_shift(row):
@@ -249,8 +249,24 @@ def _has_mismatch_metadata(row: dict[str, Any]) -> bool:
     return isinstance(mismatch, str) and bool(mismatch.strip())
 
 
-def _requires_mismatch_source(target: str) -> bool:
-    return target.startswith("hard_negative_") and target.endswith("_mismatch")
+def _target_metadata_present(row: dict[str, Any], target: str) -> bool:
+    if target.startswith("missing_"):
+        return _missing_modalities_contains(row, target.removeprefix("missing_"))
+    if target == "temporal_shift":
+        return _has_temporal_shift(row)
+    if target.startswith("hard_negative_") and target.endswith("_mismatch"):
+        return _has_mismatch_metadata(row)
+    return True
+
+
+def _missing_modalities_contains(row: dict[str, Any], modality: str) -> bool:
+    missing = row.get("missing_modalities", ())
+    if not isinstance(missing, (list, tuple, set)):
+        return False
+    normalized = {_normalize_stress_name(value) for value in missing}
+    if modality == "vision":
+        return "vision" in normalized or "visual" in normalized
+    return modality in normalized
 
 
 def _has_temporal_shift(row: dict[str, Any]) -> bool:
