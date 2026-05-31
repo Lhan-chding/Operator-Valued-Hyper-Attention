@@ -719,6 +719,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
     def test_public_smoke_runner_evaluates_heldout_split_after_training(self):
         if importlib.util.find_spec("torch") is None:
             self.skipTest("torch is required for public training smoke")
+        from moat_ovha_torch.eval.multimodal_statistics import REGION_TEXT_REQUIRED_PUBLIC_METRICS
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -812,6 +813,12 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(smoke_raw["hardware"]["device"], "cpu")
         self.assertGreaterEqual(smoke_raw["hardware"]["wall_clock_hours"], 0.0)
         self.assertIn("production main tables should use 5 seeds", smoke_raw["seed_count_rationale"])
+        self.assertEqual(set(smoke_raw["public_metrics"]), set(REGION_TEXT_REQUIRED_PUBLIC_METRICS))
+        self.assertEqual(
+            smoke_raw["public_metrics_scope"],
+            "region_text_smoke_proxy_not_topconf_main_table",
+        )
+        self.assertIn("public metric inventory uses smoke proxies", smoke_raw["evidence_limitations"])
         self.assertEqual(len(smoke_baseline_rows), len(payload["baselines"]))
         baseline_models = {row["model"] for row in smoke_baseline_rows}
         self.assertEqual(baseline_models, set(payload["baselines"]))
@@ -836,7 +843,13 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 row["frozen_feature_extractor_version"],
                 {"region": "clip-region-test", "text": "clip-text-test"},
             )
+            self.assertEqual(set(row["public_metrics"]), set(REGION_TEXT_REQUIRED_PUBLIC_METRICS))
+            self.assertEqual(
+                row["public_metrics_scope"],
+                "region_text_smoke_proxy_not_topconf_main_table",
+            )
             self.assertIn("not a trained strong baseline", row["evidence_limitations"])
+            self.assertIn("public metric inventory uses smoke proxies", row["evidence_limitations"])
 
     def test_public_smoke_runner_rejects_unverified_controlled_artifact_descriptors(self):
         with tempfile.TemporaryDirectory() as tmp:
