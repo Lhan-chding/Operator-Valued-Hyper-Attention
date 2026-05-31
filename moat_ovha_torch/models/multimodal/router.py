@@ -23,6 +23,9 @@ class MultimodalRelationRouter(nn.Module):
         super().__init__()
         self.candidate_names = candidate_names
         self.memory_head = nn.Linear(d_model * 2, 1)
+        self.query_candidate_head = nn.Linear(d_model, len(candidate_names))
+        nn.init.zeros_(self.query_candidate_head.weight)
+        nn.init.zeros_(self.query_candidate_head.bias)
 
     def forward(
         self,
@@ -34,7 +37,7 @@ class MultimodalRelationRouter(nn.Module):
         for name in self.candidate_names:
             memory = memory_bank[name].mean(dim=1).unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1)
             memory_logits.append(self.memory_head(torch.cat([evidence.query_features, memory], dim=-1)))
-        memory_logit = torch.cat(memory_logits, dim=-1)
+        memory_logit = torch.cat(memory_logits, dim=-1) + self.query_candidate_head(evidence.query_features)
         evidence_logit = evidence.candidate_evidence_logits
         reliability_logit = (
             reliability.operator_logit_bias
@@ -45,6 +48,7 @@ class MultimodalRelationRouter(nn.Module):
         weights = torch.softmax(logits, dim=-1)
         diagnostics = {
             "router_memory_logit_norm": memory_logit.norm(dim=-1).mean(),
+            "router_query_logit_norm": self.query_candidate_head(evidence.query_features).norm(dim=-1).mean(),
             "router_evidence_logit_norm": evidence_logit.norm(dim=-1).mean(),
             "router_reliability_logit_norm": reliability_logit.norm(dim=-1).mean(),
             "router_entropy": -(weights * weights.clamp_min(1e-12).log()).sum(dim=-1).mean(),
