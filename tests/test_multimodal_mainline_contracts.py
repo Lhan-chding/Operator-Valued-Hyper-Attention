@@ -1,4 +1,7 @@
 import importlib.util
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -71,6 +74,32 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(module._tasks_for("visual_genome"), ["phrase_region_grounding"])
         self.assertEqual(module._modalities_for("meld"), ["text", "audio", "vision"])
         self.assertEqual(module._tasks_for("meld"), ["sentiment_regression", "emotion_classification"])
+
+    def test_build_cache_cli_reports_missing_raw_as_json_fail_fast(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_root = Path(tmp) / "missing_raw"
+            cache_root = Path(tmp) / "cache"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "flickr30k_entities",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["dataset_name"], "flickr30k_entities")
+        self.assertIn("fail-fast", payload["policy"])
+        self.assertIn("annotations/phrase_regions.json", "\n".join(payload["errors"]))
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_public_dataset_adapters_expose_cache_required_supervision_shards(self):
         from moat_ovha_torch.data.multimodal.adapters import (
