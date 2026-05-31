@@ -31,6 +31,7 @@ from moat_ovha_torch.eval.multimodal_statistics import (
     summarize_public_results,
     validate_public_summary,
 )
+from moat_ovha_torch.eval.multimodal_diagnostics import summarize_diagnostic_rows
 from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 from moat_ovha_torch.models.multimodal.baselines import assert_same_feature_baseline_policy
 from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
@@ -493,6 +494,9 @@ def _public_training_diagnostics_row(
         "step": step,
         "router_entropy": _json_ready(diagnostics["router_entropy"]),
         "router_load_by_candidate": _json_ready(diagnostics["router_load_by_candidate"]),
+        "router_memory_logit_norm": _json_ready(diagnostics["router_memory_logit_norm"]),
+        "router_evidence_logit_norm": _json_ready(diagnostics["router_evidence_logit_norm"]),
+        "router_reliability_logit_norm": _json_ready(diagnostics["router_reliability_logit_norm"]),
         "router_logit_parts": _router_logit_part_summary(output.router_logit_parts),
         "candidate_loss": _json_ready(diagnostics["candidate_loss"]),
         "adapter_params": _json_ready(diagnostics["adapter_params"]),
@@ -503,14 +507,8 @@ def _public_training_diagnostics_row(
     }
 
 
-def _router_logit_part_summary(logit_parts: dict[str, torch.Tensor]) -> dict[str, dict[str, float]]:
-    return {
-        name: {
-            "mean": _as_float(value.mean()),
-            "norm": _as_float(value.norm(dim=-1).mean()),
-        }
-        for name, value in logit_parts.items()
-    }
+def _router_logit_part_summary(logit_parts: dict[str, torch.Tensor]) -> dict[str, float]:
+    return {name: _as_float(value.norm(dim=-1).mean()) for name, value in logit_parts.items()}
 
 
 def _task_loss(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
@@ -546,8 +544,14 @@ def _write_training_artifacts(
     artifact_root.mkdir(parents=True, exist_ok=True)
     metrics = artifact_root / "public_training_metrics.jsonl"
     diagnostics = artifact_root / "public_training_diagnostics.jsonl"
+    diagnostics_summary = artifact_root / "public_training_diagnostics_summary.json"
     metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in loss_history) + "\n")
     diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in diagnostic_history) + "\n")
+    _write_diagnostics_summary(
+        diagnostics_summary,
+        rows=diagnostic_history,
+        source_rows_path=diagnostics,
+    )
     artifacts = {
         "metrics": {
             "path": str(metrics),
@@ -556,6 +560,10 @@ def _write_training_artifacts(
         "diagnostics": {
             "path": str(diagnostics),
             "sha256": file_sha256(diagnostics),
+        },
+        "diagnostics_summary": {
+            "path": str(diagnostics_summary),
+            "sha256": file_sha256(diagnostics_summary),
         },
     }
     smoke_raw_rows: list[dict[str, object]] = []
@@ -568,10 +576,20 @@ def _write_training_artifacts(
         smoke_raw_metrics = artifact_root / "public_smoke_raw_metrics.jsonl"
         eval_metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in eval_history) + "\n")
         eval_diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in eval_diagnostic_history) + "\n")
+        eval_diagnostics_summary = artifact_root / "public_eval_diagnostics_summary.json"
+        _write_diagnostics_summary(
+            eval_diagnostics_summary,
+            rows=eval_diagnostic_history,
+            source_rows_path=eval_diagnostics,
+        )
         smoke_raw_rows = _public_smoke_raw_metric_rows(eval_history, smoke_raw_metrics)
         smoke_raw_metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in smoke_raw_rows) + "\n")
         artifacts["eval_metrics"] = {"path": str(eval_metrics), "sha256": file_sha256(eval_metrics)}
         artifacts["eval_diagnostics"] = {"path": str(eval_diagnostics), "sha256": file_sha256(eval_diagnostics)}
+        artifacts["eval_diagnostics_summary"] = {
+            "path": str(eval_diagnostics_summary),
+            "sha256": file_sha256(eval_diagnostics_summary),
+        }
         artifacts["smoke_raw_metrics"] = {"path": str(smoke_raw_metrics), "sha256": file_sha256(smoke_raw_metrics)}
     if eval_baseline_history:
         smoke_baseline_metrics = artifact_root / "public_smoke_baseline_raw_metrics.jsonl"
@@ -618,6 +636,27 @@ def _write_training_artifacts(
             "sha256": file_sha256(smoke_robustness_summary),
         }
     return artifacts
+
+
+def _write_diagnostics_summary(
+    path: Path,
+    *,
+    rows: list[dict[str, object]],
+    source_rows_path: Path,
+) -> None:
+    summary = summarize_diagnostic_rows(rows)
+    payload = {
+        **summary,
+        "artifact_type": "public_smoke_diagnostics_summary",
+        "evidence_scope": "public_smoke_diagnostics_only_not_topconf_gate",
+        "not_topconf_main_table": True,
+        "source_rows_path": str(source_rows_path),
+        "evidence_limitations": [
+            "not valid top-conference diagnostics evidence",
+            "summary verifies public smoke diagnostics schema coverage only",
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def _public_smoke_robustness_rows(raw_rows: list[dict[str, object]]) -> list[dict[str, object]]:
