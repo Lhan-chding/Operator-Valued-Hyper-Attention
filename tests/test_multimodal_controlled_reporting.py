@@ -113,6 +113,47 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("spo_global_prototype oracle_matrix.learned_true.loss must be finite non-negative", joined)
         self.assertIn("tleo_local_evidence oracle gap must be finite non-negative: TLEO_oracle_gap", joined)
 
+    def test_controlled_report_requires_strict_gate_metric_values(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+
+        rows = [
+            _row(
+                "tleo_local_evidence",
+                "TLEO",
+                0.010,
+                0.010,
+                stackability_passed="true",
+                no_operator_memory_delta="nan",
+            ),
+            _row("spo_global_prototype", "SPO", 0.020, 0.020),
+            _row("lrio_low_rank_interaction", "LRIO", 0.030, 0.030, no_lrio_delta="nan"),
+            _row("cato_alignment_transport", "CATO", 0.040, 0.040, no_hyper_adapter_delta=-0.01),
+            _row(
+                "rceo_reliability_corruption",
+                "LRIO",
+                0.050,
+                0.050,
+                rceo=True,
+                rceo_reliability_monotonic="true",
+                rceo_router_load_shift="nan",
+                no_rceo_delta=-0.01,
+            ),
+            _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy="nan"),
+        ]
+
+        report = build_controlled_report(rows)
+
+        self.assertFalse(report["go_no_go"]["controlled_multimodal_passed"])
+        joined = "\n".join(report["go_no_go"]["reasons"])
+        self.assertIn("tleo_local_evidence stackability_passed must be explicit true", joined)
+        self.assertIn("Router gate router_accuracy must be a finite probability", joined)
+        self.assertIn("RCEO gate rceo_reliability_monotonic must be explicit true", joined)
+        self.assertIn("RCEO gate rceo_router_load_shift must be finite positive", joined)
+        self.assertIn("Memory gate no_operator_memory_delta must be finite positive for tleo_local_evidence", joined)
+        self.assertIn("Adapter gate no_hyper_adapter_delta must be finite positive for cato_alignment_transport", joined)
+        self.assertIn("no-LRIO ablation no_lrio_delta must be finite positive for lrio_low_rank_interaction", joined)
+        self.assertIn("no-RCEO ablation no_rceo_delta must be finite positive for rceo_reliability_corruption", joined)
+
     def test_collapse_gate_uses_true_router_learned_adapter_oracle_cell(self):
         from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
 
@@ -438,6 +479,12 @@ def _row(
     no_rceo_delta: float | None = None,
     oracle_overrides: dict[str, object] | None = None,
     oracle_gap_overrides: dict[str, object] | None = None,
+    stackability_passed: object = True,
+    no_operator_memory_delta: object = 0.1,
+    no_hyper_adapter_delta: object = 0.1,
+    router_accuracy_value: object | None = None,
+    rceo_reliability_monotonic: object = True,
+    rceo_router_load_shift: object = 0.1,
 ) -> dict[str, object]:
     oracle_matrix = {
         "learned_learned": {"loss": full_loss},
@@ -456,10 +503,10 @@ def _row(
         "active_operator": active_operator,
         "oracle_matrix": oracle_matrix,
         "specialist_loss": specialist_loss,
-        "router_accuracy": router_accuracy,
-        "stackability_passed": True,
-        "no_operator_memory_delta": 0.1,
-        "no_hyper_adapter_delta": 0.1,
+        "router_accuracy": router_accuracy if router_accuracy_value is None else router_accuracy_value,
+        "stackability_passed": stackability_passed,
+        "no_operator_memory_delta": no_operator_memory_delta,
+        "no_hyper_adapter_delta": no_hyper_adapter_delta,
     }
     if include_oracle_gap_evidence:
         row.update(
@@ -473,8 +520,8 @@ def _row(
         if oracle_gap_overrides:
             row.update(oracle_gap_overrides)
     if rceo:
-        row["rceo_reliability_monotonic"] = True
-        row["rceo_router_load_shift"] = 0.1
+        row["rceo_reliability_monotonic"] = rceo_reliability_monotonic
+        row["rceo_router_load_shift"] = rceo_router_load_shift
         if include_rceo_prior_effect:
             row["rceo_prior_effect"] = 0.1
     if no_lrio_delta is not None:
