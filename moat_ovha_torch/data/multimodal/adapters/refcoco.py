@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-import shutil
 from typing import Any
+
+import numpy as np
 
 from moat_ovha_torch.data.multimodal.adapters.base import (
     RawDatasetManifest,
@@ -165,18 +166,15 @@ def _write_split_cache_files(
     source_ids: list[str],
     records_by_source_id: dict[str, dict[str, Any]],
 ) -> None:
-    _copy_feature_shard(manifest.files["features/text_features.npy"], root / "token_fields" / f"text_{split}.npy")
-    _copy_feature_shard(
-        manifest.files["features/region_features.npy"],
-        root / "token_fields" / f"region_{split}.npy",
-    )
-    for modality in ("text", "region"):
-        (root / "positions" / f"{modality}_pos_{split}.npy").write_text(
-            f"{modality} positions generated from raw {manifest.dataset_name} {split}\n"
-        )
-        (root / "masks" / f"{modality}_mask_{split}.npy").write_text(
-            f"{modality} mask generated from raw {manifest.dataset_name} {split}\n"
-        )
+    row_indices = _row_indices_for_source_ids(source_ids, records_by_source_id)
+    feature_sources = {
+        "text": manifest.files["features/text_features.npy"],
+        "region": manifest.files["features/region_features.npy"],
+    }
+    for modality, source in feature_sources.items():
+        shard = _load_and_select_rows(source, row_indices, artifact_name=f"{modality} features")
+        _write_array(root / "token_fields" / f"{modality}_{split}.npy", shard)
+        _write_position_and_mask_artifacts(root, modality, split, shard)
     token_manifest = {
         "text": {
             "x": f"token_fields/text_{split}.npy",
@@ -198,19 +196,74 @@ def _write_split_cache_files(
         "\n".join(json.dumps(record, sort_keys=True) for record in sample_records) + "\n"
     )
     (root / "provenance" / f"failed_samples_{split}.jsonl").write_text("")
-    for name in (
-        f"task_labels_{split}.npy",
-        f"alignment_pairs_{split}.parquet",
-        f"bbox_targets_{split}.npy",
-        f"region_targets_{split}.npy",
-        f"corruption_{split}.parquet",
-    ):
-        (root / "supervision" / name).write_text(f"{name} generated from raw {manifest.dataset_name}\n")
+    selected_records = [records_by_source_id[source_id] for source_id in source_ids]
+    _write_array(root / "supervision" / f"task_labels_{split}.npy", np.ones((len(source_ids), 1), dtype=np.float32))
+    _write_alignment_pairs(root / "supervision" / f"alignment_pairs_{split}.parquet", split, selected_records)
+    _write_array(root / "supervision" / f"bbox_targets_{split}.npy", _bbox_targets(selected_records))
+    _write_array(root / "supervision" / f"region_targets_{split}.npy", np.zeros((len(source_ids), 1), dtype=np.int64))
+    _write_corruption_metadata(root / "supervision" / f"corruption_{split}.parquet", split, source_ids)
 
 
-def _copy_feature_shard(source: Path, destination: Path) -> None:
+def _write_array(destination: Path, array: np.ndarray) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, destination)
+    np.save(destination, array)
+
+
+def _write_position_and_mask_artifacts(root: Path, modality: str, split: str, shard: np.ndarray) -> None:
+    if shard.ndim < 2:
+        raise ValueError(f"{modality} feature shard for split {split} must have at least [sample, token] axes")
+    sample_count = int(shard.shape[0])
+    token_count = int(shard.shape[1])
+    positions = np.broadcast_to(
+        np.arange(token_count, dtype=np.float32).reshape(1, token_count, 1),
+        (sample_count, token_count, 1),
+    ).copy()
+    mask = np.ones((sample_count, token_count), dtype=bool)
+    _write_array(root / "positions" / f"{modality}_pos_{split}.npy", positions)
+    _write_array(root / "masks" / f"{modality}_mask_{split}.npy", mask)
+
+
+def _load_and_select_rows(source: Path, row_indices: list[int], *, artifact_name: str) -> np.ndarray:
+    array = np.load(source, allow_pickle=False)
+    if array.ndim == 0:
+        raise ValueError(f"{artifact_name} must have a sample axis: {source}")
+    sample_count = int(array.shape[0])
+    if any(row_index < 0 or row_index >= sample_count for row_index in row_indices):
+        raise ValueError(f"{artifact_name} row index exceeds available rows in {source}")
+    return np.asarray(array[row_indices]).copy()
+
+
+def _write_alignment_pairs(destination: Path, split: str, records: list[dict[str, Any]]) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for row_index, record in enumerate(records):
+        rows.append(
+            {
+                "source_id": record["source_id"],
+                "split": split,
+                "phrase_span": record["phrase_span"],
+                "target_region_index": 0,
+                "row_index": row_index,
+            }
+        )
+    destination.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
+
+
+def _bbox_targets(records: list[dict[str, Any]]) -> np.ndarray:
+    return np.asarray(
+        [[float(value) for value in record["region_box"]] for record in records],
+        dtype=np.float32,
+    )
+
+
+def _write_corruption_metadata(destination: Path, split: str, source_ids: list[str]) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "split": split,
+        "source_ids": source_ids,
+        "corruption": "none",
+    }
+    destination.write_text(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def _write_checksums(root: Path) -> None:
@@ -262,8 +315,21 @@ def _grounding_records_by_source_id(manifest: RawDatasetManifest) -> dict[str, d
         if source_id in by_source_id:
             raise ValueError(f"{path.name} contains duplicate source_id: {source_id}")
         _validate_grounding_record(path.name, index, record)
-        by_source_id[source_id] = record
+        by_source_id[source_id] = {**record, "_cache_row_index": index}
     return by_source_id
+
+
+def _row_indices_for_source_ids(
+    source_ids: list[str],
+    records_by_source_id: dict[str, dict[str, Any]],
+) -> list[int]:
+    row_indices: list[int] = []
+    for source_id in source_ids:
+        row_index = records_by_source_id[source_id].get("_cache_row_index")
+        if not isinstance(row_index, int) or isinstance(row_index, bool):
+            raise ValueError(f"annotation records missing cache row index for source_id: {source_id}")
+        row_indices.append(row_index)
+    return row_indices
 
 
 def _annotation_record_path(manifest: RawDatasetManifest) -> Path:
