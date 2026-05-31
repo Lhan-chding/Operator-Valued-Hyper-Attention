@@ -302,7 +302,7 @@ class MultimodalControlledReportingTests(unittest.TestCase):
             ),
         ]
 
-        report = build_controlled_report(rows)
+        report = build_controlled_report(rows, evidence_artifacts=_controlled_evidence_artifacts())
         entry = validate_public_entry_requirements("sentiment_emotion", report)
 
         self.assertTrue(report["gate_table"]["no-LRIO ablation"]["passed"])
@@ -322,7 +322,7 @@ class MultimodalControlledReportingTests(unittest.TestCase):
             _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy=0.85),
         ]
 
-        report = build_controlled_report(rows)
+        report = build_controlled_report(rows, evidence_artifacts=_controlled_evidence_artifacts())
         entry = validate_public_entry_requirements("phrase_region_grounding", report)
 
         self.assertTrue(report["gate_table"]["CATO alignment diagnostics"]["passed"])
@@ -897,6 +897,15 @@ def _robustness_row(model: str, strength: float, score: float, *, reliability: f
         "score": score,
         "rceo_reliability": reliability,
         "router_load_by_candidate": {"CATO": 0.60 - strength * 0.40, "SPO": 0.10 + strength * 0.30},
+    }
+
+
+def _controlled_evidence_artifacts() -> dict[str, object]:
+    return {
+        "task": "controlled_multimodal",
+        "generated_by": "scripts/multimodal/summarize_controlled_report.py",
+        "controlled_rows": {"path": "artifacts/controlled_rows.jsonl", "sha256": "e" * 64},
+        "diagnostics_report": {"path": "artifacts/controlled_diagnostics.jsonl", "sha256": "f" * 64},
     }
 
 

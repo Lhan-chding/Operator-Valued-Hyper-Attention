@@ -1079,6 +1079,16 @@ def _complete_controlled_public_entry_report() -> dict[str, object]:
         },
         "gate_table": gate_table,
         "go_no_go": {"controlled_multimodal_passed": True, "enter_public_multimodal": True},
+        "evidence_artifacts": _controlled_evidence_artifacts(),
+    }
+
+
+def _controlled_evidence_artifacts() -> dict[str, object]:
+    return {
+        "task": "controlled_multimodal",
+        "generated_by": "scripts/multimodal/summarize_controlled_report.py",
+        "controlled_rows": {"path": "artifacts/controlled_multimodal_rows.jsonl", "sha256": "e" * 64},
+        "diagnostics_report": {"path": "artifacts/controlled_multimodal_diagnostics.jsonl", "sha256": "f" * 64},
     }
 
 

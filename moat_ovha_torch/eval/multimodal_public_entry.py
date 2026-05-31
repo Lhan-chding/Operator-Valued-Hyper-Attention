@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import math
+import re
 from typing import Any
 
 from moat_ovha_torch.eval.multimodal_controlled_report import (
@@ -22,6 +24,8 @@ SENTIMENT_EMOTION_TASK_TYPES = {
     "meld",
     "iemocap",
 }
+CONTROLLED_EVIDENCE_ARTIFACTS = ("controlled_rows", "diagnostics_report")
+_SHA256_HEX_RE = re.compile(r"^[a-f0-9]{64}$")
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,7 @@ def validate_public_entry_requirements(task_type: str, controlled_report: dict[s
             errors.append("controlled report go_no_go.reasons must be empty when public entry flags are true")
 
     _require_complete_controlled_report(controlled_report, errors)
+    _require_controlled_evidence_artifacts(controlled_report.get("evidence_artifacts"), errors)
 
     gates = controlled_report.get("gate_table", {})
     if task_type in REGION_TEXT_TASK_TYPES:
@@ -146,6 +151,34 @@ def _require_complete_controlled_report(controlled_report: dict[str, Any], error
             errors.append(f"controlled report required gate did not pass: {gate_name}")
 
 
+def _require_controlled_evidence_artifacts(evidence: Any, errors: list[str]) -> None:
+    if not isinstance(evidence, Mapping):
+        errors.append("controlled report evidence_artifacts is required")
+        return
+    task = evidence.get("task")
+    if not isinstance(task, str) or task.strip() != "controlled_multimodal":
+        errors.append("controlled report evidence_artifacts task must be controlled_multimodal")
+    if not _non_empty_text(evidence.get("generated_by")):
+        errors.append("controlled report evidence_artifacts generated_by must identify the evaluator")
+    for artifact_name in CONTROLLED_EVIDENCE_ARTIFACTS:
+        artifact = evidence.get(artifact_name)
+        if artifact is None:
+            errors.append(f"controlled report evidence_artifacts missing artifact: {artifact_name}")
+            continue
+        _validate_artifact_descriptor(artifact_name, artifact, errors)
+
+
+def _validate_artifact_descriptor(artifact_name: str, artifact: Any, errors: list[str]) -> None:
+    if not isinstance(artifact, Mapping):
+        errors.append(f"controlled report evidence_artifacts {artifact_name} must include path and sha256")
+        return
+    if not _non_empty_text(artifact.get("path")):
+        errors.append(f"controlled report evidence_artifacts {artifact_name}.path must be a non-empty string")
+    sha256 = artifact.get("sha256")
+    if not isinstance(sha256, str) or not _SHA256_HEX_RE.fullmatch(sha256):
+        errors.append(f"controlled report evidence_artifacts {artifact_name}.sha256 must be lowercase SHA-256")
+
+
 def _require_family_oracle_evidence(family: str, row: dict[str, Any], errors: list[str]) -> None:
     matrix = row.get("oracle_matrix")
     if not isinstance(matrix, dict):
@@ -177,3 +210,7 @@ def _finite_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return numeric if math.isfinite(numeric) else None
+
+
+def _non_empty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())

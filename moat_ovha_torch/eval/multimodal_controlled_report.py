@@ -57,7 +57,11 @@ ROUTER_DECOMPOSITION_ABLATION_KEYS = (
 )
 
 
-def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def build_controlled_report(
+    rows: list[dict[str, Any]],
+    *,
+    evidence_artifacts: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     family_rows, family_reasons = _index_controlled_family_rows(rows)
     gate_table = {
         "Stackability": _stackability_gate(rows),
@@ -112,7 +116,7 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             reasons.append(f"{name} {gate_reason}")
         for diagnostic_reason in gate.get("diagnostic_reasons", ()):
             reasons.append(f"{name} {diagnostic_reason}")
-    return {
+    report: dict[str, Any] = {
         "oracle_matrix_cells": ORACLE_MATRIX_CELLS,
         "families": family_rows,
         "gate_table": gate_table,
@@ -122,6 +126,9 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "reasons": reasons,
         },
     }
+    if evidence_artifacts is not None:
+        report["evidence_artifacts"] = evidence_artifacts
+    return report
 
 
 def _index_controlled_family_rows(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[str]]:
