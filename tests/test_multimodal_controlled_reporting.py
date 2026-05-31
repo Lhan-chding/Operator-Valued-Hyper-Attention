@@ -1009,6 +1009,52 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertTrue(all(entry["stage"] in {"T1", "T2", "T3", "T4"} for entry in training["loss_history"]))
         self.assertTrue(all(row["training_config_name"] == "multimodal_controlled_v1_smoke" for row in rows))
 
+    def test_controlled_training_t1_specialist_warmup_excludes_rceo_and_mixed_families(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for controlled training smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "run_controlled_training_smoke.py"),
+                    "--config",
+                    str(ROOT / "configs" / "multimodal_controlled_v1_smoke.json"),
+                    "--steps-per-stage",
+                    "6",
+                    "--batch-size",
+                    "2",
+                    "--query-count",
+                    "4",
+                    "--d-model",
+                    "16",
+                    "--artifact-root",
+                    str(Path(tmp) / "controlled_training_artifacts"),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+
+        stages = {stage["stage"]: stage for stage in payload["training"]["stage_history"]}
+        self.assertEqual(
+            stages["T1"]["families_seen"],
+            [
+                "cato_alignment_transport",
+                "lrio_low_rank_interaction",
+                "spo_global_prototype",
+                "tleo_local_evidence",
+            ],
+        )
+        t1_rows = [row for row in payload["training"]["loss_history"] if row["stage"] == "T1"]
+        self.assertTrue(t1_rows)
+        self.assertNotIn("rceo_reliability_corruption", {row["family"] for row in t1_rows})
+        self.assertNotIn("mixed_relation_operator", {row["family"] for row in t1_rows})
+
 
 def _row(
     family: str,
