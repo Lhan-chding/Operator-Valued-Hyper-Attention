@@ -186,6 +186,29 @@ class MultimodalPublicGateTests(unittest.TestCase):
             "\n".join(report["reasons"]),
         )
 
+    def test_sentiment_gate_requires_paired_evidence_for_beaten_anchor_baseline(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        summary = _summary("sentiment_emotion", "test", full=0.76, baseline=0.74)
+        baseline_comparisons = summary["paired_tests"]["sentiment_emotion"]["test"]["baseline_comparisons"]
+        baseline_comparisons.pop("tfn_lmf")
+        baseline_comparisons.pop("mult_style_crossmodal_transformer")
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_sentiment_diagnostics(),
+            ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
+            robustness_summary=_passing_sentiment_robustness(),
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["checks"]["full_beats_lmf_or_mult_baseline"]["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("required sentiment anchor tfn_lmf paired comparison missing", joined)
+        self.assertIn("required sentiment anchor mult_style_crossmodal_transformer paired comparison missing", joined)
+
     def test_sentiment_gate_rejects_missing_plan_diagnostics_and_calibration(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
 
