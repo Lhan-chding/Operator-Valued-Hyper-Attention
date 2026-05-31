@@ -370,6 +370,26 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
 
         self.assertTrue(report.ok, report.errors)
 
+    def test_public_entry_rejects_minimal_controlled_gate_stub_without_full_report(self):
+        from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+
+        minimal_stub = {
+            "go_no_go": {"controlled_multimodal_passed": True, "enter_public_multimodal": True},
+            "gate_table": {
+                "Stackability": {"passed": True},
+                "CATO collapse": {"passed": True},
+                "CATO alignment diagnostics": {"passed": True},
+            },
+        }
+
+        report = validate_public_entry_requirements("phrase_region_grounding", minimal_stub)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("controlled report must include full oracle_matrix_cells", joined)
+        self.assertIn("controlled report missing controlled family: mixed_relation_operator", joined)
+        self.assertIn("controlled report missing required gate: Router gate", joined)
+
     def test_public_smoke_runner_requires_controlled_report_after_cache_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_root = Path(tmp) / "cache"
