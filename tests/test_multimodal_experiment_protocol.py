@@ -842,6 +842,67 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             joined,
         )
 
+    def test_topconf_main_entry_rejects_public_gate_diagnostics_and_robustness_content_mismatch(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+
+            region_report = _passing_region_text_public_gate_report(tmp_path / "artifacts")
+            region_diagnostics = Path(region_report["evidence_artifacts"]["diagnostics"]["path"])
+            region_diagnostics.write_text(json.dumps({"setting": "clean", "public_diagnostics": {}}) + "\n")
+            region_report["evidence_artifacts"]["diagnostics"]["sha256"] = file_sha256(region_diagnostics)
+
+            sentiment_report = _passing_sentiment_public_gate_report(tmp_path / "artifacts")
+            sentiment_robustness = Path(sentiment_report["evidence_artifacts"]["robustness_summary"]["path"])
+            sentiment_robustness.write_text(
+                json.dumps(
+                    {
+                        "full_model": "ovha_full",
+                        "baseline_model": "cross_attention_transformer",
+                        "full_drop_less_than_baseline": False,
+                        "rceo_reliability_monotonic": True,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            sentiment_report["evidence_artifacts"]["robustness_summary"]["sha256"] = file_sha256(sentiment_robustness)
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=_complete_controlled_public_entry_report(),
+                region_gate_report=region_report,
+                sentiment_gate_report=sentiment_report,
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "region_text_public gate diagnostics missing CATO router load by phrase type",
+            joined,
+        )
+        self.assertIn(
+            "sentiment_emotion_public gate robustness_summary does not show lower full-model drop",
+            joined,
+        )
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
