@@ -76,14 +76,30 @@ FORBIDDEN_V1_ADAPTER_PARAMS = (
 )
 
 HIDDEN_CONTROLLED_ONLY_LOSSES = (
+    "active_operator_ce",
+    "router_ce_active_operator",
     "router_ce_true_active_operator",
+    "true_active_operator_ce",
     "adapter_kl_true_params",
+    "adapter_huber_true_params",
+    "true_adapter_params_kl",
+    "true_adapter_params_huber",
     "true_alignment_ce",
+    "true_alignment_kl",
+    "cato_alignment_ce",
+    "cato_alignment_kl",
     "cato_true_alignment_ce",
+    "cato_true_alignment_kl",
     "lrio_rank_kl",
+    "true_rank_logits_kl",
     "spo_prototype_kl",
+    "true_prototype_logits_kl",
     "tleo_lengthscale_huber",
+    "tleo_log_lengthscale_huber",
+    "true_lengthscale_huber",
     "rceo_reliability_huber",
+    "rceo_reliability_monotonic_loss",
+    "true_reliability_huber",
 )
 
 PUBLIC_ALLOWED_LOSSES = (
@@ -94,17 +110,20 @@ PUBLIC_ALLOWED_LOSSES = (
     "public_contrastive_retrieval",
     "weak_rceo_unimodal_disagreement_marked",
     "weak_modality_dropout_consistency_marked",
+    "weak_unimodal_entropy_calibration_marked",
+    "weak_cross_modal_disagreement_marked",
 )
 PUBLIC_MARKED_WEAK_LOSSES = (
     "weak_rceo_unimodal_disagreement_marked",
     "weak_modality_dropout_consistency_marked",
+    "weak_unimodal_entropy_calibration_marked",
+    "weak_cross_modal_disagreement_marked",
 )
 
 CONTROLLED_ALLOWED_EXTRA_LOSSES = HIDDEN_CONTROLLED_ONLY_LOSSES + (
     "cache_validation",
     "task_loss",
     "candidate_individual_loss",
-    "cato_alignment_ce",
 )
 
 ROBUSTNESS_ALLOWED_LOSSES = ("cache_validation", "robustness_evaluation_only", "task_loss")
