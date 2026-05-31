@@ -2007,7 +2007,13 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
     (root / "data_card.json").write_text(
         json.dumps(default_data_card("refcoco", "v0.1", ["text", "region"], ["phrase_region_grounding"]), sort_keys=True) + "\n"
     )
-    (root / "splits.json").write_text(json.dumps({"val": ["val-source"], "test": ["test-source"]}, sort_keys=True) + "\n")
+    (root / "splits.json").write_text(
+        json.dumps(
+            {"train": ["train-source"], "val": ["val-source"], "test": ["test-source"]},
+            sort_keys=True,
+        )
+        + "\n"
+    )
     (root / "samples.parquet").write_text("placeholder samples\n")
     (root / "provenance" / "feature_versions.json").write_text(
         json.dumps(
@@ -2026,7 +2032,7 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
     (root / "provenance" / "pseudo_label_versions.json").write_text(
         json.dumps({"generated_from_splits": ["train"], "version": "test-pseudo-v1"}, sort_keys=True) + "\n"
     )
-    for split in ("val", "test"):
+    for split in ("train", "val", "test"):
         (root / "provenance" / f"source_ids_{split}.txt").write_text(f"{split}-source\n")
         (root / "provenance" / f"sample_records_{split}.jsonl").write_text(
             json.dumps(
@@ -2101,7 +2107,9 @@ def _write_valid_cmu_mosei_public_cache(cache_root: Path) -> None:
     )
     data_card["metadata_availability"] = {"speaker_id": False}
     (root / "data_card.json").write_text(json.dumps(data_card, sort_keys=True) + "\n")
-    (root / "splits.json").write_text(json.dumps({"val": ["val-utt"], "test": ["test-utt"]}, sort_keys=True) + "\n")
+    (root / "splits.json").write_text(
+        json.dumps({"train": ["train-utt"], "val": ["val-utt"], "test": ["test-utt"]}, sort_keys=True) + "\n"
+    )
     (root / "samples.parquet").write_text("placeholder sentiment samples\n")
     feature_versions = {
         "text": "frozen-text-v1",
@@ -2124,7 +2132,7 @@ def _write_valid_cmu_mosei_public_cache(cache_root: Path) -> None:
     (root / "provenance" / "pseudo_label_versions.json").write_text(
         json.dumps({"generated_from_splits": ["train"], "version": "test-pseudo-v1"}, sort_keys=True) + "\n"
     )
-    for split in ("val", "test"):
+    for split in ("train", "val", "test"):
         source_id = f"{split}-utt"
         (root / "provenance" / f"source_ids_{split}.txt").write_text(f"{source_id}\n")
         (root / "provenance" / f"sample_records_{split}.jsonl").write_text(
