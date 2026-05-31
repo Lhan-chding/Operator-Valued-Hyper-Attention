@@ -42,6 +42,33 @@ REQUIRED_PUBLIC_METRICS_BY_TASK = {
     "cmu_mosei": SENTIMENT_REQUIRED_PUBLIC_METRICS,
     "meld": SENTIMENT_REQUIRED_PUBLIC_METRICS,
 }
+PUBLIC_PROBABILITY_METRICS = frozenset(
+    {
+        "acc_at_0_5",
+        "recall_at_1",
+        "recall_at_5",
+        "mean_iou",
+        "phrase_region_topk_accuracy",
+        "cato_router_load",
+        "cato_top_alignment_accuracy",
+        "null_unmatched_rate",
+        "accuracy",
+        "f1",
+        "missing_modality_performance_drop",
+        "corruption_robustness_auc",
+    }
+)
+PUBLIC_NON_NEGATIVE_METRICS = frozenset(
+    {
+        "alignment_entropy",
+        "cato_candidate_loss",
+        "mae",
+        "lrio_rank_entropy",
+        "spo_prototype_entropy",
+    }
+)
+PUBLIC_CORRELATION_METRICS = frozenset({"pearson_correlation"})
+PUBLIC_NESTED_PROBABILITY_METRICS = frozenset({"router_load_by_corruption_type"})
 
 
 @dataclass(frozen=True)
@@ -347,26 +374,65 @@ def _validate_public_metric_value(row_name: str, metric: str, value: Any, errors
         if not value:
             errors.append(f"{row_name} public metric {metric} must be non-empty")
             return
+        if metric in PUBLIC_NESTED_PROBABILITY_METRICS:
+            _validate_nested_numeric_metric(row_name, metric, value, errors, value_range=(0.0, 1.0))
+            return
+        if metric == "rceo_reliability_calibration":
+            _validate_rceo_calibration_metric(row_name, value, errors)
+            return
         _validate_nested_numeric_metric(row_name, metric, value, errors)
         return
     numeric = _finite_float(value)
     if numeric is None:
         errors.append(f"{row_name} public metric {metric} must be finite")
+        return
+    if metric in PUBLIC_PROBABILITY_METRICS and not 0.0 <= numeric <= 1.0:
+        errors.append(f"{row_name} public metric {metric} must be in [0, 1]")
+    elif metric in PUBLIC_CORRELATION_METRICS and not -1.0 <= numeric <= 1.0:
+        errors.append(f"{row_name} public metric {metric} must be in [-1, 1]")
+    elif metric in PUBLIC_NON_NEGATIVE_METRICS and numeric < 0.0:
+        errors.append(f"{row_name} public metric {metric} must be finite non-negative")
 
 
-def _validate_nested_numeric_metric(row_name: str, metric: str, value: dict[str, Any], errors: list[str]) -> None:
+def _validate_rceo_calibration_metric(row_name: str, value: dict[str, Any], errors: list[str]) -> None:
+    ece = _finite_float(value.get("ece", value.get("expected_calibration_error")))
+    if ece is None or not 0.0 <= ece <= 1.0:
+        errors.append(f"{row_name} public metric rceo_reliability_calibration.ece must be in [0, 1]")
+    bin_count = _safe_int(value.get("bin_count", value.get("bins")))
+    if bin_count is None or bin_count <= 0:
+        errors.append(f"{row_name} public metric rceo_reliability_calibration.bin_count must be positive")
+    curve = value.get("calibration_curve", value.get("curve"))
+    if curve is not None and not isinstance(curve, list):
+        errors.append(f"{row_name} public metric rceo_reliability_calibration.calibration_curve must be a list")
+
+
+def _validate_nested_numeric_metric(
+    row_name: str,
+    metric: str,
+    value: dict[str, Any],
+    errors: list[str],
+    *,
+    value_range: tuple[float, float] | None = None,
+) -> None:
     observed_numeric = False
     for key, nested in value.items():
         if not str(key).strip():
             errors.append(f"{row_name} public metric {metric} contains empty nested key")
             return
         if isinstance(nested, dict):
-            _validate_nested_numeric_metric(row_name, f"{metric}.{key}", nested, errors)
+            _validate_nested_numeric_metric(row_name, f"{metric}.{key}", nested, errors, value_range=value_range)
             observed_numeric = True
-        elif _finite_float(nested) is None:
-            errors.append(f"{row_name} public metric {metric}.{key} must be finite")
-            return
         else:
+            numeric = _finite_float(nested)
+            if numeric is None:
+                errors.append(f"{row_name} public metric {metric}.{key} must be finite")
+                return
+            if value_range is not None and not value_range[0] <= numeric <= value_range[1]:
+                errors.append(
+                    f"{row_name} public metric {metric}.{key} must be in "
+                    f"[{value_range[0]:g}, {value_range[1]:g}]"
+                )
+                return
             observed_numeric = True
     if not observed_numeric:
         errors.append(f"{row_name} public metric {metric} must contain finite values")
