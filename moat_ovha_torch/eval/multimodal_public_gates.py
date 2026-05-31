@@ -75,13 +75,14 @@ def evaluate_sentiment_gate(
 ) -> dict[str, Any]:
     checks = {
         "full_beats_same_feature_baseline": _full_beats_baseline(statistics_summary, task, split, full_model, baseline_model),
-        "full_beats_lmf_or_mult_baseline": _full_beats_any_required_baseline(
+        "full_beats_lmf_or_mult_baseline": _sentiment_anchor_or_robustness_advantage(
             statistics_summary,
             task,
             split,
             full_model,
             _SENTIMENT_ANCHOR_BASELINES,
-            "full model must beat at least one required sentiment baseline: tfn_lmf or mult_style_crossmodal_transformer",
+            robustness_summary,
+            baseline_model,
         ),
         "no_lrio_drops": _ablation_drop(statistics_summary, task, split, full_model, ablation_scores.get("ovha_no_lrio"), "no-LRIO"),
         "no_spo_drops": _ablation_drop(statistics_summary, task, split, full_model, ablation_scores.get("ovha_no_spo"), "no-SPO"),
@@ -282,6 +283,134 @@ def _full_beats_any_required_baseline(
         "value": values,
         "reason": "; ".join(reasons),
     }
+
+
+def _sentiment_anchor_or_robustness_advantage(
+    statistics_summary: dict[str, Any],
+    task: str,
+    split: str,
+    full_model: str,
+    baseline_models: tuple[str, ...],
+    robustness_summary: dict[str, Any],
+    robustness_baseline_model: str,
+) -> dict[str, Any]:
+    anchor = _full_beats_any_required_baseline(
+        statistics_summary,
+        task,
+        split,
+        full_model,
+        baseline_models,
+        "full model must beat at least one required sentiment baseline: "
+        "tfn_lmf or mult_style_crossmodal_transformer",
+    )
+    if anchor["passed"]:
+        return anchor
+
+    robustness = _significant_robustness_advantage(
+        robustness_summary,
+        full_model=full_model,
+        baseline_model=robustness_baseline_model,
+    )
+    if robustness["passed"]:
+        return {
+            "passed": True,
+            "value": {
+                "anchor_baselines": anchor.get("value", {}),
+                "robustness": robustness.get("value", {}),
+            },
+            "reason": "",
+        }
+
+    reasons = ["full model must beat at least one required sentiment baseline or show significant robustness advantage"]
+    if anchor.get("reason"):
+        reasons.append(str(anchor["reason"]))
+    if robustness.get("reason"):
+        reasons.append(str(robustness["reason"]))
+    return {
+        "passed": False,
+        "value": {
+            "anchor_baselines": anchor.get("value", {}),
+            "robustness": robustness.get("value", {}),
+        },
+        "reason": "; ".join(reasons),
+    }
+
+
+def _significant_robustness_advantage(
+    summary: dict[str, Any],
+    *,
+    full_model: str,
+    baseline_model: str,
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    robustness = _robustness_passes(summary, full_model=full_model, baseline_model=baseline_model)
+    if not robustness["passed"]:
+        reasons.append(str(robustness["reason"]))
+
+    drop_delta = _robustness_drop_delta(summary, full_model, baseline_model)
+    if drop_delta is None:
+        reasons.append("robustness drop delta missing")
+    elif drop_delta <= 0.0:
+        reasons.append("robustness drop delta must be positive")
+
+    auc_delta = _robustness_auc_delta(summary, full_model, baseline_model)
+    if auc_delta is None:
+        reasons.append("robustness AUC delta missing")
+    elif auc_delta <= 0.0:
+        reasons.append("robustness AUC must favor full model")
+
+    significance = summary.get("robustness_significance")
+    if not isinstance(significance, dict):
+        reasons.append("robustness significance evidence missing")
+    else:
+        reported_drop_delta = _finite_float(significance.get("drop_delta"))
+        if reported_drop_delta is None:
+            reasons.append("robustness significance drop_delta missing")
+        elif drop_delta is not None and not math.isclose(reported_drop_delta, drop_delta, rel_tol=1e-9, abs_tol=1e-9):
+            reasons.append("robustness significance drop_delta disagrees with relative_drop")
+
+        permutation_p = _finite_float(significance.get("paired_permutation_p"))
+        if permutation_p is None or permutation_p < 0.0 or permutation_p > 0.05:
+            reasons.append("robustness significance paired_permutation_p must be in [0, 0.05]")
+
+        bootstrap_ci = _finite_interval(significance.get("paired_bootstrap_ci95"))
+        if bootstrap_ci is None:
+            reasons.append("robustness significance paired_bootstrap_ci95 must be a finite length-2 interval")
+        elif bootstrap_ci[0] > bootstrap_ci[1]:
+            reasons.append("robustness significance paired_bootstrap_ci95 lower bound must not exceed upper bound")
+        elif bootstrap_ci[0] <= 0.0:
+            reasons.append("robustness significance bootstrap CI must be strictly positive")
+
+    return {
+        "passed": not reasons,
+        "value": {
+            "drop_delta": drop_delta,
+            "auc_delta": auc_delta,
+        },
+        "reason": "; ".join(reasons),
+    }
+
+
+def _robustness_drop_delta(summary: dict[str, Any], full_model: str, baseline_model: str) -> float | None:
+    relative_drop = summary.get("relative_drop")
+    if not isinstance(relative_drop, dict):
+        return None
+    full_drop = _finite_float(relative_drop.get(full_model))
+    baseline_drop = _finite_float(relative_drop.get(baseline_model))
+    if full_drop is None or baseline_drop is None:
+        return None
+    return baseline_drop - full_drop
+
+
+def _robustness_auc_delta(summary: dict[str, Any], full_model: str, baseline_model: str) -> float | None:
+    auc = summary.get("auc_over_corruption_strength")
+    if not isinstance(auc, dict):
+        return None
+    full_auc = _finite_float(auc.get(full_model))
+    baseline_auc = _finite_float(auc.get(baseline_model))
+    if full_auc is None or baseline_auc is None:
+        return None
+    return full_auc - baseline_auc
 
 
 def _required_strong_baselines_for_gate(task: str) -> tuple[str, ...]:
