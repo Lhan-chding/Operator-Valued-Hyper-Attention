@@ -387,6 +387,14 @@ def _validate_split_manifest_source_lists(payload: dict[str, Any], errors: list[
         if invalid_source_ids:
             errors.append(f"splits.json {split} source_id entries must be non-empty strings")
             continue
+        unnormalized_source_ids = [
+            source_id
+            for source_id in expected
+            if isinstance(source_id, str) and source_id != source_id.strip()
+        ]
+        if unnormalized_source_ids:
+            errors.append(f"splits.json {split} source_id entries must be non-empty normalized strings")
+            continue
         expected_source_ids = list(expected)
         duplicate_source_ids = sorted(
             {source_id for source_id in expected_source_ids if expected_source_ids.count(source_id) > 1}
