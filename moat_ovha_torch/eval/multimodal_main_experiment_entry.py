@@ -15,14 +15,31 @@ from moat_ovha_torch.eval.multimodal_public_entry import (
 
 REGION_TEXT_TOPCONF_CHECKS = (
     "full_beats_same_feature_baseline",
+    "full_beats_required_strong_baselines",
     "no_cato_drops",
-    "robustness_passes",
+    "cato_router_load_high",
+    "alignment_entropy_improves",
+    "cato_top_alignment_accuracy_high",
+    "grounding_accuracy_improves_with_entropy",
+    "rceo_visual_stress_router_shift",
+    "step14_public_diagnostics",
     "rceo_reliability_calibrated",
+    "robustness_passes",
 )
 SENTIMENT_TOPCONF_CHECKS = (
+    "full_beats_same_feature_baseline",
     "full_beats_lmf_or_mult_baseline",
-    "robustness_passes",
+    "no_lrio_drops",
+    "no_spo_drops",
+    "no_rceo_drops",
+    "lrio_router_load_high",
+    "spo_router_load_high",
+    "lrio_rank_entropy_present",
+    "spo_prototype_entropy_present",
+    "spo_top_prototype_differentiates",
+    "step14_public_diagnostics",
     "rceo_reliability_calibrated",
+    "robustness_passes",
 )
 
 
