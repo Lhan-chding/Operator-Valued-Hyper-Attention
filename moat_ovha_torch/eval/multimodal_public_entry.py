@@ -204,6 +204,12 @@ def _require_controlled_evidence_artifacts(
         )
         if artifact_path is not None:
             artifact_paths[artifact_name] = artifact_path
+    controlled_rows_sha = _artifact_sha256(evidence.get("controlled_rows"))
+    diagnostics_sha = _artifact_sha256(evidence.get("diagnostics_report"))
+    if controlled_rows_sha is not None and diagnostics_sha is not None and controlled_rows_sha == diagnostics_sha:
+        errors.append(
+            "controlled report evidence_artifacts diagnostics_report.sha256 must differ from controlled_rows.sha256"
+        )
     return artifact_paths
 
 
@@ -313,6 +319,14 @@ def _validate_controlled_diagnostics_report_content(
         if family in diagnostics_by_family:
             errors.append(f"controlled report diagnostics_report duplicate controlled family: {family}")
             continue
+        if row.get("artifact_type") != "controlled_diagnostics":
+            errors.append(
+                f"controlled report diagnostics_report {family} artifact_type must be controlled_diagnostics"
+            )
+        if "active_operator" in row:
+            errors.append(
+                f"controlled report diagnostics_report {family} must not duplicate controlled_rows active_operator"
+            )
         diagnostics_by_family[family] = row
 
     for family in CONTROLLED_REQUIRED_FAMILIES:
@@ -634,6 +648,15 @@ def _finite_float(value: Any) -> float | None:
 
 def _non_empty_text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _artifact_sha256(artifact: Any) -> str | None:
+    if not isinstance(artifact, Mapping):
+        return None
+    sha256 = artifact.get("sha256")
+    if isinstance(sha256, str) and _SHA256_HEX_RE.fullmatch(sha256):
+        return sha256
+    return None
 
 
 def _sha256(path: Path) -> str:
