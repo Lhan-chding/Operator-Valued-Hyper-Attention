@@ -295,6 +295,42 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_token_field_manifest_referencing_supervision_or_provenance_artifacts(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+            )
+            _rewrite_token_manifest_path(layout.root, "train", "text", "x", "supervision/task_labels_train.npy")
+            _rewrite_token_manifest_path(layout.root, "train", "text", "pos", "provenance/source_ids_train.txt")
+            _rewrite_token_manifest_path(layout.root, "train", "text", "mask", "supervision/corruption_train.parquet")
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "token_fields/manifest_train.json entry for text.x must stay under token_fields/: "
+            "supervision/task_labels_train.npy",
+            joined,
+        )
+        self.assertIn(
+            "token_fields/manifest_train.json entry for text.pos must stay under positions/: "
+            "provenance/source_ids_train.txt",
+            joined,
+        )
+        self.assertIn(
+            "token_fields/manifest_train.json entry for text.mask must stay under masks/: "
+            "supervision/corruption_train.parquet",
+            joined,
+        )
+
     def test_cache_validator_rejects_undeclared_token_field_manifest_modality(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
