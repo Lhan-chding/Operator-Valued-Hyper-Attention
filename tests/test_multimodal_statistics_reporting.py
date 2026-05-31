@@ -93,6 +93,33 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
             "\n".join(validation.errors),
         )
 
+    def test_public_summary_rejects_main_table_seed_count_without_appendix_evidence(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        summary = summarize_public_results(
+            _metric_rows(),
+            full_model="ovha_full",
+            baseline_model="cross_attention_transformer",
+        )
+        summary["per_seed_appendix"] = [
+            row
+            for row in summary["per_seed_appendix"]
+            if not (
+                row["task"] == "phrase_region_grounding"
+                and row["split"] == "test"
+                and row["model"] == "text_only"
+                and row["seed"] == 13
+            )
+        ]
+
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        self.assertIn(
+            "phrase_region_grounding/test/text_only seed_count disagrees with per_seed_appendix",
+            "\n".join(validation.errors),
+        )
+
     def test_public_summary_rejects_best_seed_only_and_missing_metadata(self):
         from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
 
