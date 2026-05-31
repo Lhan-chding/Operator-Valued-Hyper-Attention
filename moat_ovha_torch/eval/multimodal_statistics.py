@@ -276,6 +276,7 @@ def _validate_report_facing_metadata(summary: dict[str, Any], errors: list[str])
     if not isinstance(per_seed_table, list) or not per_seed_table:
         errors.append("reporting_metadata missing per_seed_table")
         return
+    _validate_reporting_per_seed_table(summary, per_seed_table, errors)
     covered_models = {str(row.get("model")) for row in per_seed_table if isinstance(row, dict) and row.get("model")}
     for model in sorted(models):
         if model not in covered_models:
@@ -295,6 +296,41 @@ def _validate_report_model_map(
     for model in sorted(models):
         if _is_empty_report_value(values.get(model)):
             errors.append(f"reporting_metadata {key} missing model: {model}")
+
+
+def _validate_reporting_per_seed_table(
+    summary: dict[str, Any],
+    per_seed_table: list[Any],
+    errors: list[str],
+) -> None:
+    expected = _per_seed_table_signature(summary.get("per_seed_appendix", []))
+    observed = _per_seed_table_signature(per_seed_table)
+    if expected != observed:
+        errors.append("reporting_metadata per_seed_table must match per_seed_appendix")
+
+
+def _per_seed_table_signature(rows: Any) -> set[tuple[str, str, str, int, float, str]]:
+    if not isinstance(rows, list):
+        return set()
+    signature: set[tuple[str, str, str, int, float, str]] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        seed = _safe_int(row.get("seed"))
+        score = _finite_float(row.get("score"))
+        if seed is None or score is None:
+            continue
+        signature.add(
+            (
+                str(row.get("task")),
+                str(row.get("split")),
+                str(row.get("model")),
+                seed,
+                score,
+                str(row.get("raw_metric_path", "")),
+            )
+        )
+    return signature
 
 
 def _is_empty_report_value(value: Any) -> bool:
