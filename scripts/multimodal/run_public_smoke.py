@@ -98,6 +98,9 @@ def _replace_cache_root(config: MultimodalExperimentConfig, cache_root: Path) ->
         allow_hidden_losses=config.allow_hidden_losses,
         require_public_alignment_labels=config.require_public_alignment_labels,
         robustness_corruptions=config.robustness_corruptions,
+        losses_by_stage=config.losses_by_stage,
+        loss_metadata=config.loss_metadata,
+        adapter_params_by_candidate=config.adapter_params_by_candidate,
     )
 
 

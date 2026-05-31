@@ -27,5 +27,18 @@
   "eval_episode_count": 128,
   "enforce_same_features_for_baselines": true,
   "fail_on_missing_cache_artifact": true,
-  "allow_hidden_losses": true
+  "allow_hidden_losses": true,
+  "losses_by_stage": {
+    "T0": ["cache_validation"],
+    "T1": ["task_loss", "candidate_individual_loss"],
+    "T2": ["task_loss", "router_ce_true_active_operator", "adapter_kl_true_params"],
+    "T3": ["task_loss", "router_ce_true_active_operator"],
+    "T4": ["task_loss", "cato_alignment_ce", "lrio_rank_kl", "spo_prototype_kl", "tleo_lengthscale_huber", "rceo_reliability_huber"]
+  },
+  "adapter_params_by_candidate": {
+    "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
+    "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
+    "LRIO": ["rank_logits", "interaction_temperature", "scale", "bias"],
+    "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"]
+  }
 }

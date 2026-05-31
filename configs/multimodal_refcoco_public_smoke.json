@@ -25,5 +25,15 @@
   "enforce_same_features_for_baselines": true,
   "fail_on_missing_cache_artifact": true,
   "allow_hidden_losses": false,
-  "require_public_alignment_labels": true
+  "require_public_alignment_labels": true,
+  "losses_by_stage": {
+    "T0": ["cache_validation"],
+    "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss"]
+  },
+  "adapter_params_by_candidate": {
+    "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
+    "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
+    "LRIO": ["rank_logits", "interaction_temperature", "scale", "bias"],
+    "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"]
+  }
 }

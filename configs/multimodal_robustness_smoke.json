@@ -33,5 +33,15 @@
     "audio_noise",
     "text_token_mask",
     "hard_negative_mismatch"
-  ]
+  ],
+  "losses_by_stage": {
+    "T0": ["cache_validation"],
+    "T6": ["robustness_evaluation_only"]
+  },
+  "adapter_params_by_candidate": {
+    "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
+    "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
+    "LRIO": ["rank_logits", "interaction_temperature", "scale", "bias"],
+    "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"]
+  }
 }

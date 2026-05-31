@@ -50,6 +50,17 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("public_alignment_ce", config.losses_by_stage["T5"])
         self.assertIn("CATO", config.adapter_params_by_candidate)
 
+        base_public = json.loads((ROOT / "configs" / "multimodal_refcoco_public_smoke.json").read_text())
+        missing_losses = {key: value for key, value in base_public.items() if key != "losses_by_stage"}
+        with self.assertRaisesRegex(ValueError, "losses_by_stage must be explicit"):
+            MultimodalExperimentConfig.from_mapping(missing_losses)
+
+        missing_adapter_params = {
+            key: value for key, value in base_public.items() if key != "adapter_params_by_candidate"
+        }
+        with self.assertRaisesRegex(ValueError, "adapter_params_by_candidate must be explicit"):
+            MultimodalExperimentConfig.from_mapping(missing_adapter_params)
+
         invalid = {
             "name": "bad_public_loss",
             "dataset_name": "refcoco",
@@ -156,6 +167,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             ],
             "eval_episode_count": 16,
             "robustness_corruptions": ["missing_text", "missing_vision", "image_blur"],
+            "losses_by_stage": {"T0": ["cache_validation"], "T6": ["robustness_evaluation_only"]},
+            "adapter_params_by_candidate": _valid_adapter_params(),
         }
         with self.assertRaisesRegex(ValueError, "missing required robustness stress families"):
             MultimodalExperimentConfig.from_mapping(invalid)
@@ -176,6 +189,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
             "baseline_names": ["text_only", "cross_attention_transformer"],
             "eval_episode_count": 16,
+            "losses_by_stage": {"T0": ["cache_validation"], "T5": ["task_loss", "public_alignment_ce"]},
+            "adapter_params_by_candidate": _valid_adapter_params(),
         }
         with self.assertRaisesRegex(ValueError, "missing required same-feature baselines"):
             MultimodalExperimentConfig.from_mapping(invalid)
@@ -193,6 +208,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
             "baseline_names": list(baseline_names_for_task("phrase_region_grounding")),
             "eval_episode_count": 16,
+            "losses_by_stage": {"T0": ["cache_validation"], "T5": ["task_loss", "public_alignment_ce"]},
+            "adapter_params_by_candidate": _valid_adapter_params(),
         }
 
         with self.assertRaisesRegex(ValueError, "training_stages for phrase_region_grounding must be"):
@@ -211,6 +228,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
             "baseline_names": list(baseline_names_for_task("phrase_region_grounding")) + ["GroundingDINO"],
             "eval_episode_count": 16,
+            "losses_by_stage": {"T0": ["cache_validation"], "T5": ["task_loss", "public_alignment_ce"]},
+            "adapter_params_by_candidate": _valid_adapter_params(),
         }
         with self.assertRaisesRegex(ValueError, "external references must not be listed as same-feature baselines"):
             MultimodalExperimentConfig.from_mapping(invalid)

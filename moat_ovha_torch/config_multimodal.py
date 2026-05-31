@@ -10,6 +10,7 @@ from moat_ovha_torch.models.multimodal.baselines import (
     missing_required_baselines,
 )
 from moat_ovha_torch.eval.multimodal_robustness import DEFAULT_REQUIRED_STRESS_FAMILIES
+from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
 
 
 DEFAULT_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
@@ -40,6 +41,9 @@ class MultimodalExperimentConfig:
     allow_hidden_losses: bool = False
     require_public_alignment_labels: bool = False
     robustness_corruptions: tuple[str, ...] = ()
+    losses_by_stage: dict[str, tuple[str, ...]] | None = None
+    loss_metadata: dict[str, dict[str, Any]] | None = None
+    adapter_params_by_candidate: dict[str, tuple[str, ...]] | None = None
 
     @classmethod
     def from_file(cls, path: Path | str) -> "MultimodalExperimentConfig":
@@ -71,6 +75,9 @@ class MultimodalExperimentConfig:
             allow_hidden_losses=bool(mapping.get("allow_hidden_losses", False)),
             require_public_alignment_labels=bool(mapping.get("require_public_alignment_labels", False)),
             robustness_corruptions=tuple(mapping.get("robustness_corruptions", ())),
+            losses_by_stage=_tuple_mapping(mapping.get("losses_by_stage")),
+            loss_metadata=dict(mapping.get("loss_metadata", {})) if "loss_metadata" in mapping else None,
+            adapter_params_by_candidate=_tuple_mapping(mapping.get("adapter_params_by_candidate")),
         )
         config.validate()
         return config
@@ -95,6 +102,7 @@ class MultimodalExperimentConfig:
             raise ValueError("hidden losses are controlled-only and forbidden for public data")
         if self.robustness_corruptions:
             _validate_robustness_corruptions(self.robustness_corruptions)
+        _validate_embedded_training_protocol(self)
         missing = missing_required_baselines(self.task_type, self.baseline_names)
         if missing:
             raise ValueError(f"missing required same-feature baselines: {', '.join(missing)}")
@@ -114,6 +122,24 @@ def _expected_training_stages(task_type: str, robustness_corruptions: tuple[str,
     if task_type in REGION_TEXT_TASK_TYPES or task_type in SENTIMENT_EMOTION_TASK_TYPES:
         return PUBLIC_TRAINING_STAGES
     raise ValueError(f"unknown multimodal task_type for training stages: {task_type}")
+
+
+def _validate_embedded_training_protocol(config: MultimodalExperimentConfig) -> None:
+    if config.losses_by_stage is None:
+        raise ValueError("losses_by_stage must be explicit")
+    if config.adapter_params_by_candidate is None:
+        raise ValueError("adapter_params_by_candidate must be explicit")
+    report = validate_training_protocol(
+        {
+            "task_type": "robustness_eval" if config.robustness_corruptions else config.task_type,
+            "training_stages": config.training_stages,
+            "losses_by_stage": config.losses_by_stage,
+            "loss_metadata": config.loss_metadata or {},
+            "adapter_params_by_candidate": config.adapter_params_by_candidate,
+        }
+    )
+    if not report.ok:
+        raise ValueError("; ".join(report.errors))
 
 
 def _validate_robustness_corruptions(robustness_corruptions: tuple[str, ...]) -> None:
@@ -139,3 +165,11 @@ def _observed_robustness_families(robustness_corruptions: tuple[str, ...]) -> se
 
 def _normalize_stress_name(value: Any) -> str:
     return str(value).strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _tuple_mapping(value: Any) -> dict[str, tuple[str, ...]] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("embedded training protocol mapping fields must be objects")
+    return {str(key): tuple(str(item) for item in values) for key, values in value.items()}

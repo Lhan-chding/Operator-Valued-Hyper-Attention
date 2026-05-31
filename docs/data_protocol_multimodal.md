@@ -70,6 +70,8 @@ Sentiment/emotion public entry requires passed LRIO collapse, SPO collapse, RCEO
 
 Public weak training losses must include structured `loss_metadata` with `supervision_type: weak`, a non-empty `source`, and `must_report_as: weak`; a loss name ending in `_marked` is not sufficient evidence by itself. This applies to weak RCEO reliability signals such as unimodal disagreement and modality-dropout consistency.
 
+Every runnable multimodal experiment config must embed `losses_by_stage` and `adapter_params_by_candidate` and pass the same training-protocol validator used by `scripts/multimodal/validate_training_plan.py`; hidden public losses must fail at config parse time, not only in a separate manual validation step.
+
 ## Cache Requirements
 
 Every formal cache must include:
