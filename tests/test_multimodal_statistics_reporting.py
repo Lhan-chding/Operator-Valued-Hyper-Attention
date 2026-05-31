@@ -47,6 +47,42 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         self.assertAlmostEqual(paired["mean_delta"], 0.07)
         self.assertGreater(paired["paired_bootstrap_ci95"][0], 0.0)
 
+    def test_public_summary_rejects_mixed_metric_direction_within_task_split(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        summary = summarize_public_results(
+            _lower_is_better_sentiment_rows(),
+            full_model="ovha_full",
+            baseline_model="cross_attention_transformer",
+        )
+        summary["main_table"]["sentiment_emotion"]["test"]["cross_attention_transformer"]["higher_is_better"] = True
+
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        self.assertIn(
+            "sentiment_emotion/test higher_is_better must be consistent across models",
+            "\n".join(validation.errors),
+        )
+
+    def test_public_summary_rejects_non_boolean_metric_direction(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        summary = summarize_public_results(
+            _lower_is_better_sentiment_rows(),
+            full_model="ovha_full",
+            baseline_model="cross_attention_transformer",
+        )
+        summary["main_table"]["sentiment_emotion"]["test"]["cross_attention_transformer"]["higher_is_better"] = "false"
+
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        self.assertIn(
+            "sentiment_emotion/test/cross_attention_transformer higher_is_better must be boolean",
+            "\n".join(validation.errors),
+        )
+
     def test_public_summary_rejects_paired_delta_that_disagrees_with_metric_direction(self):
         from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
 
