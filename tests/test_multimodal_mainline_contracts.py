@@ -246,6 +246,104 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             [{"source_id": "ref-train-failed", "split": "train", "reason": "download_failed"}],
         )
 
+    def test_stage_refcoco_raw_cli_outputs_build_cache_ready_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            inputs = tmp_path / "inputs"
+            raw_root = tmp_path / "raw_refcoco"
+            cache_root = tmp_path / "cache"
+            inputs.mkdir()
+            np.save(inputs / "text.npy", np.arange(3 * 4 * 5, dtype=np.float32).reshape(3, 4, 5))
+            np.save(inputs / "region.npy", np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4))
+            (inputs / "splits.json").write_text(
+                json.dumps({"train": ["ref-train-1"], "val": ["ref-val-1"], "test": ["ref-test-1"]}, sort_keys=True) + "\n"
+            )
+            (inputs / "records.json").write_text(
+                json.dumps(
+                    {
+                        "records": [
+                            {
+                                "source_id": source_id,
+                                "image_id": f"image-{source_id}",
+                                "caption_id": f"caption-{source_id}",
+                                "phrase_span": {"start": 1, "end": 3},
+                                "region_box": [0.1, 0.2, 0.8, 0.9],
+                                "target_region_index": 1,
+                                "candidate_region_source": "detector-v1",
+                                "box_coordinate_convention": "xyxy_normalized",
+                            }
+                            for source_id in ("ref-train-1", "ref-val-1", "ref-test-1")
+                        ]
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+            stage_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "stage_refcoco_raw.py"),
+                    "refcoco",
+                    str(raw_root),
+                    "--splits",
+                    str(inputs / "splits.json"),
+                    "--records",
+                    str(inputs / "records.json"),
+                    "--text-features",
+                    str(inputs / "text.npy"),
+                    "--region-features",
+                    str(inputs / "region.npy"),
+                    "--license-tag",
+                    "unit-refcoco-license",
+                    "--preprocessing-version",
+                    "unit-refcoco-preprocess-v1",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            build_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "refcoco",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            layout = MultimodalCacheLayout(cache_root, "refcoco", "v0.1")
+            validation = validate_cache_layout(layout, splits=("train", "val", "test"))
+            payload = json.loads(stage_result.stdout) if stage_result.stdout.strip() else {}
+            refs = (
+                json.loads((raw_root / "annotations" / "refs.json").read_text()).get("records", [])
+                if (raw_root / "annotations" / "refs.json").exists()
+                else []
+            )
+            task_labels_train = (
+                np.load(layout.root / "supervision" / "task_labels_train.npy")
+                if (layout.root / "supervision" / "task_labels_train.npy").exists()
+                else np.zeros((0, 0), dtype=np.float32)
+            )
+
+        self.assertEqual(stage_result.returncode, 0, stage_result.stdout + stage_result.stderr)
+        self.assertEqual(build_result.returncode, 0, build_result.stdout + build_result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["dataset_name"], "refcoco")
+        self.assertTrue(validation.ok, validation.errors)
+        self.assertEqual([row["source_id"] for row in refs], ["ref-train-1", "ref-val-1", "ref-test-1"])
+        self.assertEqual(refs[0]["license_tag"], "unit-refcoco-license")
+        self.assertEqual(refs[0]["preprocessing_version"], "unit-refcoco-preprocess-v1")
+        self.assertEqual(task_labels_train.tolist(), [[0.0, 1.0]])
+
     def test_build_cache_cli_validates_requested_cache_version(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
