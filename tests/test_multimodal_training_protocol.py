@@ -52,6 +52,92 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
         self.assertTrue(public.ok, public.errors)
         self.assertTrue(robustness.ok, robustness.errors)
 
+    def test_stage_loss_contracts_are_required_for_public_dataset_task_names(self):
+        from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
+
+        refcoco = validate_training_protocol(
+            {
+                "task_type": "refcoco",
+                "training_stages": ["T0", "T5"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss"],
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+        self.assertTrue(refcoco.ok, refcoco.errors)
+
+        incomplete_public = validate_training_protocol(
+            {
+                "task_type": "cmu_mosi",
+                "training_stages": ["T0", "T5"],
+                "losses_by_stage": {
+                    "T5": ["task_loss"],
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+        self.assertFalse(incomplete_public.ok)
+        joined_public = "\n".join(incomplete_public.errors)
+        self.assertIn("losses_by_stage missing stage: T0", joined_public)
+        self.assertIn("cmu_mosi T5 must include required loss/record: candidate_individual_loss", joined_public)
+
+        incomplete_region = validate_training_protocol(
+            {
+                "task_type": "flickr30k_entities",
+                "training_stages": ["T0", "T5"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T5": ["task_loss", "candidate_individual_loss"],
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+        self.assertFalse(incomplete_region.ok)
+        self.assertIn(
+            "flickr30k_entities T5 must include public alignment loss: public_alignment_ce or public_contrastive_retrieval",
+            "\n".join(incomplete_region.errors),
+        )
+
+        incomplete_controlled = validate_training_protocol(
+            {
+                "task_type": "controlled_multimodal",
+                "training_stages": ["T0", "T1", "T2", "T3", "T4"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T1": ["task_loss", "candidate_individual_loss"],
+                    "T2": ["task_loss"],
+                    "T3": ["task_loss"],
+                    "T4": ["task_loss"],
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+        self.assertFalse(incomplete_controlled.ok)
+        joined_controlled = "\n".join(incomplete_controlled.errors)
+        self.assertIn("controlled_multimodal T2 must include required loss/record: router_ce_true_active_operator", joined_controlled)
+        self.assertIn("controlled_multimodal T2 must include required loss/record: adapter_kl_true_params", joined_controlled)
+        self.assertIn("controlled_multimodal T4 must include required loss/record: cato_alignment_ce", joined_controlled)
+        self.assertIn("controlled_multimodal T4 must include required loss/record: rceo_reliability_huber", joined_controlled)
+
+        incomplete_robustness = validate_training_protocol(
+            {
+                "task_type": "robustness_eval",
+                "training_stages": ["T0", "T6"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T6": ["task_loss"],
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+        self.assertFalse(incomplete_robustness.ok)
+        self.assertIn(
+            "robustness_eval T6 must include required loss/record: robustness_evaluation_only",
+            "\n".join(incomplete_robustness.errors),
+        )
+
     def test_public_protocol_rejects_hidden_losses_and_unmarked_weak_reliability(self):
         from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
 
