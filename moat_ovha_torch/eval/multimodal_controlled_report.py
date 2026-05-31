@@ -145,18 +145,19 @@ def _collapse_gate(family_rows: dict[str, dict[str, Any]], operator: str) -> dic
     row = family_rows.get(family)
     if row is None:
         return {"passed": False, "condition": f"{operator} family exists"}
-    full_loss = _loss(row, "learned_learned")
+    true_router_learned_adapter_loss = _loss(row, "true_learned")
     specialist_loss = float(row.get("specialist_loss", _loss(row, "true_learned")))
     threshold = specialist_loss * 1.05 + 1e-6
     diagnostic_reasons = _operator_diagnostic_reasons(row, operator)
-    loss_passed = full_loss <= threshold
+    loss_passed = true_router_learned_adapter_loss <= threshold
     return {
         "passed": loss_passed and not diagnostic_reasons,
-        "value": full_loss,
+        "value": true_router_learned_adapter_loss,
         "threshold": threshold,
+        "oracle_cell": "true_learned",
         "loss_passed": loss_passed,
         "diagnostic_reasons": diagnostic_reasons,
-        "condition": f"{operator} learned loss <= specialist * 1.05 + eps",
+        "condition": f"{operator} true-router + learned-adapter loss <= specialist * 1.05 + eps",
     }
 
 

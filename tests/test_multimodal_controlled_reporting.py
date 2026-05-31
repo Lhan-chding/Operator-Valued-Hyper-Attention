@@ -36,7 +36,7 @@ class MultimodalControlledReportingTests(unittest.TestCase):
     def test_controlled_report_blocks_public_when_required_family_or_gate_missing(self):
         from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
 
-        report = build_controlled_report([_row("tleo_local_evidence", "TLEO", 0.2, 0.1)])
+        report = build_controlled_report([_row("tleo_local_evidence", "TLEO", 0.2, 0.1, true_learned_loss=0.2)])
 
         self.assertFalse(report["go_no_go"]["controlled_multimodal_passed"])
         self.assertIn("missing controlled family", "\n".join(report["go_no_go"]["reasons"]))
@@ -395,6 +395,7 @@ def _row(
     include_operator_diagnostics: bool = True,
     include_oracle_gap_evidence: bool = True,
     include_rceo_prior_effect: bool = True,
+    true_learned_loss: float | None = None,
     no_lrio_delta: float | None = None,
     no_rceo_delta: float | None = None,
 ) -> dict[str, object]:
@@ -403,7 +404,7 @@ def _row(
         "active_operator": active_operator,
         "oracle_matrix": {
             "learned_learned": {"loss": full_loss},
-            "true_learned": {"loss": specialist_loss},
+            "true_learned": {"loss": specialist_loss if true_learned_loss is None else true_learned_loss},
             "learned_true": {"loss": full_loss},
             "true_true": {"loss": 0.0},
         },
