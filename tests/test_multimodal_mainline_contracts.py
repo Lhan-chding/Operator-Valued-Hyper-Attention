@@ -1502,6 +1502,71 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
             )
         )
 
+    def test_rceo_reliability_prior_reinforces_evidence_operator_prior(self):
+        import torch
+
+        from moat_ovha_torch.data.multimodal.typed_batch import (
+            MultimodalEpisodeBatch,
+            ProvenanceBank,
+            QueryField,
+            SupervisionBank,
+            TokenField,
+        )
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceBank
+        from moat_ovha_torch.models.multimodal.reliability_prior import RCEOReliabilityPrior
+
+        batch = MultimodalEpisodeBatch(
+            fields={
+                "text": TokenField(
+                    "text",
+                    torch.zeros(1, 2, 4),
+                    torch.zeros(1, 2, 2),
+                    torch.ones(1, 2, dtype=torch.bool),
+                    quality=torch.ones(1, 2, 1),
+                ),
+                "region": TokenField(
+                    "region",
+                    torch.zeros(1, 2, 4),
+                    torch.zeros(1, 2, 2),
+                    torch.ones(1, 2, dtype=torch.bool),
+                    quality=torch.ones(1, 2, 1),
+                ),
+            },
+            query=QueryField(
+                x=torch.zeros(1, 4, 4),
+                pos=torch.zeros(1, 4, 2),
+                query_type=torch.zeros(1, 4, dtype=torch.long),
+                mask=torch.ones(1, 4, dtype=torch.bool),
+            ),
+            target_y=torch.zeros(1, 4, 1),
+            target_mask=torch.ones(1, 4, dtype=torch.bool),
+            task_type="controlled_relation_operator",
+            split="train",
+            source_dataset="controlled_multimodal",
+            supervision=SupervisionBank(None, None, None, None, None, None, None, None, None, None, None),
+            provenance=ProvenanceBank(["s0"], ["train"], ["raw"], ["synthetic"], "v", {}, {}),
+            hidden=None,
+        )
+        evidence_logits = torch.nn.functional.one_hot(torch.arange(4).view(1, 4), num_classes=4).float() * 4.0
+        evidence = MultimodalEvidenceBank(
+            query_features=torch.zeros(1, 4, 8),
+            global_features=torch.zeros(1, 8),
+            local_features=torch.zeros(1, 4, 8),
+            prototype_features=torch.zeros(1, 4, 8),
+            low_rank_features=torch.zeros(1, 4, 8),
+            alignment_features=torch.zeros(1, 4, 8),
+            candidate_evidence_logits=evidence_logits,
+            local_entropy=torch.zeros(()),
+            alignment_entropy=torch.zeros(()),
+            field_features={},
+            diagnostics={},
+        )
+        prior = RCEOReliabilityPrior(d_model=8)
+
+        reliability = prior(batch, evidence)
+
+        self.assertTrue(torch.equal(reliability.operator_logit_bias.argmax(dim=-1), torch.arange(4).view(1, 4)))
+
     def test_oracle_matrix_true_true_reconstructs_controlled_targets(self):
         import torch
 
