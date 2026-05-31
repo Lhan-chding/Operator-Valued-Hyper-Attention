@@ -1291,7 +1291,38 @@ def _gate_evidence_artifacts(task: str, artifact_root: Path | None = None) -> di
         diagnostics = artifact_root / f"{task}_diagnostics.jsonl"
         robustness = artifact_root / f"{task}_robustness_summary.json"
         raw_metrics = artifact_root / f"{task}_raw_metrics_seed1.jsonl"
-        statistics.write_text(json.dumps({"task": task, "artifact": "statistics_summary"}, sort_keys=True) + "\n")
+        statistics.write_text(
+            json.dumps(
+                {
+                    "main_table": {task: {"test": {"ovha_full": {"mean": 1.0}}}},
+                    "metadata": {"raw_metric_paths": [str(raw_metrics)]},
+                    "per_seed_appendix": [
+                        {
+                            "task": task,
+                            "split": "test",
+                            "model": "ovha_full",
+                            "seed": 1,
+                            "score": 1.0,
+                            "raw_metric_path": str(raw_metrics),
+                        }
+                    ],
+                    "reporting_metadata": {
+                        "per_seed_table": [
+                            {
+                                "task": task,
+                                "split": "test",
+                                "model": "ovha_full",
+                                "seed": 1,
+                                "score": 1.0,
+                                "raw_metric_path": str(raw_metrics),
+                            }
+                        ]
+                    },
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
         diagnostics.write_text(json.dumps({"task": task, "artifact": "diagnostics"}) + "\n")
         robustness.write_text(json.dumps({"task": task, "artifact": "robustness_summary"}, sort_keys=True) + "\n")
         raw_metrics.write_text(json.dumps({"task": task, "seed": 1, "score": 1.0}, sort_keys=True) + "\n")

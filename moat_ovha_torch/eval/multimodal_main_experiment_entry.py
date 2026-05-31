@@ -145,25 +145,40 @@ def _require_gate_evidence_artifacts(label: str, evidence: Any, errors: list[str
     if not _non_empty_text(evidence.get("generated_by")):
         errors.append(f"{label} gate evidence_artifacts generated_by must identify the evaluator")
 
+    artifact_paths: dict[str, Path] = {}
     for artifact_name in TOPCONF_GATE_EVIDENCE_ARTIFACTS:
         artifact = evidence.get(artifact_name)
         if artifact is None:
             errors.append(f"{label} gate evidence_artifacts missing artifact: {artifact_name}")
             continue
-        _validate_artifact_descriptor(label, artifact_name, artifact, errors)
+        artifact_path = _validate_artifact_descriptor(label, artifact_name, artifact, errors)
+        if artifact_path is not None:
+            artifact_paths[artifact_name] = artifact_path
 
     raw_metrics = evidence.get("raw_metrics")
     if not isinstance(raw_metrics, list) or not raw_metrics:
         errors.append(f"{label} gate evidence_artifacts raw_metrics must be a non-empty list")
         return
+    raw_metric_paths: list[Path] = []
     for index, artifact in enumerate(raw_metrics):
-        _validate_artifact_descriptor(label, f"raw_metrics[{index}]", artifact, errors)
+        artifact_path = _validate_artifact_descriptor(label, f"raw_metrics[{index}]", artifact, errors)
+        if artifact_path is not None:
+            raw_metric_paths.append(artifact_path)
+    if isinstance(task, str) and _non_empty_text(evidence.get("split")) and "statistics_summary" in artifact_paths:
+        _validate_statistics_summary_content(
+            label,
+            artifact_paths["statistics_summary"],
+            task.strip(),
+            str(evidence["split"]).strip(),
+            raw_metric_paths,
+            errors,
+        )
 
 
-def _validate_artifact_descriptor(label: str, artifact_name: str, artifact: Any, errors: list[str]) -> None:
+def _validate_artifact_descriptor(label: str, artifact_name: str, artifact: Any, errors: list[str]) -> Path | None:
     if not isinstance(artifact, Mapping):
         errors.append(f"{label} gate evidence_artifacts {artifact_name} must include path and sha256")
-        return
+        return None
     path_value = artifact.get("path")
     if not _non_empty_text(path_value):
         errors.append(f"{label} gate evidence_artifacts {artifact_name}.path must be a non-empty string")
@@ -173,17 +188,90 @@ def _validate_artifact_descriptor(label: str, artifact_name: str, artifact: Any,
     sha256 = artifact.get("sha256")
     if not isinstance(sha256, str) or not _SHA256_HEX_RE.fullmatch(sha256):
         errors.append(f"{label} gate evidence_artifacts {artifact_name}.sha256 must be lowercase SHA-256")
-        return
+        return None
     if artifact_path is None:
-        return
+        return None
     if not artifact_path.exists():
         errors.append(f"{label} gate evidence_artifacts {artifact_name}.path does not exist")
-        return
+        return None
     if not artifact_path.is_file():
         errors.append(f"{label} gate evidence_artifacts {artifact_name}.path must point to a file")
-        return
+        return None
     if _sha256(artifact_path) != sha256:
         errors.append(f"{label} gate evidence_artifacts {artifact_name}.sha256 does not match file content")
+        return None
+    return artifact_path
+
+
+def _validate_statistics_summary_content(
+    label: str,
+    path: Path,
+    task: str,
+    split: str,
+    raw_metric_paths: list[Path],
+    errors: list[str],
+) -> None:
+    try:
+        summary = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"{label} gate statistics_summary must be valid JSON: {exc}")
+        return
+    if not isinstance(summary, Mapping):
+        errors.append(f"{label} gate statistics_summary must be a JSON object")
+        return
+
+    main_table = summary.get("main_table")
+    task_table = main_table.get(task) if isinstance(main_table, Mapping) else None
+    split_table = task_table.get(split) if isinstance(task_table, Mapping) else None
+    if not isinstance(split_table, Mapping) or not split_table:
+        errors.append(f"{label} gate statistics_summary missing main_table entry for task/split: {task}/{split}")
+
+    referenced_paths = _statistics_raw_metric_paths(summary, base_dir=path.parent)
+    for index, raw_metric_path in enumerate(raw_metric_paths):
+        if raw_metric_path.resolve() not in referenced_paths:
+            errors.append(f"{label} gate statistics_summary does not reference raw_metrics[{index}]")
+
+
+def _statistics_raw_metric_paths(summary: Mapping[str, Any], *, base_dir: Path) -> set[Path]:
+    paths: set[Path] = set()
+    metadata = summary.get("metadata")
+    if isinstance(metadata, Mapping):
+        paths.update(_path_values(metadata.get("raw_metric_paths"), base_dir=base_dir))
+    paths.update(_raw_metric_paths_from_rows(summary.get("per_seed_appendix"), base_dir=base_dir))
+    reporting_metadata = summary.get("reporting_metadata")
+    if isinstance(reporting_metadata, Mapping):
+        paths.update(_raw_metric_paths_from_rows(reporting_metadata.get("per_seed_table"), base_dir=base_dir))
+    return paths
+
+
+def _path_values(value: Any, *, base_dir: Path) -> set[Path]:
+    if not isinstance(value, list):
+        return set()
+    return {
+        _resolve_artifact_path(str(path), base_dir=base_dir)
+        for path in value
+        if _non_empty_text(path)
+    }
+
+
+def _raw_metric_paths_from_rows(rows: Any, *, base_dir: Path) -> set[Path]:
+    if not isinstance(rows, list):
+        return set()
+    paths: set[Path] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        raw_path = row.get("raw_metric_path")
+        if _non_empty_text(raw_path):
+            paths.add(_resolve_artifact_path(str(raw_path), base_dir=base_dir))
+    return paths
+
+
+def _resolve_artifact_path(value: str, *, base_dir: Path) -> Path:
+    path = Path(value)
+    if not path.is_absolute():
+        path = base_dir / path
+    return path.resolve()
 
 
 def _non_empty_text(value: Any) -> bool:
