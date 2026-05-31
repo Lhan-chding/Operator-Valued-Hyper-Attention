@@ -41,6 +41,10 @@ def controlled_row_from_oracle_report(
     stackability_passed: bool = True,
     no_operator_memory_delta: float = 0.0,
     no_hyper_adapter_delta: float = 0.0,
+    no_evidence_router_delta: float = 0.0,
+    no_reliability_prior_delta: float = 0.0,
+    memory_only_router_delta: float = 0.0,
+    evidence_only_router_delta: float = 0.0,
     no_lrio_delta: float | None = None,
     no_rceo_delta: float | None = None,
     diagnostics: dict[str, Any] | None = None,
@@ -57,6 +61,10 @@ def controlled_row_from_oracle_report(
         "stackability_passed": bool(stackability_passed),
         "no_operator_memory_delta": float(no_operator_memory_delta),
         "no_hyper_adapter_delta": float(no_hyper_adapter_delta),
+        "no_evidence_router_delta": float(no_evidence_router_delta),
+        "no_reliability_prior_delta": float(no_reliability_prior_delta),
+        "memory_only_router_delta": float(memory_only_router_delta),
+        "evidence_only_router_delta": float(evidence_only_router_delta),
     }
     if no_lrio_delta is not None:
         row["no_lrio_delta"] = float(no_lrio_delta)

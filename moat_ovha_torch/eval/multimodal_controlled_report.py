@@ -20,6 +20,7 @@ CONTROLLED_REQUIRED_GATES = (
     "LRIO collapse",
     "CATO collapse",
     "Router gate",
+    "Router decomposition ablations",
     "RCEO gate",
     "Memory gate",
     "Adapter gate",
@@ -48,6 +49,12 @@ OPERATOR_DIAGNOSTIC_REQUIREMENTS = {
     "LRIO": ("rank_logits_kl_delta",),
     "CATO": ("alignment_entropy_delta", "alignment_topk_delta"),
 }
+ROUTER_DECOMPOSITION_ABLATION_KEYS = (
+    "no_evidence_router_delta",
+    "no_reliability_prior_delta",
+    "memory_only_router_delta",
+    "evidence_only_router_delta",
+)
 
 
 def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -64,6 +71,7 @@ def build_controlled_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             REGION_TEXT_ENTRY_GATES[0],
         ),
         "Router gate": _router_gate(family_rows),
+        "Router decomposition ablations": _router_decomposition_ablation_gate(rows),
         "RCEO gate": _rceo_gate(family_rows),
         "Memory gate": _delta_gate(rows, "no_operator_memory_delta", "Memory gate"),
         "Adapter gate": _delta_gate(rows, "no_hyper_adapter_delta", "Adapter gate"),
@@ -209,6 +217,25 @@ def _router_gate(family_rows: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "threshold": 0.80,
         "reasons": reasons,
         "condition": "mixed relation active_operator accuracy >= 80% test",
+    }
+
+
+def _router_decomposition_ablation_gate(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    reasons: list[str] = []
+    values: dict[str, float] = {}
+    for row in rows:
+        family = str(row.get("family", "<unknown>"))
+        for key in ROUTER_DECOMPOSITION_ABLATION_KEYS:
+            value = _finite_float(row.get(key))
+            if value is None or value <= 0.0:
+                reasons.append(f"{key} must be finite positive for {family}")
+                continue
+            values[f"{family}.{key}"] = value
+    return {
+        "passed": not reasons and bool(rows),
+        "value": values,
+        "reasons": reasons,
+        "condition": "router logit decomposition ablations must degrade: no-evidence, no-reliability, memory-only, evidence-only",
     }
 
 
