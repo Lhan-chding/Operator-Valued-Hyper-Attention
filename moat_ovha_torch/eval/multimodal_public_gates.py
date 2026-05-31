@@ -358,7 +358,7 @@ def _statistical_evidence_reasons(
             continue
         reasons.extend(_main_table_reporting_reasons(main_models, required_baseline, _seed_count(main_models.get(required_baseline, {}))))
     reporting_models = tuple(dict.fromkeys((full_model, baseline_model, *required_baselines)))
-    reasons.extend(_summary_reporting_metadata_reasons(summary, reporting_models))
+    reasons.extend(_summary_reporting_metadata_reasons(summary, reporting_models, main_models))
     paired = (((summary.get("paired_tests", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
     if not isinstance(paired, dict) or not paired:
         reasons.append("paired comparison missing")
@@ -463,7 +463,11 @@ def _main_table_reporting_reasons(main_models: dict[str, Any], model: str, seed_
     return reasons
 
 
-def _summary_reporting_metadata_reasons(summary: dict[str, Any], models: tuple[str, ...]) -> list[str]:
+def _summary_reporting_metadata_reasons(
+    summary: dict[str, Any],
+    models: tuple[str, ...],
+    main_models: Any,
+) -> list[str]:
     metadata = summary.get("reporting_metadata")
     if not isinstance(metadata, dict):
         return [
@@ -483,10 +487,47 @@ def _summary_reporting_metadata_reasons(summary: dict[str, Any], models: tuple[s
             reasons.append(f"reporting metadata missing {key}")
     per_seed_table = metadata.get("per_seed_table")
     if isinstance(per_seed_table, list):
-        covered_models = {str(row.get("model")) for row in per_seed_table if isinstance(row, dict) and row.get("model")}
-        for model in models:
-            if model not in covered_models:
-                reasons.append(f"reporting metadata per_seed_table missing model: {model}")
+        reasons.extend(_reporting_per_seed_table_reasons(per_seed_table, models, main_models))
+    return reasons
+
+
+def _reporting_per_seed_table_reasons(
+    per_seed_table: list[Any],
+    models: tuple[str, ...],
+    main_models: Any,
+) -> list[str]:
+    reasons: list[str] = []
+    valid_seeds_by_model: dict[str, set[int]] = {}
+    invalid_seed_models: set[str] = set()
+    invalid_score_models: set[str] = set()
+    for row in per_seed_table:
+        if not isinstance(row, dict):
+            continue
+        model_value = row.get("model")
+        if not model_value:
+            continue
+        model = str(model_value)
+        seed = _safe_int(row.get("seed"))
+        score = _finite_float(row.get("score"))
+        if seed is None:
+            invalid_seed_models.add(model)
+            continue
+        if score is None:
+            invalid_score_models.add(model)
+            continue
+        valid_seeds_by_model.setdefault(model, set()).add(seed)
+    for model in sorted(invalid_seed_models):
+        reasons.append(f"reporting metadata per_seed_table seed must be integer for model: {model}")
+    for model in sorted(invalid_score_models):
+        reasons.append(f"reporting metadata per_seed_table score must be finite for model: {model}")
+    for model in models:
+        seeds = valid_seeds_by_model.get(model, set())
+        if not seeds:
+            reasons.append(f"reporting metadata per_seed_table missing model: {model}")
+            continue
+        expected_seed_count = _seed_count(main_models.get(model, {})) if isinstance(main_models, dict) else 0
+        if expected_seed_count > 0 and len(seeds) < expected_seed_count:
+            reasons.append(f"reporting metadata per_seed_table must cover main_table seed_count for model: {model}")
     return reasons
 
 
