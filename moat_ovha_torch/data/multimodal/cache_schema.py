@@ -774,6 +774,12 @@ def _validate_manifest_shard_path(
     if shard_relative.is_absolute():
         errors.append(f"{manifest_name} entry for {modality}.{key} must be relative, got {relative_path}")
         return
+    if _contains_forbidden_model_input_modality(relative_path):
+        errors.append(
+            f"{manifest_name} entry for {modality}.{key} must not reference "
+            f"controlled or hidden metadata: {relative_path}"
+        )
+        return
     shard_path = (layout.root / shard_relative).resolve()
     try:
         normalized_relative = shard_path.relative_to(layout.root.resolve())
