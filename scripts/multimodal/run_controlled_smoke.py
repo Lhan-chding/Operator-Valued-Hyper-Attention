@@ -93,7 +93,7 @@ def _write_evidence_artifacts(artifact_root: Path, rows: list[dict[str, object]]
     controlled_rows = artifact_root / "controlled_multimodal_rows.jsonl"
     diagnostics_report = artifact_root / "controlled_multimodal_diagnostics.jsonl"
     _write_jsonl(controlled_rows, rows)
-    _write_jsonl(diagnostics_report, rows)
+    _write_jsonl(diagnostics_report, [_diagnostics_row(row) for row in rows])
     return {
         "task": "controlled_multimodal",
         "generated_by": "scripts/multimodal/run_controlled_smoke.py",
@@ -104,6 +104,41 @@ def _write_evidence_artifacts(artifact_root: Path, rows: list[dict[str, object]]
 
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
     path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
+
+
+def _diagnostics_row(row: dict[str, object]) -> dict[str, object]:
+    diagnostics: dict[str, object] = {
+        "artifact_type": "controlled_diagnostics",
+        "family": row["family"],
+        "stackability_passed": row["stackability_passed"],
+        "oracle_matrix": row["oracle_matrix"],
+    }
+    for key in (
+        "TLEO_oracle_gap",
+        "SPO_oracle_gap",
+        "LRIO_oracle_gap",
+        "CATO_oracle_gap",
+        "no_evidence_router_delta",
+        "no_reliability_prior_delta",
+        "memory_only_router_delta",
+        "evidence_only_router_delta",
+        "no_operator_memory_delta",
+        "no_hyper_adapter_delta",
+        "prototype_kl_delta",
+        "rank_logits_kl_delta",
+        "alignment_entropy_delta",
+        "alignment_topk_delta",
+        "rceo_prior_effect",
+        "rceo_reliability_monotonic",
+        "rceo_router_load_shift",
+        "rceo_reliability_curve",
+        "no_lrio_delta",
+        "no_rceo_delta",
+        "router_accuracy",
+    ):
+        if key in row:
+            diagnostics[key] = row[key]
+    return diagnostics
 
 
 if __name__ == "__main__":
