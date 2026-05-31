@@ -895,6 +895,33 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_unnormalized_data_card_string_list_entries(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+                data_card_overrides={
+                    "modalities": ["text", " region "],
+                    "tasks": [" phrase_region_grounding "],
+                },
+            )
+            _write_feature_versions_for_modalities(layout.root, ("text", " region "))
+            for split in ("train", "test"):
+                _rewrite_token_manifest_modality(layout.root, split, "region", " region ")
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("data_card.json modalities entries must be non-empty normalized strings", joined)
+        self.assertIn("data_card.json tasks entries must be non-empty normalized strings", joined)
+
     def test_cache_validator_rejects_source_ids_that_disagree_with_splits_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -2086,6 +2113,13 @@ def _rewrite_token_manifest_path(root: Path, split: str, modality: str, key: str
     manifest_path = root / "token_fields" / f"manifest_{split}.json"
     manifest = json.loads(manifest_path.read_text())
     manifest[modality][key] = relative
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+
+
+def _rewrite_token_manifest_modality(root: Path, split: str, old_modality: str, new_modality: str) -> None:
+    manifest_path = root / "token_fields" / f"manifest_{split}.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest[new_modality] = manifest.pop(old_modality)
     manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
 
 
