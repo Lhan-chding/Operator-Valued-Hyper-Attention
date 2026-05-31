@@ -28,6 +28,11 @@ SENTIMENT_SAMPLE_RECORD_REQUIRED_KEYS = (
     "corruption_metadata_ref",
 )
 TOKEN_FIELD_MANIFEST_REQUIRED_KEYS = ("x", "pos", "mask")
+TOKEN_FIELD_MANIFEST_ALLOWED_ROOTS = {
+    "x": "token_fields",
+    "pos": "positions",
+    "mask": "masks",
+}
 GROUNDING_REQUIRED_SUPERVISION_PATTERNS = (
     "alignment_pairs_{split}.parquet",
     "bbox_targets_{split}.npy",
@@ -820,6 +825,12 @@ def _validate_manifest_shard_path(
         normalized_relative = shard_path.relative_to(layout.root.resolve())
     except ValueError:
         errors.append(f"{manifest_name} entry for {modality}.{key} escapes cache root: {relative_path}")
+        return
+    expected_root = TOKEN_FIELD_MANIFEST_ALLOWED_ROOTS[key]
+    if not normalized_relative.parts or normalized_relative.parts[0] != expected_root:
+        errors.append(
+            f"{manifest_name} entry for {modality}.{key} must stay under {expected_root}/: {relative_path}"
+        )
         return
     if not shard_path.exists():
         errors.append(f"{manifest_name} points to missing {key} shard for {modality}: {normalized_relative}")
