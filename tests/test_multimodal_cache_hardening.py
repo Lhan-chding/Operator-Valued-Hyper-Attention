@@ -1413,6 +1413,42 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             joined,
         )
 
+    def test_cache_validator_requires_checksums_for_weak_label_artifacts(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            (layout.root / "supervision" / "weak_labels_train.parquet").write_text("placeholder weak labels\n")
+            (layout.root / "provenance" / "pseudo_label_versions.json").write_text(
+                json.dumps(
+                    {
+                        "generated_from_splits": ["train"],
+                        "version": "weak-v1",
+                        "label_provenance": {
+                            "supervision_type": "pseudo",
+                            "source": "cross_modal_disagreement_v0",
+                            "must_report_as": "pseudo",
+                        },
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            _write_complete_checksums(layout.root)
+            checksums_path = layout.root / "checksums.json"
+            checksums = json.loads(checksums_path.read_text())
+            checksums.pop("supervision/weak_labels_train.parquet")
+            checksums_path.write_text(json.dumps(checksums, sort_keys=True) + "\n")
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "checksums.json missing hash for weak label artifact: supervision/weak_labels_train.parquet",
+            "\n".join(report.errors),
+        )
+
 
 def _write_minimal_cache(
     root: Path,
