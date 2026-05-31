@@ -85,7 +85,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "rceo_reliability_shift": -0.25,
                 "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
-                "required_ablation_degradation": {"passed": True, "reasons": []},
+                "required_ablation_degradation": _passing_required_ablation_degradation(),
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
                 "candidate_loss_shift": {"LRIO": 0.04, "SPO": -0.06},
             },
@@ -136,7 +136,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "rceo_reliability_shift": -0.25,
                 "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
-                "required_ablation_degradation": {"passed": True, "reasons": []},
+                "required_ablation_degradation": _passing_required_ablation_degradation(),
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
                 "candidate_loss_shift": {"LRIO": 0.04, "SPO": -0.06},
             },
@@ -201,7 +201,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
             robustness_summary={
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
-                "required_ablation_degradation": {"passed": True, "reasons": []},
+                "required_ablation_degradation": _passing_required_ablation_degradation(),
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
             },
             task="sentiment_emotion",
@@ -258,7 +258,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_calibration": _passing_rceo_calibration(),
-                "required_ablation_degradation": {"passed": True, "reasons": []},
+                "required_ablation_degradation": _passing_required_ablation_degradation(),
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
             },
             task="sentiment_emotion",
@@ -280,7 +280,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
-                "required_ablation_degradation": {"passed": True, "reasons": []},
+                "required_ablation_degradation": _passing_required_ablation_degradation(),
             },
             task="sentiment_emotion",
             split="test",
@@ -304,7 +304,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
-                "required_ablation_degradation": {"passed": True, "reasons": []},
+                "required_ablation_degradation": _passing_required_ablation_degradation(),
                 "operator_load_shift": {"LRIO": 0.00, "SPO": 0.12},
             },
             task="sentiment_emotion",
@@ -329,7 +329,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_calibration": _passing_rceo_calibration(),
                 "required_stress_coverage": {"passed": True, "reasons": []},
-                "required_ablation_degradation": {"passed": True, "reasons": []},
+                "required_ablation_degradation": _passing_required_ablation_degradation(),
                 "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
             },
             task="sentiment_emotion",
@@ -1238,7 +1238,7 @@ def _passing_sentiment_robustness() -> dict[str, object]:
         "rceo_reliability_shift": -0.25,
         "rceo_reliability_calibration": _passing_rceo_calibration(),
         "required_stress_coverage": {"passed": True, "reasons": []},
-        "required_ablation_degradation": {"passed": True, "reasons": []},
+        "required_ablation_degradation": _passing_required_ablation_degradation(),
         "operator_load_shift": {"LRIO": -0.20, "SPO": 0.15},
         "candidate_loss_shift": {"LRIO": 0.04, "SPO": -0.06},
     }
@@ -1255,6 +1255,14 @@ def _passing_rceo_calibration() -> dict[str, object]:
             {"bin": 3, "mean_confidence": 0.70, "observed_accuracy": 0.72, "count": 13},
             {"bin": 4, "mean_confidence": 0.90, "observed_accuracy": 0.88, "count": 11},
         ],
+    }
+
+
+def _passing_required_ablation_degradation() -> dict[str, object]:
+    return {
+        "passed": True,
+        "value": {"ovha_no_rceo": 0.11, "ovha_no_evidence_router": 0.12},
+        "reasons": [],
     }
 
 

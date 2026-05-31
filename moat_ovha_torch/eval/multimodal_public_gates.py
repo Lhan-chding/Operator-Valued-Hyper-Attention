@@ -8,6 +8,7 @@ from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
 
 
 _SENTIMENT_ANCHOR_BASELINES = ("tfn_lmf", "mult_style_crossmodal_transformer")
+_REQUIRED_ROBUSTNESS_ABLATIONS = ("ovha_no_rceo", "ovha_no_evidence_router")
 
 
 def evaluate_region_text_gate(
@@ -419,7 +420,6 @@ def _robustness_passes(
     baseline_model: str,
 ) -> dict[str, Any]:
     ablations = summary.get("required_ablation_degradation", {})
-    ablations_pass = bool(ablations.get("passed"))
     coverage = summary.get("required_stress_coverage", {})
     coverage_pass = bool(coverage.get("passed"))
     summary_full_model = str(summary.get("full_model") or full_model)
@@ -428,15 +428,16 @@ def _robustness_passes(
     reliability_shift_reasons = _rceo_reliability_shift_reasons(summary.get("rceo_reliability_shift"))
     operator_load_shift_reasons = _operator_load_shift_reasons(summary.get("operator_load_shift"))
     candidate_loss_shift_reasons = _candidate_loss_shift_reasons(summary.get("candidate_loss_shift"))
+    ablation_degradation_reasons = _required_robustness_ablation_reasons(ablations)
     passed = (
         bool(summary.get("full_drop_less_than_baseline"))
         and bool(summary.get("rceo_reliability_monotonic"))
-        and ablations_pass
         and coverage_pass
         and not metric_reasons
         and not reliability_shift_reasons
         and not operator_load_shift_reasons
         and not candidate_loss_shift_reasons
+        and not ablation_degradation_reasons
     )
     ablation_reasons = "; ".join(str(reason) for reason in ablations.get("reasons", ()) if reason)
     coverage_reasons = "; ".join(str(reason) for reason in coverage.get("reasons", ()) if reason)
@@ -449,6 +450,7 @@ def _robustness_passes(
     reason_parts.extend(reliability_shift_reasons)
     reason_parts.extend(operator_load_shift_reasons)
     reason_parts.extend(candidate_loss_shift_reasons)
+    reason_parts.extend(ablation_degradation_reasons)
     if ablation_reasons:
         reason_parts.append(ablation_reasons)
     if coverage_reasons:
@@ -457,6 +459,32 @@ def _robustness_passes(
         "passed": passed,
         "reason": "; ".join(reason_parts) if not passed else "",
     }
+
+
+def _required_robustness_ablation_reasons(value: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return ["robustness ablation degradation missing"]
+    reasons: list[str] = []
+    if value.get("passed") is not True:
+        reasons.append("robustness required ablation degradation did not pass")
+    deltas = value.get("value")
+    if not isinstance(deltas, dict) or not deltas:
+        reasons.append("robustness ablation degradation values missing")
+        deltas = {}
+    for model in _REQUIRED_ROBUSTNESS_ABLATIONS:
+        if model not in deltas:
+            reasons.append(f"robustness ablation degradation missing model: {model}")
+            continue
+        delta = _finite_float(deltas.get(model))
+        if delta is None:
+            reasons.append(f"robustness ablation degradation must be finite for model: {model}")
+        elif delta <= 0.0:
+            reasons.append(f"robustness ablation degradation must be positive for model: {model}")
+    for model, delta in deltas.items():
+        if _is_empty_reporting_value(model) or _finite_float(delta) is None:
+            reasons.append("robustness ablation degradation values must be keyed by model and finite")
+            break
+    return reasons
 
 
 def _robustness_metric_reasons(summary: dict[str, Any], full_model: str, baseline_model: str) -> list[str]:
