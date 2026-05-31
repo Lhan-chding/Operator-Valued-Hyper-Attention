@@ -30,6 +30,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "moat_ovha_torch" / "models" / "multimodal" / "ovha_multimodal.py",
             ROOT / "scripts" / "multimodal" / "validate_cache.py",
             ROOT / "scripts" / "multimodal" / "build_refcoco_stage_records.py",
+            ROOT / "scripts" / "multimodal" / "align_refcoco_stage_features.py",
             ROOT / "scripts" / "multimodal" / "extract_cmu_sdk_stage_inputs.py",
             ROOT / "scripts" / "multimodal" / "inspect_cmu_sdk_sequences.py",
             ROOT / "scripts" / "multimodal" / "write_cmu_sdk_splits.py",
@@ -488,6 +489,121 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(records[0]["region_box"], [0.1, 0.1, 0.4, 0.3])
         self.assertEqual(records[0]["target_region_index"], 0)
         self.assertEqual(records[0]["box_coordinate_convention"], "xyxy_normalized")
+        self.assertTrue(validation.ok, validation.errors)
+
+    def test_align_refcoco_stage_features_cli_reorders_feature_banks_by_stage_splits(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            stage_inputs = tmp_path / "stage_inputs"
+            raw_root = tmp_path / "raw_refcoco"
+            cache_root = tmp_path / "cache"
+            stage_inputs.mkdir()
+            splits = {
+                "train": ["refcoco::image10::ann501::sent1001"],
+                "val": ["refcoco::image20::ann502::sent1002"],
+                "test": ["refcoco::image30::ann503::sent1003"],
+            }
+            records = {
+                "records": [
+                    {
+                        "source_id": source_id,
+                        "image_id": f"image-{index}",
+                        "caption_id": f"caption-{index}",
+                        "phrase_span": {"start": 0, "end": 2},
+                        "region_box": [0.1, 0.1, 0.4, 0.3],
+                        "target_region_index": 0,
+                    }
+                    for index, source_id in enumerate([*splits["train"], *splits["val"], *splits["test"]])
+                ]
+            }
+            (stage_inputs / "refcoco_splits.json").write_text(json.dumps(splits, sort_keys=True) + "\n")
+            (stage_inputs / "refcoco_phrase_region_records.json").write_text(json.dumps(records, sort_keys=True) + "\n")
+            bank_ids = [splits["test"][0], splits["train"][0], splits["val"][0]]
+            (stage_inputs / "bank_source_ids.txt").write_text("\n".join(bank_ids) + "\n")
+            np.save(stage_inputs / "text_bank.npy", np.array([[[30.0]], [[10.0]], [[20.0]]], dtype=np.float32))
+            np.save(stage_inputs / "region_bank.npy", np.array([[[300.0]], [[100.0]], [[200.0]]], dtype=np.float32))
+
+            align_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "align_refcoco_stage_features.py"),
+                    "refcoco",
+                    str(stage_inputs),
+                    "--splits",
+                    str(stage_inputs / "refcoco_splits.json"),
+                    "--records",
+                    str(stage_inputs / "refcoco_phrase_region_records.json"),
+                    "--text-features",
+                    str(stage_inputs / "text_bank.npy"),
+                    "--text-source-ids",
+                    str(stage_inputs / "bank_source_ids.txt"),
+                    "--region-features",
+                    str(stage_inputs / "region_bank.npy"),
+                    "--region-source-ids",
+                    str(stage_inputs / "bank_source_ids.txt"),
+                    "--feature-version",
+                    "unit-refcoco-frozen-v1",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            stage_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "stage_refcoco_raw.py"),
+                    "refcoco",
+                    str(raw_root),
+                    "--splits",
+                    str(stage_inputs / "refcoco_splits.json"),
+                    "--records",
+                    str(stage_inputs / "refcoco_phrase_region_records.json"),
+                    "--text-features",
+                    str(stage_inputs / "refcoco_text_features.npy"),
+                    "--region-features",
+                    str(stage_inputs / "refcoco_region_features.npy"),
+                    "--license-tag",
+                    "unit-refcoco-coco2014",
+                    "--preprocessing-version",
+                    "unit-refcoco-frozen-v1",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            build_cache_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "refcoco",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(align_result.stdout) if align_result.stdout.strip() else {}
+            aligned_text = np.load(stage_inputs / "refcoco_text_features.npy") if (stage_inputs / "refcoco_text_features.npy").exists() else np.zeros((0, 0, 0), dtype=np.float32)
+            aligned_region = np.load(stage_inputs / "refcoco_region_features.npy") if (stage_inputs / "refcoco_region_features.npy").exists() else np.zeros((0, 0, 0), dtype=np.float32)
+            manifest = json.loads((stage_inputs / "refcoco_feature_alignment_manifest.json").read_text()) if (stage_inputs / "refcoco_feature_alignment_manifest.json").exists() else {}
+            validation = validate_cache_layout(MultimodalCacheLayout(cache_root, "refcoco", "v0.1"), splits=("train", "val", "test"))
+
+        self.assertEqual(align_result.returncode, 0, align_result.stdout + align_result.stderr)
+        self.assertEqual(stage_result.returncode, 0, stage_result.stdout + stage_result.stderr)
+        self.assertEqual(build_cache_result.returncode, 0, build_cache_result.stdout + build_cache_result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["sample_count"], 3)
+        self.assertEqual(aligned_text[:, 0, 0].tolist(), [10.0, 20.0, 30.0])
+        self.assertEqual(aligned_region[:, 0, 0].tolist(), [100.0, 200.0, 300.0])
+        self.assertEqual(manifest["ordered_source_ids"], [splits["train"][0], splits["val"][0], splits["test"][0]])
+        self.assertEqual(manifest["feature_version"], "unit-refcoco-frozen-v1")
         self.assertTrue(validation.ok, validation.errors)
 
     def test_build_cache_cli_validates_requested_cache_version(self):
