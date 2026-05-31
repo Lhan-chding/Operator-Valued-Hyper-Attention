@@ -1148,6 +1148,17 @@ def _summary(
         model: _model_summary_row(score, seed_count, include_reporting_metadata, higher_is_better)
         for model, score in model_scores.items()
     }
+    paired["baseline_comparisons"] = {
+        model: {
+            "common_seed_count": common_seed_count,
+            "mean_delta": (full - score) if higher_is_better else (score - full),
+            "metric_direction": "higher_is_better" if higher_is_better else "lower_is_better",
+            "paired_permutation_p": 0.25,
+            "paired_bootstrap_ci95": [0.01, 0.12],
+        }
+        for model, score in model_scores.items()
+        if model not in {"ovha_full", "cross_attention_transformer"}
+    }
     summary: dict[str, object] = {
         "main_table": {
             task: {

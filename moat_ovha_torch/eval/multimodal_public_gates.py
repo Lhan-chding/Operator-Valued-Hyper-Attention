@@ -154,6 +154,15 @@ def _full_beats_required_strong_baselines(
         if baseline is None:
             reasons.append(f"required same-feature baseline missing: {baseline_model}")
             continue
+        reasons.extend(
+            _required_strong_baseline_paired_reasons(
+                summary,
+                task,
+                split,
+                full_model,
+                baseline_model,
+            )
+        )
         improvement = _directional_improvement(full, baseline, higher_is_better)
         values[baseline_model] = improvement
         if improvement <= 0.0:
@@ -615,42 +624,96 @@ def _statistical_evidence_reasons(
     if not isinstance(paired, dict) or not paired:
         reasons.append("paired comparison missing")
         return reasons
+    reasons.extend(
+        _paired_comparison_payload_reasons(
+            paired,
+            main_models,
+            full_model,
+            baseline_model,
+            full_seed_count,
+            baseline_seed_count,
+            main_metric_direction,
+            "paired comparison",
+        )
+    )
+    return reasons
+
+
+def _required_strong_baseline_paired_reasons(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    full_model: str,
+    baseline_model: str,
+) -> list[str]:
+    main_models = (((summary.get("main_table", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
+    _, main_metric_direction = _metric_direction_reasons(main_models)
+    paired = (((summary.get("paired_tests", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
+    baseline_comparisons = paired.get("baseline_comparisons") if isinstance(paired, dict) else None
+    if not isinstance(baseline_comparisons, dict):
+        return [f"required same-feature baseline paired comparison missing: {baseline_model}"]
+    baseline_paired = baseline_comparisons.get(baseline_model)
+    if not isinstance(baseline_paired, dict) or not baseline_paired:
+        return [f"required same-feature baseline paired comparison missing: {baseline_model}"]
+    return _paired_comparison_payload_reasons(
+        baseline_paired,
+        main_models,
+        full_model,
+        baseline_model,
+        _seed_count(main_models.get(full_model, {})) if isinstance(main_models, dict) else 0,
+        _seed_count(main_models.get(baseline_model, {})) if isinstance(main_models, dict) else 0,
+        main_metric_direction,
+        f"required same-feature baseline {baseline_model} paired comparison",
+    )
+
+
+def _paired_comparison_payload_reasons(
+    paired: dict[str, Any],
+    main_models: Any,
+    full_model: str,
+    baseline_model: str,
+    full_seed_count: int,
+    baseline_seed_count: int,
+    main_metric_direction: str | None,
+    label: str,
+) -> list[str]:
+    reasons: list[str] = []
     common_seed_count = _safe_int(paired.get("common_seed_count")) or 0
     if common_seed_count < 3:
-        reasons.append("paired comparison requires at least 3 common seeds")
+        reasons.append(f"{label} requires at least 3 common seeds")
     if common_seed_count != min(full_seed_count, baseline_seed_count):
-        reasons.append("paired comparison common_seed_count must cover full and baseline main_table seeds")
+        reasons.append(f"{label} common_seed_count must cover full and baseline main_table seeds")
     for key in ("metric_direction", "mean_delta", "paired_permutation_p", "paired_bootstrap_ci95"):
         if key not in paired:
-            reasons.append(f"paired comparison missing {key}")
+            reasons.append(f"{label} missing {key}")
     if "metric_direction" in paired:
         paired_direction = paired.get("metric_direction")
         if paired_direction not in {"higher_is_better", "lower_is_better"}:
-            reasons.append("paired comparison metric_direction must be higher_is_better or lower_is_better")
+            reasons.append(f"{label} metric_direction must be higher_is_better or lower_is_better")
         elif main_metric_direction is not None and paired_direction != main_metric_direction:
-            reasons.append("paired comparison metric_direction disagrees with main_table higher_is_better")
+            reasons.append(f"{label} metric_direction disagrees with main_table higher_is_better")
     if "mean_delta" in paired:
         mean_delta = _finite_float(paired.get("mean_delta"))
         if mean_delta is None:
-            reasons.append("paired comparison mean_delta must be a finite number")
+            reasons.append(f"{label} mean_delta must be a finite number")
         elif mean_delta <= 0.0:
-            reasons.append("paired comparison mean_delta must be positive for claimed improvement")
+            reasons.append(f"{label} mean_delta must be positive for claimed improvement")
         else:
             expected_delta = _expected_main_table_delta(main_models, full_model, baseline_model)
             if expected_delta is not None and not math.isclose(mean_delta, expected_delta, rel_tol=1e-9, abs_tol=1e-9):
-                reasons.append("paired comparison mean_delta disagrees with main_table mean delta")
+                reasons.append(f"{label} mean_delta disagrees with main_table mean delta")
     if "paired_permutation_p" in paired:
         permutation_p = _finite_float(paired.get("paired_permutation_p"))
         if permutation_p is None or permutation_p < 0.0 or permutation_p > 1.0:
-            reasons.append("paired comparison paired_permutation_p must be a finite probability")
+            reasons.append(f"{label} paired_permutation_p must be a finite probability")
     if "paired_bootstrap_ci95" in paired:
         bootstrap_ci = _finite_interval(paired.get("paired_bootstrap_ci95"))
         if bootstrap_ci is None:
-            reasons.append("paired comparison paired_bootstrap_ci95 must be a finite length-2 interval")
+            reasons.append(f"{label} paired_bootstrap_ci95 must be a finite length-2 interval")
         elif bootstrap_ci[0] > bootstrap_ci[1]:
-            reasons.append("paired comparison paired_bootstrap_ci95 lower bound must not exceed upper bound")
+            reasons.append(f"{label} paired_bootstrap_ci95 lower bound must not exceed upper bound")
         elif bootstrap_ci[0] <= 0.0:
-            reasons.append("paired comparison bootstrap CI must be strictly positive for claimed improvement")
+            reasons.append(f"{label} bootstrap CI must be strictly positive for claimed improvement")
     return reasons
 
 
