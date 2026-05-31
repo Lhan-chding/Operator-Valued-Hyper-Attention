@@ -752,8 +752,12 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             eval_metrics_path = Path(payload["training"]["artifacts"]["eval_metrics"]["path"])
             eval_diagnostics_path = Path(payload["training"]["artifacts"]["eval_diagnostics"]["path"])
+            smoke_raw_metrics_path = Path(payload["training"]["artifacts"]["smoke_raw_metrics"]["path"])
             eval_rows = [json.loads(line) for line in eval_metrics_path.read_text().splitlines() if line.strip()]
             eval_diagnostics = [json.loads(line) for line in eval_diagnostics_path.read_text().splitlines() if line.strip()]
+            smoke_raw_rows = [
+                json.loads(line) for line in smoke_raw_metrics_path.read_text().splitlines() if line.strip()
+            ]
 
         training = payload["training"]
         self.assertEqual(training["eval_smoke_split"], "val")
@@ -768,6 +772,21 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(eval_diagnostics[0]["stage"], "T5_eval")
         self.assertEqual(eval_diagnostics[0]["split"], "val")
         self.assertTrue(eval_diagnostics[0]["stackability_passed"])
+        self.assertEqual(len(smoke_raw_rows), 1)
+        smoke_raw = smoke_raw_rows[0]
+        self.assertEqual(smoke_raw["artifact_type"], "public_smoke_raw_metric")
+        self.assertEqual(smoke_raw["evidence_scope"], "public_smoke_only_not_topconf_main_table")
+        self.assertTrue(smoke_raw["not_topconf_main_table"])
+        self.assertEqual(smoke_raw["task"], "phrase_region_grounding")
+        self.assertEqual(smoke_raw["dataset"], "refcoco")
+        self.assertEqual(smoke_raw["model"], "ovha_full")
+        self.assertEqual(smoke_raw["metric_name"], "heldout_task_loss_smoke")
+        self.assertEqual(smoke_raw["split"], "val")
+        self.assertEqual(smoke_raw["seed"], 201)
+        self.assertFalse(smoke_raw["higher_is_better"])
+        self.assertAlmostEqual(smoke_raw["score"], eval_rows[0]["task_loss"], places=7)
+        self.assertEqual(smoke_raw["raw_metric_path"], str(smoke_raw_metrics_path))
+        self.assertIn("not a same-feature baseline comparison", smoke_raw["evidence_limitations"])
 
     def test_public_smoke_runner_rejects_unverified_controlled_artifact_descriptors(self):
         with tempfile.TemporaryDirectory() as tmp:
