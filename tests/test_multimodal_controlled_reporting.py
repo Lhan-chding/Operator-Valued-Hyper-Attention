@@ -1054,6 +1054,14 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertEqual(stages["T3"]["trainable_parameter_groups"], ["joint_router_adapter.router"])
         self.assertIn("candidate_primitives", stages["T3"]["frozen_parameter_groups"])
         self.assertIn("joint_router_adapter.hyper_adapter", stages["T3"]["frozen_parameter_groups"])
+        self.assertEqual(stages["T3"]["families_seen"], ["mixed_relation_operator"])
+        self.assertTrue(
+            all(
+                entry["family"] == "mixed_relation_operator"
+                for entry in training["loss_history"]
+                if entry["stage"] == "T3"
+            )
+        )
         self.assertEqual(
             stages["T4"]["loss_names_observed"],
             [
