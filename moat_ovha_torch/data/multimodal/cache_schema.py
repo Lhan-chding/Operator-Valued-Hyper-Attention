@@ -40,6 +40,8 @@ GROUNDING_REQUIRED_SUPERVISION_PATTERNS = (
 )
 SENTIMENT_REQUIRED_SUPERVISION_PATTERNS = ("missing_modality_mask_{split}.npy",)
 RCEO_REQUIRED_SUPERVISION_PATTERNS = ("corruption_{split}.parquet",)
+WEAK_LABEL_SUPERVISION_PATTERN = "weak_labels_{split}.parquet"
+ALLOWED_WEAK_LABEL_SUPERVISION_TYPES = frozenset({"weak", "pseudo"})
 FORBIDDEN_MODEL_INPUT_MODALITIES = frozenset(
     {
         "corruption_metadata",
@@ -506,6 +508,47 @@ def _validate_pseudo_label_provenance(
                 errors.append(f"pseudo labels must not be generated from evaluation split: {split}")
     if generated_from and (not isinstance(payload.get("version"), str) or not payload.get("version")):
         errors.append("pseudo_label_versions.json version must be a non-empty string")
+    if _weak_label_artifacts_exist(layout, splits):
+        _validate_weak_label_provenance(payload.get("label_provenance"), errors)
+
+
+def _weak_label_artifacts_exist(layout: MultimodalCacheLayout, splits: tuple[str, ...]) -> bool:
+    return any(
+        (layout.root / "supervision" / WEAK_LABEL_SUPERVISION_PATTERN.format(split=split)).exists()
+        for split in splits
+    )
+
+
+def _validate_weak_label_provenance(provenance: Any, errors: list[str]) -> None:
+    if not isinstance(provenance, dict):
+        errors.append(
+            "pseudo_label_versions.json label_provenance must be an object when weak label artifacts exist"
+        )
+        return
+    supervision_type = _normalized_label_supervision_type(provenance.get("supervision_type"))
+    must_report_as = _normalized_label_supervision_type(provenance.get("must_report_as"))
+    if supervision_type not in ALLOWED_WEAK_LABEL_SUPERVISION_TYPES:
+        errors.append(
+            "pseudo_label_versions.json label_provenance.supervision_type must be weak or pseudo "
+            "when weak label artifacts exist"
+        )
+    if not isinstance(provenance.get("source"), str) or not provenance.get("source").strip():
+        errors.append("pseudo_label_versions.json label_provenance.source must be a non-empty string")
+    if must_report_as != supervision_type or must_report_as not in ALLOWED_WEAK_LABEL_SUPERVISION_TYPES:
+        errors.append("pseudo_label_versions.json label_provenance.must_report_as must match supervision_type")
+
+
+def _normalized_label_supervision_type(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "pseudo_label": "pseudo",
+        "pseudo_labels": "pseudo",
+        "weak_label": "weak",
+        "weak_labels": "weak",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _is_allowed_pseudo_label_source_split(split: str) -> bool:
