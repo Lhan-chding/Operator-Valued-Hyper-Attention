@@ -212,6 +212,9 @@ class ControlledSyntheticMultimodalAdapter:
         audio_pos = text_pos.clone()
         query_x = torch.randn(batch_size, query_count, self.field_dim, generator=generator).to(device)
         query_pos = torch.linspace(0.0, 1.0, query_count).view(1, query_count, 1).repeat(batch_size, 1, 2).to(device)
+        true_alignment_pairs = _alignment_pairs(torch, batch_size, query_count, token_count, device)
+        if family == "cato_alignment_transport":
+            query_x = _aligned_region_tokens(torch, region_x, true_alignment_pairs)
 
         router_weights, active = _router_truth(torch, family, batch_size, query_count, device)
         if family == "mixed_relation_operator":
@@ -233,12 +236,19 @@ class ControlledSyntheticMultimodalAdapter:
                 quality=_quality_for_family(torch, family, batch_size, token_count, device),
             ),
         }
-        candidate_values = _candidate_values(torch, text_x, region_x, audio_x, query_x, self.output_dim)
+        candidate_values = _candidate_values(
+            torch,
+            text_x,
+            region_x,
+            audio_x,
+            query_x,
+            self.output_dim,
+            true_alignment_pairs=true_alignment_pairs,
+        )
         target_y = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
         true_lengthscale = torch.full((batch_size, query_count, 1), 0.16, device=device)
         true_rank_logits = _structured_adapter_logits(torch, batch_size, query_count, 4, device, offset=1, scale=1.5)
         true_prototype_logits = _structured_adapter_logits(torch, batch_size, query_count, 4, device, offset=0, scale=1.5)
-        true_alignment_pairs = _alignment_pairs(torch, batch_size, query_count, token_count, device)
         true_adapter_params = _true_adapter_params(
             torch,
             family,
@@ -445,18 +455,26 @@ def _write_controlled_checksums(root: Path) -> None:
     (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
 
 
-def _candidate_values(torch, text_x, region_x, audio_x, query_x, output_dim: int):
+def _candidate_values(torch, text_x, region_x, audio_x, query_x, output_dim: int, *, true_alignment_pairs=None):
     batch_size, query_count, _ = query_x.shape
     text_local = text_x[:, :query_count].mean(dim=-1, keepdim=True)
     if text_local.shape[1] < query_count:
         text_local = text_x.mean(dim=1, keepdim=True).expand(-1, query_count, -1).mean(dim=-1, keepdim=True)
     spo = text_x.mean(dim=1, keepdim=True).mean(dim=-1, keepdim=True).expand(batch_size, query_count, 1)
     lrio = (text_x.mean(dim=1) * audio_x.mean(dim=1)).mean(dim=-1, keepdim=True).unsqueeze(1).expand(batch_size, query_count, 1)
-    alignment = torch.matmul(query_x, region_x.transpose(1, 2)).softmax(dim=-1)
-    cato = torch.matmul(alignment, region_x).mean(dim=-1, keepdim=True)
+    if true_alignment_pairs is None:
+        alignment = torch.matmul(query_x, region_x.transpose(1, 2)).softmax(dim=-1)
+        cato = torch.matmul(alignment, region_x).mean(dim=-1, keepdim=True)
+    else:
+        cato = _aligned_region_tokens(torch, region_x, true_alignment_pairs).mean(dim=-1, keepdim=True)
     base = torch.cat([text_local, spo, lrio, cato], dim=-1).unsqueeze(-1)
     scales = torch.linspace(0.5, 1.5, output_dim, device=query_x.device).view(1, 1, 1, output_dim)
     return base * scales
+
+
+def _aligned_region_tokens(torch, region_x, alignment_pairs):
+    region_indices = alignment_pairs[..., 1].unsqueeze(-1).expand(-1, -1, region_x.shape[-1])
+    return torch.gather(region_x, dim=1, index=region_indices)
 
 
 def _router_truth(torch, family: str, batch_size: int, query_count: int, device: str):
