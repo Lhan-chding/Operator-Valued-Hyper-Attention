@@ -118,15 +118,52 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             raw_root = tmp_path / "raw"
             cache_root = tmp_path / "cache"
             for relative in (
-                "annotations/instances.json",
-                "annotations/refs.json",
                 "features/text_features.npy",
-                "features/region_features.npy",
+                "features/audio_features.npy",
+                "features/visual_features.npy",
+                "labels/sentiment.npy",
+                "labels/emotion.npy",
+                "metadata/utterances.json",
+                "metadata/dialogues.json",
+                "metadata/feature_versions.json",
+                "metadata/missing_modality_mask.npy",
+                "metadata/corruption_transforms.json",
                 "splits.json",
             ):
                 path = raw_root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("fixture\n")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "cmu_mosei",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertIn("partial cache initialization is forbidden", payload["policy"])
+        self.assertIn("CMU-MOSEI cache writing requires", "\n".join(payload["errors"]))
+        self.assertFalse((cache_root / "cmu_mosei" / "v0.1" / "data_card.json").exists())
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_build_cache_cli_writes_valid_refcoco_cache_from_raw_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_root = tmp_path / "raw"
+            cache_root = tmp_path / "cache"
+            _write_refcoco_raw_fixture(raw_root)
 
             result = subprocess.run(
                 [
@@ -141,14 +178,17 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
+            layout = MultimodalCacheLayout(cache_root, "refcoco", "v0.1")
+            validation = validate_cache_layout(layout, splits=("train", "val", "test"))
 
-        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         payload = json.loads(result.stdout)
-        self.assertFalse(payload["ok"])
-        self.assertIn("partial cache initialization is forbidden", payload["policy"])
-        self.assertIn("RefCOCO cache writing requires", "\n".join(payload["errors"]))
-        self.assertFalse((cache_root / "refcoco" / "v0.1" / "data_card.json").exists())
-        self.assertNotIn("Traceback", result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["policy"], "cache built and validated")
+        self.assertTrue(validation.ok, validation.errors)
+        self.assertTrue((layout.root / "checksums.json").exists())
+        self.assertTrue((layout.root / "provenance" / "sample_records_train.jsonl").exists())
+        self.assertTrue((layout.root / "supervision" / "alignment_pairs_test.parquet").exists())
 
     def test_controlled_true_adapter_param_contract_matches_v1_protocol(self):
         from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
@@ -988,6 +1028,40 @@ def _load_script_module(path: Path):
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def _write_refcoco_raw_fixture(raw_root: Path) -> None:
+    for folder in ("annotations", "features"):
+        (raw_root / folder).mkdir(parents=True, exist_ok=True)
+    split_source_ids = {
+        "train": ["ref-train-1"],
+        "val": ["ref-val-1"],
+        "test": ["ref-test-1"],
+    }
+    (raw_root / "splits.json").write_text(json.dumps(split_source_ids, sort_keys=True) + "\n")
+    records = []
+    for split, source_ids in split_source_ids.items():
+        for source_id in source_ids:
+            records.append(
+                {
+                    "source_id": source_id,
+                    "split": split,
+                    "original_split": split,
+                    "raw_ref": f"refcoco://{source_id}",
+                    "license_tag": "fixture-license",
+                    "preprocessing_version": "fixture-preprocess-v1",
+                    "image_id": f"image-{source_id}",
+                    "caption_id": f"caption-{source_id}",
+                    "phrase_span": {"start": 0, "end": 2},
+                    "region_box": [0.0, 0.0, 1.0, 1.0],
+                    "candidate_region_source": "fixture_regions",
+                    "box_coordinate_convention": "xyxy_normalized",
+                }
+            )
+    (raw_root / "annotations" / "refs.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
+    (raw_root / "annotations" / "instances.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
+    (raw_root / "features" / "text_features.npy").write_text("fixture text features\n")
+    (raw_root / "features" / "region_features.npy").write_text("fixture region features\n")
 
 
 class _Shape:
