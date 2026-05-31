@@ -177,6 +177,11 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             task_labels_train = np.load(layout.root / "supervision" / "task_labels_train.npy")
             bbox_targets_train = np.load(layout.root / "supervision" / "bbox_targets_train.npy")
             region_targets_train = np.load(layout.root / "supervision" / "region_targets_train.npy")
+            alignment_rows = [
+                json.loads(line)
+                for line in (layout.root / "supervision" / "alignment_pairs_train.parquet").read_text().splitlines()
+                if line.strip()
+            ]
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         payload = json.loads(result.stdout)
@@ -191,9 +196,12 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(text_pos_train.shape, (1, 4, 1))
         self.assertEqual(region_mask_train.shape, (1, 2))
         self.assertTrue(region_mask_train.all())
-        self.assertEqual(task_labels_train.shape, (1, 1))
+        self.assertEqual(task_labels_train.shape, (1, 2))
+        self.assertEqual(task_labels_train.tolist(), [[0.0, 1.0]])
         self.assertEqual(bbox_targets_train.shape, (1, 4))
         self.assertEqual(region_targets_train.shape, (1, 1))
+        self.assertEqual(region_targets_train.tolist(), [[1]])
+        self.assertEqual(alignment_rows[0]["target_region_index"], 1)
 
     def test_build_cache_cli_validates_requested_cache_version(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
@@ -1246,6 +1254,7 @@ def _write_refcoco_raw_fixture(raw_root: Path) -> None:
                     "caption_id": f"caption-{source_id}",
                     "phrase_span": {"start": 0, "end": 2},
                     "region_box": [0.0, 0.0, 1.0, 1.0],
+                    "target_region_index": 1,
                     "candidate_region_source": "fixture_regions",
                     "box_coordinate_convention": "xyxy_normalized",
                 }
