@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from moat_ovha_torch.eval.multimodal_controlled_report import (
+    CONTROLLED_REQUIRED_FAMILIES,
+    CONTROLLED_REQUIRED_GATES,
+    ORACLE_MATRIX_CELLS,
+)
+
 
 REGION_TEXT_TASK_TYPES = {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities"}
 SENTIMENT_EMOTION_TASK_TYPES = {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "meld"}
@@ -31,6 +37,10 @@ def validate_public_entry_requirements(task_type: str, controlled_report: dict[s
     go_no_go = controlled_report.get("go_no_go", {})
     if not isinstance(go_no_go, dict) or go_no_go.get("controlled_multimodal_passed") is not True:
         errors.append("controlled_multimodal_passed must be true before public multimodal entry")
+    if not isinstance(go_no_go, dict) or go_no_go.get("enter_public_multimodal") is not True:
+        errors.append("enter_public_multimodal must be true before public multimodal entry")
+
+    _require_complete_controlled_report(controlled_report, errors)
 
     gates = controlled_report.get("gate_table", {})
     if task_type in REGION_TEXT_TASK_TYPES:
@@ -86,3 +96,28 @@ def _require_gate(gates: Any, gate_name: str, message: str, errors: list[str]) -
     gate = gates.get(gate_name, {}) if isinstance(gates, dict) else {}
     if not isinstance(gate, dict) or gate.get("passed") is not True:
         errors.append(message)
+
+
+def _require_complete_controlled_report(controlled_report: dict[str, Any], errors: list[str]) -> None:
+    observed_cells = controlled_report.get("oracle_matrix_cells")
+    if not isinstance(observed_cells, (list, tuple)) or tuple(observed_cells) != ORACLE_MATRIX_CELLS:
+        errors.append("controlled report must include full oracle_matrix_cells")
+
+    families = controlled_report.get("families")
+    if not isinstance(families, dict):
+        families = {}
+        errors.append("controlled report must include controlled families")
+    for family in CONTROLLED_REQUIRED_FAMILIES:
+        if not isinstance(families.get(family), dict):
+            errors.append(f"controlled report missing controlled family: {family}")
+
+    gates = controlled_report.get("gate_table")
+    if not isinstance(gates, dict):
+        gates = {}
+        errors.append("controlled report must include gate_table")
+    for gate_name in CONTROLLED_REQUIRED_GATES:
+        gate = gates.get(gate_name)
+        if not isinstance(gate, dict):
+            errors.append(f"controlled report missing required gate: {gate_name}")
+        elif gate.get("passed") is not True:
+            errors.append(f"controlled report required gate did not pass: {gate_name}")

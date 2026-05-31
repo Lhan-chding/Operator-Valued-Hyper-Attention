@@ -319,16 +319,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("sentiment/emotion public entry requires no-LRIO ablation degradation", joined)
         self.assertIn("sentiment/emotion public entry requires no-RCEO ablation degradation", joined)
 
-        passed_ablation_gates = {
-            "go_no_go": {"controlled_multimodal_passed": True},
-            "gate_table": {
-                "LRIO collapse": {"passed": True},
-                "SPO collapse": {"passed": True},
-                "RCEO gate": {"passed": True},
-                "no-LRIO ablation": {"passed": True},
-                "no-RCEO ablation": {"passed": True},
-            },
-        }
+        passed_ablation_gates = _complete_controlled_public_entry_report()
 
         allowed = validate_public_entry_requirements("sentiment_emotion", passed_ablation_gates)
 
@@ -356,14 +347,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
 
         trained_controlled_payload = {
             "mode": "trained_controlled_report",
-            "controlled_report": {
-                "go_no_go": {"controlled_multimodal_passed": True},
-                "gate_table": {
-                    "Stackability": {"passed": True},
-                    "CATO collapse": {"passed": True},
-                    "CATO alignment diagnostics": {"passed": True},
-                },
-            },
+            "controlled_report": _complete_controlled_public_entry_report(),
         }
 
         report = validate_public_entry_requirements("phrase_region_grounding", trained_controlled_payload)
@@ -613,6 +597,41 @@ def _valid_adapter_params() -> dict[str, list[str]]:
         "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
         "LRIO": ["rank_logits", "interaction_temperature", "scale", "bias"],
         "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"],
+    }
+
+
+def _complete_controlled_public_entry_report() -> dict[str, object]:
+    required_gates = (
+        "Stackability",
+        "TLEO collapse",
+        "SPO collapse",
+        "LRIO collapse",
+        "CATO collapse",
+        "Router gate",
+        "RCEO gate",
+        "Memory gate",
+        "Adapter gate",
+    )
+    gate_table = {name: {"passed": True} for name in required_gates}
+    gate_table.update(
+        {
+            "CATO alignment diagnostics": {"passed": True},
+            "no-LRIO ablation": {"passed": True},
+            "no-RCEO ablation": {"passed": True},
+        }
+    )
+    return {
+        "oracle_matrix_cells": ("learned_learned", "true_learned", "learned_true", "true_true"),
+        "families": {
+            "tleo_local_evidence": {},
+            "spo_global_prototype": {},
+            "lrio_low_rank_interaction": {},
+            "cato_alignment_transport": {},
+            "rceo_reliability_corruption": {},
+            "mixed_relation_operator": {},
+        },
+        "gate_table": gate_table,
+        "go_no_go": {"controlled_multimodal_passed": True, "enter_public_multimodal": True},
     }
 
 
