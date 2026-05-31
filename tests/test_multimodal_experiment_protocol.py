@@ -1022,6 +1022,65 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         )
         self.assertIn("not valid top-conference main-table evidence", smoke_statistics_preview["evidence_limitations"])
 
+    def test_public_smoke_runner_can_train_same_feature_baseline_smoke_models(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for public training smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "public_training_artifacts"
+            _write_valid_refcoco_public_cache(cache_root)
+            controlled_report_path = tmp_path / "controlled_report.json"
+            controlled_report_path.write_text(
+                json.dumps(_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"), sort_keys=True) + "\n"
+            )
+            command = [
+                sys.executable,
+                str(ROOT / "scripts" / "multimodal" / "run_public_smoke.py"),
+                str(ROOT / "configs" / "multimodal_refcoco_public_smoke.json"),
+                "--cache-root",
+                str(cache_root),
+                "--controlled-report",
+                str(controlled_report_path),
+                "--train-smoke-steps",
+                "1",
+                "--train-baseline-smoke-steps",
+                "1",
+                "--train-split",
+                "train",
+                "--eval-smoke-split",
+                "val",
+                "--artifact-root",
+                str(artifact_root),
+            ]
+            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            smoke_baseline_metrics_path = Path(
+                payload["training"]["artifacts"]["smoke_baseline_raw_metrics"]["path"]
+            )
+            smoke_baseline_rows = [
+                json.loads(line) for line in smoke_baseline_metrics_path.read_text().splitlines() if line.strip()
+            ]
+
+        training = payload["training"]
+        self.assertEqual(training["baseline_smoke_training_steps"], 1)
+        self.assertEqual(training["baseline_optimizer_steps"], len(payload["baselines"]))
+        self.assertEqual(training["baseline_training_status"], "trained_smoke")
+        self.assertEqual(len(smoke_baseline_rows), len(payload["baselines"]))
+        for row in smoke_baseline_rows:
+            self.assertEqual(row["baseline_protocol"], "trainable_same_feature_linear_probe_smoke")
+            self.assertEqual(row["training_status"], "trained_smoke")
+            self.assertTrue(row["same_feature_source"])
+            self.assertGreater(row["parameter_count"], 0)
+            self.assertEqual(row["training_steps"], 1)
+            self.assertEqual(row["baseline_optimizer_steps"], 1)
+            self.assertGreater(row["baseline_parameter_l2_delta"], 0.0)
+            self.assertGreater(row["baseline_grad_l2_norm"], 0.0)
+            self.assertIn("not a trained strong baseline", row["evidence_limitations"])
+
     def test_public_smoke_runner_rejects_unverified_controlled_artifact_descriptors(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
