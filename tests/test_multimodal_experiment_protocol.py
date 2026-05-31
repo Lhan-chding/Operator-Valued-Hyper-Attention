@@ -716,6 +716,59 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual([row["seed"] for row in metrics_rows], [201, 202, 203])
         self.assertEqual([row["seed"] for row in diagnostics_rows], [201, 202, 203])
 
+    def test_public_smoke_runner_evaluates_heldout_split_after_training(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for public training smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "public_training_artifacts"
+            _write_valid_refcoco_public_cache(cache_root)
+            controlled_report_path = tmp_path / "controlled_report.json"
+            controlled_report_path.write_text(
+                json.dumps(_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"), sort_keys=True) + "\n"
+            )
+            command = [
+                sys.executable,
+                str(ROOT / "scripts" / "multimodal" / "run_public_smoke.py"),
+                str(ROOT / "configs" / "multimodal_refcoco_public_smoke.json"),
+                "--cache-root",
+                str(cache_root),
+                "--controlled-report",
+                str(controlled_report_path),
+                "--train-smoke-steps",
+                "1",
+                "--train-split",
+                "train",
+                "--eval-smoke-split",
+                "val",
+                "--artifact-root",
+                str(artifact_root),
+            ]
+            result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            eval_metrics_path = Path(payload["training"]["artifacts"]["eval_metrics"]["path"])
+            eval_diagnostics_path = Path(payload["training"]["artifacts"]["eval_diagnostics"]["path"])
+            eval_rows = [json.loads(line) for line in eval_metrics_path.read_text().splitlines() if line.strip()]
+            eval_diagnostics = [json.loads(line) for line in eval_diagnostics_path.read_text().splitlines() if line.strip()]
+
+        training = payload["training"]
+        self.assertEqual(training["eval_smoke_split"], "val")
+        self.assertEqual(training["eval_smoke_rows"], 1)
+        self.assertEqual(len(eval_rows), 1)
+        self.assertEqual(eval_rows[0]["stage"], "T5_eval")
+        self.assertEqual(eval_rows[0]["split"], "val")
+        self.assertEqual(eval_rows[0]["seed"], 201)
+        self.assertGreaterEqual(eval_rows[0]["total_loss"], 0.0)
+        self.assertEqual(len(eval_diagnostics), 1)
+        self.assertEqual(eval_diagnostics[0]["artifact_type"], "public_eval_diagnostics")
+        self.assertEqual(eval_diagnostics[0]["stage"], "T5_eval")
+        self.assertEqual(eval_diagnostics[0]["split"], "val")
+        self.assertTrue(eval_diagnostics[0]["stackability_passed"])
+
     def test_public_smoke_runner_rejects_unverified_controlled_artifact_descriptors(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
