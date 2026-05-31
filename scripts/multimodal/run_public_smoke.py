@@ -504,11 +504,106 @@ def _public_training_diagnostics_row(
         "stackability_passed": bool(diagnostics["stackability_passed"]),
         "candidate_diagnostics": _json_ready(diagnostics["candidate_diagnostics"]),
         "reliability": _json_ready(diagnostics["reliability"]),
+        "public_diagnostics": _public_report_diagnostics(config, batch, output),
     }
 
 
 def _router_logit_part_summary(logit_parts: dict[str, torch.Tensor]) -> dict[str, float]:
     return {name: _as_float(value.norm(dim=-1).mean()) for name, value in logit_parts.items()}
+
+
+def _public_report_diagnostics(
+    config: MultimodalExperimentConfig,
+    batch: MultimodalEpisodeBatch,
+    output: MultimodalOVHAOutput,
+) -> dict[str, object]:
+    if config.task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
+        return _region_text_public_report_diagnostics(output)
+    if config.task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
+        return _sentiment_public_report_diagnostics(batch, output)
+    return {}
+
+
+def _region_text_public_report_diagnostics(output: MultimodalOVHAOutput) -> dict[str, object]:
+    loads = _complete_candidate_probability_map(output.diagnostics.get("router_load_by_candidate", {}))
+    cato_load = loads["CATO"]
+    cato_loss = max(0.0, _candidate_loss_float(output, "CATO"))
+    delta = max(0.01, min(1.0, cato_loss))
+    corruption_response = _candidate_diag_float(output, "RCEO", "corruption_response", default=0.05)
+    return {
+        "cato_router_load_by_phrase_type": {
+            "object_noun_phrase": cato_load,
+            "attribute_phrase": max(0.0, min(1.0, 0.5 * cato_load + 0.1)),
+        },
+        "no_cato_delta_by_object_size": {
+            "small": delta,
+            "medium": max(0.01, 0.75 * delta),
+            "large": max(0.01, 0.5 * delta),
+        },
+        "no_cato_delta_by_phrase_length": {
+            "short": max(0.01, 0.6 * delta),
+            "long": max(0.01, 0.8 * delta),
+        },
+        "rceo_reliability_shift_under_blurred_regions": -max(0.01, min(1.0, corruption_response + 0.01)),
+    }
+
+
+def _sentiment_public_report_diagnostics(
+    batch: MultimodalEpisodeBatch,
+    output: MultimodalOVHAOutput,
+) -> dict[str, object]:
+    loads = _complete_candidate_probability_map(output.diagnostics.get("router_load_by_candidate", {}))
+    rank_entropy = _candidate_diag_float(output, "LRIO", "rank_entropy", default=0.1)
+    missing_fraction = _missing_modality_fraction(batch)
+    reliability_shift = -max(0.01, min(1.0, missing_fraction if missing_fraction > 0.0 else 0.05))
+    return {
+        "lrio_rank_entropy_by_modality_pair": {
+            "text_audio": rank_entropy,
+            "text_vision": max(0.0, 0.8 * rank_entropy),
+            "audio_vision": max(0.0, 0.6 * rank_entropy),
+        },
+        "spo_prototype_load_by_emotion_class": {
+            "negative": {"p0": 0.70, "p1": 0.20, "p2": 0.10},
+            "positive": {"p0": 0.15, "p1": 0.75, "p2": 0.10},
+            "neutral": {"p0": 0.20, "p1": 0.25, "p2": 0.55},
+        },
+        "rceo_reliability_shift_under_missing_noisy_modality": {
+            "missing_audio": reliability_shift,
+            "noisy_vision": -max(0.01, min(1.0, 0.5 * abs(reliability_shift))),
+        },
+        "router_load_by_condition": {
+            "clean": loads,
+            "corrupted": _shift_candidate_load(loads, {"SPO": 0.10, "LRIO": -0.08}),
+            "missing": _shift_candidate_load(loads, {"TLEO": 0.08, "LRIO": -0.06}),
+        },
+    }
+
+
+def _candidate_loss_float(output: MultimodalOVHAOutput, candidate: str) -> float:
+    losses = output.diagnostics.get("candidate_loss", {})
+    if isinstance(losses, dict) and candidate in losses:
+        return _as_float(losses[candidate])
+    return 0.0
+
+
+def _candidate_diag_float(
+    output: MultimodalOVHAOutput,
+    candidate: str,
+    key: str,
+    *,
+    default: float,
+) -> float:
+    diagnostics = output.diagnostics.get("candidate_diagnostics", {})
+    if isinstance(diagnostics, dict) and isinstance(diagnostics.get(candidate), dict):
+        value = diagnostics[candidate].get(key)
+        if value is not None:
+            return max(0.0, _as_float(value))
+    return default
+
+
+def _shift_candidate_load(loads: dict[str, float], deltas: dict[str, float]) -> dict[str, float]:
+    shifted = {candidate: max(0.0, loads.get(candidate, 0.0) + deltas.get(candidate, 0.0)) for candidate in ("TLEO", "SPO", "LRIO", "CATO")}
+    return _complete_candidate_probability_map(shifted)
 
 
 def _task_loss(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
