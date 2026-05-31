@@ -553,6 +553,7 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
                 {
                     "source_id": f"{split}-source",
                     "split": split,
+                    "original_split": split,
                     "raw_ref": f"raw://{split}-source",
                     "license_tag": "test-license",
                 },
