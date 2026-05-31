@@ -7,29 +7,133 @@ MULTIMODAL_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
 ORACLE_MATRIX_CELLS = ("learned_learned", "true_learned", "learned_true", "true_true")
 
 
-def evaluate_oracle_matrix(batch) -> dict[str, dict[str, object] | float]:
+def evaluate_oracle_matrix(
+    batch,
+    *,
+    learned_candidate_values: Any | None = None,
+    learned_router_weights: Any | None = None,
+) -> dict[str, dict[str, object] | float]:
     if batch.hidden is None:
         raise ValueError("controlled oracle matrix requires batch.hidden")
     required = ("true_candidate_values", "true_router_weights")
     missing = [name for name in required if name not in batch.hidden]
     if missing:
         raise ValueError(f"controlled oracle matrix missing hidden truth: {missing}")
-    candidate_values = batch.hidden["true_candidate_values"]
-    router_weights = batch.hidden["true_router_weights"]
-    true_true = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
-    mse = (true_true - batch.target_y).square().mean()
+    true_candidate_values = batch.hidden["true_candidate_values"]
+    true_router_weights = batch.hidden["true_router_weights"]
+    candidate_gap_values = learned_candidate_values if learned_candidate_values is not None else true_candidate_values
+    if learned_candidate_values is None:
+        learned_candidate_values = true_candidate_values
+    if learned_router_weights is None:
+        learned_router_weights = true_router_weights
+    _validate_oracle_tensor_shapes(
+        target_y=batch.target_y,
+        true_candidate_values=true_candidate_values,
+        true_router_weights=true_router_weights,
+        learned_candidate_values=learned_candidate_values,
+        learned_router_weights=learned_router_weights,
+    )
     report: dict[str, dict[str, object] | float] = {
-        "true_true": _oracle_cell(mse, "candidate expressivity upper bound"),
-        "true_learned": _oracle_cell(mse, "adapter/candidate isolation scaffold"),
-        "learned_true": _oracle_cell(mse, "router isolation scaffold"),
-        "learned_learned": _oracle_cell(mse, "full model placeholder for trained eval"),
+        "learned_learned": _oracle_cell(
+            _mse(_mix(learned_router_weights, learned_candidate_values), batch.target_y),
+            "learned router + learned adapter/candidates",
+        ),
+        "true_learned": _oracle_cell(
+            _mse(_mix(true_router_weights, learned_candidate_values), batch.target_y),
+            "true router + learned adapter/candidates",
+        ),
+        "learned_true": _oracle_cell(
+            _mse(_mix(learned_router_weights, true_candidate_values), batch.target_y),
+            "learned router + true adapter/candidates",
+        ),
+        "true_true": _oracle_cell(
+            _mse(_mix(true_router_weights, true_candidate_values), batch.target_y),
+            "true router + true adapter/candidates; candidate expressivity upper bound",
+        ),
     }
     for index, name in enumerate(MULTIMODAL_CANDIDATE_NAMES):
-        candidate_mse = (candidate_values[..., index, :] - batch.target_y).square().mean()
+        candidate_mse = _mse(candidate_gap_values[..., index, :], batch.target_y)
         report[f"{name}_oracle_gap"] = candidate_mse
     if getattr(batch, "task_type", "") == "rceo_reliability_corruption":
         report["rceo_prior_effect"] = _rceo_prior_effect(batch)
     return report
+
+
+def _mix(router_weights: Any, candidate_values: Any) -> Any:
+    return (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
+
+
+def _mse(prediction: Any, target: Any) -> Any:
+    return (prediction - target).square().mean()
+
+
+def _validate_oracle_tensor_shapes(
+    *,
+    target_y: Any,
+    true_candidate_values: Any,
+    true_router_weights: Any,
+    learned_candidate_values: Any,
+    learned_router_weights: Any,
+) -> None:
+    target_shape = _tensor_shape(target_y)
+    if len(target_shape) != 3:
+        raise ValueError(f"controlled oracle target_y must have shape [B,Q,Dy], got {target_shape}")
+    _validate_candidate_value_shape(
+        "true_candidate_values",
+        true_candidate_values,
+        expected_target_shape=target_shape,
+    )
+    _validate_candidate_value_shape(
+        "learned_candidate_values",
+        learned_candidate_values,
+        expected_target_shape=target_shape,
+    )
+    _validate_router_weight_shape(
+        "true_router_weights",
+        true_router_weights,
+        expected_prefix=target_shape[:2],
+    )
+    _validate_router_weight_shape(
+        "learned_router_weights",
+        learned_router_weights,
+        expected_prefix=target_shape[:2],
+    )
+
+
+def _validate_candidate_value_shape(
+    name: str,
+    value: Any,
+    *,
+    expected_target_shape: tuple[int, ...],
+) -> None:
+    shape = _tensor_shape(value)
+    expected = (
+        expected_target_shape[0],
+        expected_target_shape[1],
+        len(MULTIMODAL_CANDIDATE_NAMES),
+        expected_target_shape[2],
+    )
+    if shape != expected:
+        raise ValueError(f"controlled oracle {name} must have shape [B,Q,P,Dy]={expected}, got {shape}")
+
+
+def _validate_router_weight_shape(
+    name: str,
+    value: Any,
+    *,
+    expected_prefix: tuple[int, int],
+) -> None:
+    shape = _tensor_shape(value)
+    expected = (expected_prefix[0], expected_prefix[1], len(MULTIMODAL_CANDIDATE_NAMES))
+    if shape != expected:
+        raise ValueError(f"controlled oracle {name} must have shape [B,Q,P]={expected}, got {shape}")
+
+
+def _tensor_shape(value: Any) -> tuple[int, ...]:
+    shape = getattr(value, "shape", None)
+    if shape is None:
+        return ()
+    return tuple(int(dim) for dim in shape)
 
 
 def controlled_row_from_oracle_report(
