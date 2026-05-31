@@ -59,8 +59,109 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 ```bash
 cd ~/work/Operator-Valued-Hyper-Attention
+source .venv/bin/activate
+
+python - <<'PY'
+import torch
+print("torch", torch.__version__)
+print("cuda_available", torch.cuda.is_available())
+PY
+
+df -h .
 mkdir -p data/raw_multimodal/_downloads
 mkdir -p data/raw_multimodal/{refcoco,flickr30k_entities,visual_genome,cmu_mosei,cmu_mosi,meld}
+```
+
+如果 `/` 只剩几百 GB，建议把下载目录放到大盘并软链回 repo：
+
+```bash
+mkdir -p /data/ovha_datasets/raw_multimodal
+ln -sfn /data/ovha_datasets/raw_multimodal data/raw_multimodal
+```
+
+## 2.1 下载后必须整理成的 raw manifest
+
+本仓库的 adapter 当前不直接读取 COCO 图片、MELD 视频或 CMU SDK 原始 computational sequences；它们先要被固定特征提取流程整理成下面的 raw manifest。这个结构是进入 `scripts/multimodal/build_cache.py` 的输入。
+
+第一优先级建议先做 `cmu_mosei` 和 `refcoco`：
+
+```text
+data/raw_multimodal/cmu_mosei/
+  features/text_features.npy
+  features/audio_features.npy
+  features/visual_features.npy
+  labels/sentiment.npy
+  labels/emotion.npy
+  metadata/utterances.json
+  metadata/dialogues.json
+  metadata/feature_versions.json
+  metadata/missing_modality_mask.npy
+  metadata/corruption_transforms.json
+  splits.json
+
+data/raw_multimodal/refcoco/
+  annotations/instances.json
+  annotations/refs.json
+  features/text_features.npy
+  features/region_features.npy
+  splits.json
+```
+
+其他数据集对应文件：
+
+```text
+data/raw_multimodal/cmu_mosi/
+  features/text_features.npy
+  features/audio_features.npy
+  features/visual_features.npy
+  labels/sentiment.npy
+  labels/emotion.npy
+  metadata/utterances.json
+  metadata/dialogues.json
+  metadata/feature_versions.json
+  metadata/missing_modality_mask.npy
+  metadata/corruption_transforms.json
+  splits.json
+
+data/raw_multimodal/meld/
+  features/text_features.npy
+  features/audio_features.npy
+  features/visual_features.npy
+  labels/emotion.npy
+  metadata/dialogues.json
+  metadata/feature_versions.json
+  metadata/missing_modality_mask.npy
+  metadata/corruption_transforms.json
+  splits.json
+
+data/raw_multimodal/flickr30k_entities/
+  annotations/phrase_regions.json
+  annotations/captions.json
+  features/text_features.npy
+  features/region_features.npy
+  splits.json
+
+data/raw_multimodal/visual_genome/
+  annotations/region_descriptions.json
+  annotations/objects.json
+  annotations/relationships.json
+  features/text_features.npy
+  features/region_features.npy
+  splits.json
+```
+
+可以先用 `build_cache.py` 让 adapter 直接列出缺失项：
+
+```bash
+python scripts/multimodal/build_cache.py cmu_mosei data/raw_multimodal/cmu_mosei data/multimodal_cache --version v0.1
+python scripts/multimodal/build_cache.py refcoco data/raw_multimodal/refcoco data/multimodal_cache --version v0.1
+```
+
+当缺失项全部补齐后，同一命令会写入正式 cache，再执行：
+
+```bash
+python scripts/multimodal/validate_cache.py data/multimodal_cache cmu_mosei v0.1 --splits train val test
+python scripts/multimodal/validate_cache.py data/multimodal_cache refcoco v0.1 --splits train val test
 ```
 
 ## 3. Region-text grounding 数据
