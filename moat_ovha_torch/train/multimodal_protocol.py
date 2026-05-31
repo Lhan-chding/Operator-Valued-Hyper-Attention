@@ -138,6 +138,11 @@ def _validate_adapter_params(params_by_candidate: dict[str, list[str]], errors: 
         if not params:
             errors.append(f"adapter params missing for {candidate}")
             continue
+        for param in sorted({param for param in params if params.count(param) > 1}):
+            errors.append(f"adapter params for {candidate} contains duplicate v1 param: {param}")
+        for param in allowed:
+            if param not in params:
+                errors.append(f"adapter params for {candidate} missing required v1 param: {param}")
         for param in params:
             if param in FORBIDDEN_V1_ADAPTER_PARAMS:
                 errors.append(f"v1 adapter param is forbidden: {candidate}.{param}")
