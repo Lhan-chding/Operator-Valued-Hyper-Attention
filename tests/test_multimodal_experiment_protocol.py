@@ -753,15 +753,22 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             eval_metrics_path = Path(payload["training"]["artifacts"]["eval_metrics"]["path"])
             eval_diagnostics_path = Path(payload["training"]["artifacts"]["eval_diagnostics"]["path"])
             smoke_raw_metrics_path = Path(payload["training"]["artifacts"]["smoke_raw_metrics"]["path"])
+            smoke_baseline_metrics_path = Path(
+                payload["training"]["artifacts"]["smoke_baseline_raw_metrics"]["path"]
+            )
             eval_rows = [json.loads(line) for line in eval_metrics_path.read_text().splitlines() if line.strip()]
             eval_diagnostics = [json.loads(line) for line in eval_diagnostics_path.read_text().splitlines() if line.strip()]
             smoke_raw_rows = [
                 json.loads(line) for line in smoke_raw_metrics_path.read_text().splitlines() if line.strip()
             ]
+            smoke_baseline_rows = [
+                json.loads(line) for line in smoke_baseline_metrics_path.read_text().splitlines() if line.strip()
+            ]
 
         training = payload["training"]
         self.assertEqual(training["eval_smoke_split"], "val")
         self.assertEqual(training["eval_smoke_rows"], 1)
+        self.assertEqual(training["eval_smoke_baseline_rows"], len(payload["baselines"]))
         self.assertEqual(len(eval_rows), 1)
         self.assertEqual(eval_rows[0]["stage"], "T5_eval")
         self.assertEqual(eval_rows[0]["split"], "val")
@@ -805,6 +812,31 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(smoke_raw["hardware"]["device"], "cpu")
         self.assertGreaterEqual(smoke_raw["hardware"]["wall_clock_hours"], 0.0)
         self.assertIn("production main tables should use 5 seeds", smoke_raw["seed_count_rationale"])
+        self.assertEqual(len(smoke_baseline_rows), len(payload["baselines"]))
+        baseline_models = {row["model"] for row in smoke_baseline_rows}
+        self.assertEqual(baseline_models, set(payload["baselines"]))
+        self.assertIn("cross_attention_transformer", baseline_models)
+        self.assertIn("ovha_no_cato", baseline_models)
+        for row in smoke_baseline_rows:
+            self.assertEqual(row["artifact_type"], "public_smoke_baseline_raw_metric")
+            self.assertEqual(row["evidence_scope"], "same_feature_baseline_smoke_only_not_topconf_main_table")
+            self.assertTrue(row["not_topconf_main_table"])
+            self.assertTrue(row["same_feature_source"])
+            self.assertEqual(row["baseline_protocol"], "deterministic_same_feature_probe_smoke")
+            self.assertEqual(row["training_status"], "not_trained")
+            self.assertEqual(row["task"], "phrase_region_grounding")
+            self.assertEqual(row["dataset"], "refcoco")
+            self.assertEqual(row["split"], "val")
+            self.assertEqual(row["seed"], 201)
+            self.assertEqual(row["metric_name"], "heldout_task_loss_smoke")
+            self.assertFalse(row["higher_is_better"])
+            self.assertGreaterEqual(row["score"], 0.0)
+            self.assertEqual(row["raw_metric_path"], str(smoke_baseline_metrics_path))
+            self.assertEqual(
+                row["frozen_feature_extractor_version"],
+                {"region": "clip-region-test", "text": "clip-text-test"},
+            )
+            self.assertIn("not a trained strong baseline", row["evidence_limitations"])
 
     def test_public_smoke_runner_rejects_unverified_controlled_artifact_descriptors(self):
         with tempfile.TemporaryDirectory() as tmp:
