@@ -300,8 +300,13 @@ def _validate_data_card_modalities(data_card: dict[str, Any], errors: list[str])
 
 
 def _contains_forbidden_model_input_modality(modality: str) -> bool:
-    normalized = modality.strip().lower().replace("-", "_").replace(" ", "_")
+    normalized = _normalized_model_input_name(modality)
     return any(forbidden in normalized for forbidden in FORBIDDEN_MODEL_INPUT_MODALITIES)
+
+
+def _normalized_model_input_name(value: str) -> str:
+    lowered = value.strip().lower()
+    return "".join(character if character.isalnum() else "_" for character in lowered)
 
 
 def _validate_leakage_controls(controls: Any, errors: list[str]) -> None:
