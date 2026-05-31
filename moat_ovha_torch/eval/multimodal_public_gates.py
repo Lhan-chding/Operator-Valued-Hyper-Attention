@@ -387,10 +387,16 @@ def _statistical_evidence_reasons(
             expected_delta = _expected_main_table_delta(main_models, full_model, baseline_model)
             if expected_delta is not None and not math.isclose(mean_delta, expected_delta, rel_tol=1e-9, abs_tol=1e-9):
                 reasons.append("paired comparison mean_delta disagrees with main_table mean delta")
+    if "paired_permutation_p" in paired:
+        permutation_p = _finite_float(paired.get("paired_permutation_p"))
+        if permutation_p is None or permutation_p < 0.0 or permutation_p > 1.0:
+            reasons.append("paired comparison paired_permutation_p must be a finite probability")
     if "paired_bootstrap_ci95" in paired:
         bootstrap_ci = _finite_interval(paired.get("paired_bootstrap_ci95"))
         if bootstrap_ci is None:
             reasons.append("paired comparison paired_bootstrap_ci95 must be a finite length-2 interval")
+        elif bootstrap_ci[0] > bootstrap_ci[1]:
+            reasons.append("paired comparison paired_bootstrap_ci95 lower bound must not exceed upper bound")
         elif bootstrap_ci[0] <= 0.0:
             reasons.append("paired comparison bootstrap CI must be strictly positive for claimed improvement")
     return reasons
