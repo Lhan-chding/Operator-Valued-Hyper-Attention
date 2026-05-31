@@ -612,6 +612,46 @@ class MultimodalPublicGateTests(unittest.TestCase):
             "\n".join(report["reasons"]),
         )
 
+    def test_region_text_gate_requires_text_and_region_feature_versions(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["reporting_metadata"]["frozen_feature_versions"] = {"text": "frozen-text-v1"}
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "reporting metadata frozen_feature_versions missing modality: region",
+            "\n".join(report["reasons"]),
+        )
+
+    def test_sentiment_gate_requires_text_audio_vision_feature_versions(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        summary = _summary("sentiment_emotion", "test", full=0.76, baseline=0.74)
+        summary["reporting_metadata"]["frozen_feature_versions"] = {"text": "frozen-text-v1"}
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_sentiment_diagnostics(),
+            ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
+            robustness_summary=_passing_sentiment_robustness(),
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("reporting metadata frozen_feature_versions missing modality: audio", joined)
+        self.assertIn("reporting metadata frozen_feature_versions missing modality: vision", joined)
+
     def test_region_text_gate_requires_complete_same_feature_baseline_defense_table(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
@@ -784,7 +824,7 @@ def _summary(
         summary["reporting_metadata"] = {
             "parameter_count": {model: 120000 + index for index, model in enumerate(models)},
             "training_steps": {model: 1000 for model in models},
-            "frozen_feature_versions": {"text": "frozen-text-v1", "region": "frozen-region-v1"},
+            "frozen_feature_versions": _feature_versions_for_task(task),
             "hardware": {"accelerator": "unit-test-cpu"},
             "wall_clock_summary": {"wall_clock_hours": 0.17},
             "per_seed_table": [
@@ -794,6 +834,16 @@ def _summary(
             ],
         }
     return summary
+
+
+def _feature_versions_for_task(task: str) -> dict[str, str]:
+    if task == "sentiment_emotion":
+        return {
+            "text": "frozen-text-v1",
+            "audio": "frozen-audio-v1",
+            "vision": "frozen-vision-v1",
+        }
+    return {"text": "frozen-text-v1", "region": "frozen-region-v1"}
 
 
 def _model_summary_row(
@@ -841,6 +891,32 @@ def _passing_region_text_diagnostics() -> list[dict[str, object]]:
             rceo_corruption_response=0.35,
         ),
     ]
+
+
+def _passing_sentiment_diagnostics() -> list[dict[str, object]]:
+    return [
+        {
+            "setting": "clean",
+            "router_load_by_candidate": {"TLEO": 0.1, "SPO": 0.35, "LRIO": 0.40, "CATO": 0.15},
+            "candidate_diagnostics": {
+                "LRIO": {"rank_entropy": 0.6},
+                "SPO": {
+                    "prototype_entropy": 0.5,
+                    "top_prototype_by_class": {"negative": 1, "positive": 4},
+                },
+            },
+        }
+    ]
+
+
+def _passing_sentiment_robustness() -> dict[str, object]:
+    return {
+        "full_drop_less_than_baseline": True,
+        "rceo_reliability_monotonic": True,
+        "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+        "required_stress_coverage": {"passed": True, "reasons": []},
+        "required_ablation_degradation": {"passed": True, "reasons": []},
+    }
 
 
 def _required_baselines_for_task(task: str) -> tuple[str, ...]:
