@@ -303,13 +303,13 @@ def _validate_provenance_bank(provenance: ProvenanceBank, batch_size: int, split
             continue
         if len(values) != batch_size:
             errors.append(f"provenance.{key} length must match batch size {batch_size}, got {len(values)}")
-        if any(not isinstance(value, str) or not value for value in values):
+        if any(not _is_non_empty_string(value) for value in values):
             errors.append(f"provenance.{key} entries must be non-empty strings")
     if isinstance(split, str) and split:
         original_split = provenance.original_split
         if isinstance(original_split, list) and any(value != split for value in original_split if isinstance(value, str) and value):
             errors.append(f"provenance.original_split entries must match batch split {split}")
-    if not isinstance(provenance.preprocessing_version, str) or not provenance.preprocessing_version:
+    if not _is_non_empty_string(provenance.preprocessing_version):
         errors.append("provenance.preprocessing_version must be a non-empty string")
     _validate_string_version_map(
         "provenance.feature_extractor_version",
@@ -336,9 +336,13 @@ def _validate_string_version_map(
         errors.append(f"{name} must map strings to non-empty strings")
         return
     for key, version in value.items():
-        if not isinstance(key, str) or not key or not isinstance(version, str) or not version:
+        if not _is_non_empty_string(key) or not _is_non_empty_string(version):
             errors.append(f"{name} must map strings to non-empty strings")
             return
+
+
+def _is_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _validate_supervision_bank(
