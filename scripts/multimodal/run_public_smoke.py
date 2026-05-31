@@ -158,6 +158,7 @@ def _run_public_training_smoke(
     initial_parameters = _parameter_vector(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     loss_history: list[dict[str, object]] = []
+    diagnostic_history: list[dict[str, object]] = []
     max_grad_norm = 0.0
     model.train()
     for step in range(int(args.train_smoke_steps)):
@@ -166,6 +167,7 @@ def _run_public_training_smoke(
         components = _public_loss_components(output, batch, config)
         total_loss = torch.stack([value for value in components.values()]).sum()
         rceo_metrics = _rceo_training_metrics(output, batch)
+        diagnostic_history.append(_public_training_diagnostics_row(output, config, batch, step + 1))
         total_loss.backward()
         grad_norm = _grad_l2_norm(model)
         max_grad_norm = max(max_grad_norm, grad_norm)
@@ -183,7 +185,7 @@ def _run_public_training_smoke(
             }
         )
     parameter_l2_delta = float(torch.linalg.vector_norm(_parameter_vector(model) - initial_parameters).item())
-    artifacts = _write_training_artifacts(args.artifact_root, loss_history) if args.artifact_root else {}
+    artifacts = _write_training_artifacts(args.artifact_root, loss_history, diagnostic_history) if args.artifact_root else {}
     return {
         "ok": bool(parameter_l2_delta > 0.0 and max_grad_norm > 0.0 and len(loss_history) == args.train_smoke_steps),
         "config_name": config.name,
@@ -343,6 +345,43 @@ def _rceo_training_metrics(output: MultimodalOVHAOutput, batch: MultimodalEpisod
     }
 
 
+def _public_training_diagnostics_row(
+    output: MultimodalOVHAOutput,
+    config: MultimodalExperimentConfig,
+    batch: MultimodalEpisodeBatch,
+    step: int,
+) -> dict[str, object]:
+    diagnostics = output.diagnostics
+    return {
+        "artifact_type": "public_training_diagnostics",
+        "config_name": config.name,
+        "dataset": config.dataset_name,
+        "task": config.task_type,
+        "stage": "T5",
+        "split": batch.split,
+        "step": step,
+        "router_entropy": _json_ready(diagnostics["router_entropy"]),
+        "router_load_by_candidate": _json_ready(diagnostics["router_load_by_candidate"]),
+        "router_logit_parts": _router_logit_part_summary(output.router_logit_parts),
+        "candidate_loss": _json_ready(diagnostics["candidate_loss"]),
+        "adapter_params": _json_ready(diagnostics["adapter_params"]),
+        "memory_slot_norm": _json_ready(diagnostics["memory_slot_norm"]),
+        "stackability_passed": bool(diagnostics["stackability_passed"]),
+        "candidate_diagnostics": _json_ready(diagnostics["candidate_diagnostics"]),
+        "reliability": _json_ready(diagnostics["reliability"]),
+    }
+
+
+def _router_logit_part_summary(logit_parts: dict[str, torch.Tensor]) -> dict[str, dict[str, float]]:
+    return {
+        name: {
+            "mean": _as_float(value.mean()),
+            "norm": _as_float(value.norm(dim=-1).mean()),
+        }
+        for name, value in logit_parts.items()
+    }
+
+
 def _task_loss(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
     mask = batch.target_mask.to(dtype=prediction.dtype, device=prediction.device).unsqueeze(-1)
     return ((prediction - batch.target_y).square() * mask).sum() / mask.sum().clamp_min(1.0)
@@ -361,15 +400,25 @@ def _grad_l2_norm(model: MultimodalOVHA) -> float:
     return float(total**0.5)
 
 
-def _write_training_artifacts(artifact_root: Path, loss_history: list[dict[str, object]]) -> dict[str, object]:
+def _write_training_artifacts(
+    artifact_root: Path,
+    loss_history: list[dict[str, object]],
+    diagnostic_history: list[dict[str, object]],
+) -> dict[str, object]:
     artifact_root.mkdir(parents=True, exist_ok=True)
     metrics = artifact_root / "public_training_metrics.jsonl"
+    diagnostics = artifact_root / "public_training_diagnostics.jsonl"
     metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in loss_history) + "\n")
+    diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in diagnostic_history) + "\n")
     return {
         "metrics": {
             "path": str(metrics),
             "sha256": file_sha256(metrics),
-        }
+        },
+        "diagnostics": {
+            "path": str(diagnostics),
+            "sha256": file_sha256(diagnostics),
+        },
     }
 
 
@@ -383,6 +432,20 @@ def _as_float(value: Any) -> float:
     if hasattr(value, "item"):
         return float(value.item())
     return float(value)
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 1:
+            return _as_float(value)
+        return _as_float(value.to(dtype=torch.float32).mean())
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, (str, bool, int, float)) or value is None:
+        return value
+    return str(value)
 
 
 def _replace_cache_root(config: MultimodalExperimentConfig, cache_root: Path) -> MultimodalExperimentConfig:
