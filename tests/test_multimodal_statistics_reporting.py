@@ -410,6 +410,39 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
             sentiment_errors,
         )
 
+    def test_sentiment_public_summary_requires_corruption_router_load_probability_maps(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        rows = _lower_is_better_sentiment_rows()
+        for row in rows:
+            row["public_metrics"] = dict(row["public_metrics"])
+            if row["model"] == "ovha_full" and row["seed"] == 11:
+                row["public_metrics"]["router_load_by_corruption_type"] = {
+                    "audio_noise": {"LRIO": 0.20, "SPO": 0.35},
+                    "missing_audio": {"TLEO": 0.10, "SPO": 0.20, "LRIO": 0.30, "CATO": 0.10},
+                }
+
+        summary = summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        joined = "\n".join(validation.errors)
+        self.assertIn(
+            "sentiment_emotion/test/ovha_full/seed=11 public metric "
+            "router_load_by_corruption_type.audio_noise missing candidate load: TLEO",
+            joined,
+        )
+        self.assertIn(
+            "sentiment_emotion/test/ovha_full/seed=11 public metric "
+            "router_load_by_corruption_type.audio_noise missing candidate load: CATO",
+            joined,
+        )
+        self.assertIn(
+            "sentiment_emotion/test/ovha_full/seed=11 public metric "
+            "router_load_by_corruption_type.missing_audio candidate loads must sum to 1",
+            joined,
+        )
+
     def test_public_summary_cli_emits_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             metrics_path = Path(tmp) / "metrics.jsonl"
