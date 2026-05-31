@@ -773,6 +773,75 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             joined,
         )
 
+    def test_topconf_main_entry_rejects_public_gate_statistics_content_mismatch(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+            region_report = _passing_region_text_public_gate_report(tmp_path / "artifacts")
+            region_statistics = Path(region_report["evidence_artifacts"]["statistics_summary"]["path"])
+            region_statistics.write_text(
+                json.dumps(
+                    {
+                        "main_table": {"sentiment_emotion": {"test": {}}},
+                        "metadata": {"raw_metric_paths": []},
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            region_report["evidence_artifacts"]["statistics_summary"]["sha256"] = file_sha256(region_statistics)
+
+            sentiment_report = _passing_sentiment_public_gate_report(tmp_path / "artifacts")
+            sentiment_statistics = Path(sentiment_report["evidence_artifacts"]["statistics_summary"]["path"])
+            sentiment_statistics.write_text(
+                json.dumps(
+                    {
+                        "main_table": {"sentiment_emotion": {"test": {"ovha_full": {"mean": 0.7}}}},
+                        "metadata": {"raw_metric_paths": []},
+                        "per_seed_appendix": [],
+                        "reporting_metadata": {"per_seed_table": []},
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            sentiment_report["evidence_artifacts"]["statistics_summary"]["sha256"] = file_sha256(sentiment_statistics)
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=_complete_controlled_public_entry_report(),
+                region_gate_report=region_report,
+                sentiment_gate_report=sentiment_report,
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "region_text_public gate statistics_summary missing main_table entry for task/split: phrase_region_grounding/test",
+            joined,
+        )
+        self.assertIn(
+            "sentiment_emotion_public gate statistics_summary does not reference raw_metrics[0]",
+            joined,
+        )
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
