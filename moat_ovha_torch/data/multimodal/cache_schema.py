@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,20 @@ SENTIMENT_SAMPLE_RECORD_REQUIRED_KEYS = (
     "transcript_source",
     "missing_modality_mask_ref",
     "corruption_metadata_ref",
+)
+GROUNDING_SAMPLE_RECORD_REQUIRED_KEYS = (
+    "image_id",
+    "caption_id",
+    "phrase_span",
+    "region_box",
+    "candidate_region_source",
+    "box_coordinate_convention",
+)
+GROUNDING_SAMPLE_RECORD_STRING_KEYS = (
+    "image_id",
+    "caption_id",
+    "candidate_region_source",
+    "box_coordinate_convention",
 )
 TOKEN_FIELD_MANIFEST_REQUIRED_KEYS = ("x", "pos", "mask")
 TOKEN_FIELD_MANIFEST_ALLOWED_ROOTS = {
@@ -748,6 +763,7 @@ def _validate_sample_record_manifests(
                 )
             if payload.get("split") != split:
                 errors.append(f"{path.name} line {line_number} split must match {split}")
+            _validate_grounding_sample_record(path.name, line_number, payload, data_card, errors)
             _validate_sentiment_sample_record(layout, split, path.name, line_number, payload, data_card, errors)
             source_id = payload.get("source_id")
             if isinstance(source_id, str) and source_id:
@@ -781,6 +797,71 @@ def _read_jsonl_objects(path: Path, errors: list[str]) -> list[tuple[int, dict[s
             continue
         records.append((line_number, payload))
     return records
+
+
+def _validate_grounding_sample_record(
+    manifest_name: str,
+    line_number: int,
+    payload: dict[str, Any],
+    data_card: dict[str, Any],
+    errors: list[str],
+) -> None:
+    if not _data_card_requires_grounding_metadata(data_card):
+        return
+    missing = [key for key in GROUNDING_SAMPLE_RECORD_REQUIRED_KEYS if key not in payload]
+    if missing:
+        for key in missing:
+            errors.append(f"{manifest_name} line {line_number} missing grounding metadata keys: {key}")
+    invalid_strings = [
+        key
+        for key in GROUNDING_SAMPLE_RECORD_STRING_KEYS
+        if key in payload and (not isinstance(payload.get(key), str) or not payload.get(key))
+    ]
+    if invalid_strings:
+        errors.append(
+            f"{manifest_name} line {line_number} grounding metadata fields must be non-empty strings: "
+            f"{', '.join(invalid_strings)}"
+        )
+    if "phrase_span" in payload and not _valid_phrase_span(payload.get("phrase_span")):
+        errors.append(f"{manifest_name} line {line_number} phrase_span must contain integer start/end with end > start")
+    if "region_box" in payload and not _valid_region_box(payload.get("region_box")):
+        errors.append(f"{manifest_name} line {line_number} region_box must contain four finite coordinates")
+
+
+def _data_card_requires_grounding_metadata(data_card: dict[str, Any]) -> bool:
+    if not isinstance(data_card, dict):
+        return False
+    tasks = data_card.get("tasks", [])
+    return isinstance(tasks, list) and any(_requires_grounding_supervision(task) for task in tasks)
+
+
+def _valid_phrase_span(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    start = value.get("start")
+    end = value.get("end")
+    return (
+        isinstance(start, int)
+        and isinstance(end, int)
+        and not isinstance(start, bool)
+        and not isinstance(end, bool)
+        and 0 <= start < end
+    )
+
+
+def _valid_region_box(value: Any) -> bool:
+    if not isinstance(value, list) or len(value) != 4:
+        return False
+    for coordinate in value:
+        if isinstance(coordinate, bool):
+            return False
+        try:
+            numeric = float(coordinate)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(numeric):
+            return False
+    return True
 
 
 def _validate_sentiment_sample_record(

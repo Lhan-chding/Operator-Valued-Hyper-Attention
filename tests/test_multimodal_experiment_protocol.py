@@ -573,6 +573,12 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
                     "raw_ref": f"raw://{split}-source",
                     "license_tag": "test-license",
                     "preprocessing_version": "preprocess-v1",
+                    "image_id": f"image-{split}-source",
+                    "caption_id": f"caption-{split}-source",
+                    "phrase_span": {"start": 0, "end": 2},
+                    "region_box": [0.0, 0.0, 1.0, 1.0],
+                    "candidate_region_source": "annotated_boxes",
+                    "box_coordinate_convention": "xyxy_normalized",
                 },
                 sort_keys=True,
             )

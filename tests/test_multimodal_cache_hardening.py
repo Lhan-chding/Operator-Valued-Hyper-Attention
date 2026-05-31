@@ -2079,6 +2079,17 @@ def _write_sample_records(root: Path, split: str, source_ids: list[str], *, mode
             "license_tag": "test-license",
             "preprocessing_version": "preprocess-v1",
         }
+        if mode != "missing_grounding_metadata":
+            record.update(
+                {
+                    "image_id": f"image-{source_id}",
+                    "caption_id": f"caption-{source_id}",
+                    "phrase_span": {"start": 0, "end": 2},
+                    "region_box": [0.0, 0.0, 1.0, 1.0],
+                    "candidate_region_source": "annotated_boxes",
+                    "box_coordinate_convention": "xyxy_normalized",
+                }
+            )
         if mode == "missing_required_keys":
             record.pop("raw_ref")
             record.pop("license_tag")
