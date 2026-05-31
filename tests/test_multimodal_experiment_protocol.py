@@ -1042,6 +1042,57 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("controlled report diagnostics_report missing controlled family: tleo_local_evidence", joined)
         self.assertIn("controlled report diagnostics_report missing controlled family: cato_alignment_transport", joined)
 
+    def test_topconf_main_entry_rejects_controlled_diagnostics_that_disagree_with_rows(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+
+            controlled_report = _complete_controlled_public_entry_report(tmp_path / "controlled_artifacts")
+            diagnostics_report = Path(controlled_report["evidence_artifacts"]["diagnostics_report"]["path"])
+            diagnostics_rows = [
+                json.loads(line)
+                for line in diagnostics_report.read_text().splitlines()
+                if line.strip()
+            ]
+            for row in diagnostics_rows:
+                if row["family"] == "cato_alignment_transport":
+                    row["oracle_matrix"]["true_learned"]["loss"] = 0.99
+            diagnostics_report.write_text(
+                "\n".join(json.dumps(row, sort_keys=True) for row in diagnostics_rows) + "\n"
+            )
+            controlled_report["evidence_artifacts"]["diagnostics_report"]["sha256"] = file_sha256(diagnostics_report)
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=controlled_report,
+                region_gate_report=_passing_region_text_public_gate_report(tmp_path / "artifacts"),
+                sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "controlled report diagnostics_report cato_alignment_transport "
+            "oracle_matrix.true_learned.loss disagrees with controlled_rows",
+            "\n".join(report.errors),
+        )
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
