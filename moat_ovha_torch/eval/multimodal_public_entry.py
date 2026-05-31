@@ -13,8 +13,10 @@ from moat_ovha_torch.eval.multimodal_controlled_report import (
     CANDIDATE_ORACLE_GAP_KEYS,
     CONTROLLED_REQUIRED_FAMILIES,
     CONTROLLED_REQUIRED_GATES,
+    OPERATOR_DIAGNOSTIC_REQUIREMENTS,
     ORACLE_MATRIX_CELLS,
     REGION_TEXT_ENTRY_GATES,
+    ROUTER_DECOMPOSITION_ABLATION_KEYS,
     SENTIMENT_ENTRY_GATES,
     build_controlled_report,
 )
@@ -250,6 +252,13 @@ def _require_controlled_artifact_report_match(
     if not controlled_rows:
         errors.append("controlled report controlled_rows artifact must contain at least one JSON object")
         return
+    diagnostics_path = artifact_paths.get("diagnostics_report")
+    if diagnostics_path is not None:
+        diagnostics_rows = _read_jsonl_dicts("diagnostics_report", diagnostics_path, errors)
+        if not diagnostics_rows:
+            errors.append("controlled report diagnostics_report artifact must contain at least one JSON object")
+        else:
+            _validate_controlled_diagnostics_report_content(controlled_rows, diagnostics_rows, errors)
     recomputed_report = build_controlled_report(
         controlled_rows,
         evidence_artifacts=_evidence_artifacts_copy(controlled_report.get("evidence_artifacts")),
@@ -284,6 +293,182 @@ def _read_jsonl_dicts(label: str, path: Path, errors: list[str]) -> list[dict[st
             continue
         rows.append(payload)
     return rows
+
+
+def _validate_controlled_diagnostics_report_content(
+    controlled_rows: list[dict[str, Any]],
+    diagnostics_rows: list[dict[str, Any]],
+    errors: list[str],
+) -> None:
+    controlled_by_family = _controlled_rows_by_family(controlled_rows)
+    diagnostics_by_family: dict[str, dict[str, Any]] = {}
+    for row in diagnostics_rows:
+        family = str(row.get("family", "")).strip()
+        if not family:
+            errors.append("controlled report diagnostics_report row missing controlled family")
+            continue
+        if family not in CONTROLLED_REQUIRED_FAMILIES:
+            errors.append(f"controlled report diagnostics_report contains unknown controlled family: {family}")
+            continue
+        if family in diagnostics_by_family:
+            errors.append(f"controlled report diagnostics_report duplicate controlled family: {family}")
+            continue
+        diagnostics_by_family[family] = row
+
+    for family in CONTROLLED_REQUIRED_FAMILIES:
+        diagnostics_row = diagnostics_by_family.get(family)
+        if diagnostics_row is None:
+            errors.append(f"controlled report diagnostics_report missing controlled family: {family}")
+            continue
+        controlled_row = controlled_by_family.get(family)
+        if diagnostics_row.get("stackability_passed") is not True:
+            errors.append(f"controlled report diagnostics_report {family} stackability_passed must be explicit true")
+        if controlled_row is not None and diagnostics_row.get("stackability_passed") != controlled_row.get("stackability_passed"):
+            errors.append(
+                f"controlled report diagnostics_report {family} stackability_passed disagrees with controlled_rows"
+            )
+        for key in _required_controlled_diagnostic_keys(family):
+            _validate_controlled_diagnostic_value(family, diagnostics_row, controlled_row, key, errors)
+        _validate_controlled_diagnostic_oracle_matrix(family, diagnostics_row, controlled_row, errors)
+
+
+def _controlled_rows_by_family(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    by_family: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        family = str(row.get("family", "")).strip()
+        if family and family in CONTROLLED_REQUIRED_FAMILIES and family not in by_family:
+            by_family[family] = row
+    return by_family
+
+
+def _required_controlled_diagnostic_keys(family: str) -> tuple[str, ...]:
+    keys: list[str] = [
+        *CANDIDATE_ORACLE_GAP_KEYS,
+        *ROUTER_DECOMPOSITION_ABLATION_KEYS,
+        "no_operator_memory_delta",
+        "no_hyper_adapter_delta",
+    ]
+    if family == "spo_global_prototype":
+        keys.extend(OPERATOR_DIAGNOSTIC_REQUIREMENTS["SPO"])
+    if family == "lrio_low_rank_interaction":
+        keys.extend(OPERATOR_DIAGNOSTIC_REQUIREMENTS["LRIO"])
+        keys.append("no_lrio_delta")
+    if family == "cato_alignment_transport":
+        keys.extend(OPERATOR_DIAGNOSTIC_REQUIREMENTS["CATO"])
+    if family == "rceo_reliability_corruption":
+        keys.extend(
+            (
+                "rceo_prior_effect",
+                "rceo_reliability_monotonic",
+                "rceo_router_load_shift",
+                "rceo_reliability_curve",
+                "no_rceo_delta",
+            )
+        )
+    if family == "mixed_relation_operator":
+        keys.extend(("router_accuracy", "no_lrio_delta", "no_rceo_delta"))
+    return tuple(dict.fromkeys(keys))
+
+
+def _validate_controlled_diagnostic_value(
+    family: str,
+    diagnostics_row: Mapping[str, Any],
+    controlled_row: Mapping[str, Any] | None,
+    key: str,
+    errors: list[str],
+) -> None:
+    if key not in diagnostics_row:
+        errors.append(f"controlled report diagnostics_report {family} missing gate diagnostic: {key}")
+        return
+    value = diagnostics_row.get(key)
+    if key == "rceo_reliability_monotonic":
+        if value is not True:
+            errors.append(f"controlled report diagnostics_report {family} {key} must be explicit true")
+        if controlled_row is not None and value != controlled_row.get(key):
+            errors.append(f"controlled report diagnostics_report {family} {key} disagrees with controlled_rows")
+        return
+    if key == "rceo_reliability_curve":
+        if not _rceo_reliability_curve_valid(value):
+            errors.append(f"controlled report diagnostics_report {family} {key} must be a valid monotonic curve")
+        if controlled_row is not None and value != controlled_row.get(key):
+            errors.append(f"controlled report diagnostics_report {family} {key} disagrees with controlled_rows")
+        return
+
+    numeric = _finite_float(value)
+    if numeric is None:
+        errors.append(f"controlled report diagnostics_report {family} {key} must be finite")
+    elif key == "router_accuracy":
+        if numeric < 0.80 or numeric > 1.0:
+            errors.append(f"controlled report diagnostics_report {family} {key} must be in [0.80, 1.0]")
+    elif numeric <= 0.0 and key not in CANDIDATE_ORACLE_GAP_KEYS:
+        errors.append(f"controlled report diagnostics_report {family} {key} must be positive")
+    elif numeric < 0.0 and key in CANDIDATE_ORACLE_GAP_KEYS:
+        errors.append(f"controlled report diagnostics_report {family} {key} must be non-negative")
+
+    if controlled_row is not None and key in controlled_row:
+        controlled_numeric = _finite_float(controlled_row.get(key))
+        if controlled_numeric is not None and numeric is not None:
+            if not math.isclose(numeric, controlled_numeric, rel_tol=1e-9, abs_tol=1e-9):
+                errors.append(f"controlled report diagnostics_report {family} {key} disagrees with controlled_rows")
+
+
+def _validate_controlled_diagnostic_oracle_matrix(
+    family: str,
+    diagnostics_row: Mapping[str, Any],
+    controlled_row: Mapping[str, Any] | None,
+    errors: list[str],
+) -> None:
+    matrix = diagnostics_row.get("oracle_matrix")
+    if not isinstance(matrix, Mapping):
+        errors.append(f"controlled report diagnostics_report {family} oracle_matrix must be an object")
+        return
+    for cell in ORACLE_MATRIX_CELLS:
+        cell_payload = matrix.get(cell)
+        if not isinstance(cell_payload, Mapping):
+            errors.append(f"controlled report diagnostics_report {family} missing oracle_matrix cell: {cell}")
+            continue
+        diagnostics_loss = _finite_float(cell_payload.get("loss"))
+        if diagnostics_loss is None:
+            errors.append(f"controlled report diagnostics_report {family} oracle_matrix.{cell}.loss must be finite")
+            continue
+        controlled_loss = _oracle_cell_loss(controlled_row, cell)
+        if controlled_loss is not None and not math.isclose(diagnostics_loss, controlled_loss, rel_tol=1e-9, abs_tol=1e-9):
+            errors.append(
+                f"controlled report diagnostics_report {family} oracle_matrix.{cell}.loss disagrees with controlled_rows"
+            )
+
+
+def _oracle_cell_loss(row: Mapping[str, Any] | None, cell: str) -> float | None:
+    if row is None:
+        return None
+    matrix = row.get("oracle_matrix")
+    if not isinstance(matrix, Mapping):
+        return None
+    cell_payload = matrix.get(cell)
+    if not isinstance(cell_payload, Mapping):
+        return None
+    return _finite_float(cell_payload.get("loss"))
+
+
+def _rceo_reliability_curve_valid(value: Any) -> bool:
+    if not isinstance(value, (list, tuple)) or len(value) < 2:
+        return False
+    previous_strength: float | None = None
+    previous_reliability: float | None = None
+    for point in value:
+        if not isinstance(point, Mapping):
+            return False
+        strength = _finite_float(point.get("corruption_strength"))
+        reliability = _finite_float(point.get("mean_reliability"))
+        if strength is None or reliability is None or reliability < 0.0 or reliability > 1.0:
+            return False
+        if previous_strength is not None and strength <= previous_strength:
+            return False
+        if previous_reliability is not None and reliability > previous_reliability + 1e-12:
+            return False
+        previous_strength = strength
+        previous_reliability = reliability
+    return True
 
 
 def _evidence_artifacts_copy(evidence_artifacts: Any) -> dict[str, Any] | None:
