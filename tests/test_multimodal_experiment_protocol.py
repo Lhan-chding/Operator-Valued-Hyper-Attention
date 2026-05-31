@@ -404,6 +404,24 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("controlled report family tleo_local_evidence missing oracle_matrix", joined)
         self.assertIn("controlled report family tleo_local_evidence missing oracle gap evidence: TLEO_oracle_gap", joined)
 
+    def test_public_entry_rejects_contradictory_go_no_go_reasons(self):
+        from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+
+        report_payload = _complete_controlled_public_entry_report()
+        report_payload["go_no_go"] = {
+            "controlled_multimodal_passed": True,
+            "enter_public_multimodal": True,
+            "reasons": ["gate failed: Router gate"],
+        }
+
+        report = validate_public_entry_requirements("phrase_region_grounding", report_payload)
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "controlled report go_no_go.reasons must be empty when public entry flags are true",
+            "\n".join(report.errors),
+        )
+
     def test_public_smoke_runner_requires_controlled_report_after_cache_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_root = Path(tmp) / "cache"
