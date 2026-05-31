@@ -835,6 +835,10 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertEqual(len(controlled_rows), 6)
         self.assertEqual(len(diagnostics_rows), 6)
         self.assertNotEqual(controlled_rows_path, diagnostics_report_path)
+        self.assertNotEqual(
+            artifacts["controlled_rows"]["sha256"],
+            artifacts["diagnostics_report"]["sha256"],
+        )
         self.assertRegex(artifacts["controlled_rows"]["sha256"], r"^[a-f0-9]{64}$")
         self.assertRegex(artifacts["diagnostics_report"]["sha256"], r"^[a-f0-9]{64}$")
         self.assertTrue(payload["controlled_report"]["go_no_go"]["controlled_multimodal_passed"])
@@ -842,6 +846,8 @@ class MultimodalControlledReportingTests(unittest.TestCase):
             {row["family"] for row in controlled_rows},
             {row["family"] for row in diagnostics_rows},
         )
+        self.assertTrue(all(row["artifact_type"] == "controlled_diagnostics" for row in diagnostics_rows))
+        self.assertTrue(all("active_operator" not in row for row in diagnostics_rows))
         self.assertIn("oracle_matrix", diagnostics_rows[0])
         self.assertIn("stackability_passed", diagnostics_rows[0])
 
