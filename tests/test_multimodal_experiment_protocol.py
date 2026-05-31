@@ -622,6 +622,48 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("region_text_public required check did not pass: cato_top_alignment_accuracy_high", joined)
         self.assertIn("sentiment_emotion_public required check did not pass: no_rceo_drops", joined)
 
+    def test_topconf_main_entry_rejects_contradictory_public_gate_reasons(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_root = Path(tmp) / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+            region_report = {**_passing_region_text_public_gate_report(), "reasons": "hidden failure"}
+            sentiment_report = _passing_sentiment_public_gate_report()
+            sentiment_report["checks"]["robustness_passes"] = {
+                "passed": True,
+                "reason": "robustness summary failed",
+            }
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=_complete_controlled_public_entry_report(),
+                region_gate_report=region_report,
+                sentiment_gate_report=sentiment_report,
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("region_text_public gate reasons must be an empty list when passed is true", joined)
+        self.assertIn(
+            "sentiment_emotion_public gate check robustness_passes reason must be empty when passed is true",
+            joined,
+        )
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
