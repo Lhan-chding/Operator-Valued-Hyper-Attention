@@ -26,6 +26,14 @@ from moat_ovha_torch.eval.multimodal_oracle import controlled_row_from_oracle_re
 from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA, MultimodalOVHAOutput
 
 
+CONTROLLED_SPECIALIST_WARMUP_FAMILIES = (
+    "tleo_local_evidence",
+    "spo_global_prototype",
+    "lrio_low_rank_interaction",
+    "cato_alignment_transport",
+)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a real controlled multimodal OVHA training smoke.")
     parser.add_argument("--config", type=Path)
@@ -186,9 +194,15 @@ def _run_configured_stage_training(
                 }
             )
             continue
+        stage_families = _families_for_stage(stage)
         stage_rows: list[dict[str, object]] = []
-        for _ in range(steps_per_stage):
-            family = CONTROLLED_MULTIMODAL_FAMILIES[optimizer_steps % len(CONTROLLED_MULTIMODAL_FAMILIES)]
+        for stage_step in range(steps_per_stage):
+            family = _family_for_training_step(
+                stage,
+                stage_families,
+                stage_step=stage_step,
+                optimizer_steps=optimizer_steps,
+            )
             batch = _sample(adapter, family, args, device)
             optimizer.zero_grad(set_to_none=True)
             output = model(batch)
@@ -217,6 +231,7 @@ def _run_configured_stage_training(
                 "loss_names_configured": list(configured_losses),
                 "loss_names_observed": sorted({name for row in stage_rows for name in row["loss_names_observed"]}),
                 "optimizer_steps": len(stage_rows),
+                "family_schedule_scope": _family_schedule_scope(stage),
                 "mean_total_loss": float(sum(float(row["total_loss"]) for row in stage_rows) / max(len(stage_rows), 1)),
                 "families_seen": sorted({str(row["family"]) for row in stage_rows}),
             }
@@ -233,6 +248,30 @@ def _stage_total_loss(stage_components: dict[str, torch.Tensor], output: Multimo
     if not stage_components:
         return output.y_hat.sum() * 0.0
     return torch.stack([value for value in stage_components.values()]).sum()
+
+
+def _families_for_stage(stage: str) -> tuple[str, ...]:
+    if stage == "T1":
+        return CONTROLLED_SPECIALIST_WARMUP_FAMILIES
+    return CONTROLLED_MULTIMODAL_FAMILIES
+
+
+def _family_for_training_step(
+    stage: str,
+    families: tuple[str, ...],
+    *,
+    stage_step: int,
+    optimizer_steps: int,
+) -> str:
+    if stage == "T1":
+        return families[stage_step % len(families)]
+    return families[optimizer_steps % len(families)]
+
+
+def _family_schedule_scope(stage: str) -> str:
+    if stage == "T1":
+        return "single_candidate_specialist_warmup"
+    return "full_controlled_family_coverage"
 
 
 def _controlled_losses(output: MultimodalOVHAOutput, batch: Any) -> dict[str, torch.Tensor]:
