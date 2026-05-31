@@ -956,6 +956,27 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_empty_validated_splits_and_source_id_files(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            (layout.root / "splits.json").write_text(json.dumps({"train": [], "test": []}, sort_keys=True) + "\n")
+            for split in ("train", "test"):
+                (layout.root / "provenance" / f"source_ids_{split}.txt").write_text("")
+                (layout.root / "provenance" / f"sample_records_{split}.jsonl").write_text("")
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("splits.json train must contain at least one source_id", joined)
+        self.assertIn("splits.json test must contain at least one source_id", joined)
+        self.assertIn("provenance/source_ids_train.txt must contain at least one source_id", joined)
+        self.assertIn("provenance/source_ids_test.txt must contain at least one source_id", joined)
+
     def test_cache_validator_rejects_duplicate_source_ids_in_splits_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
