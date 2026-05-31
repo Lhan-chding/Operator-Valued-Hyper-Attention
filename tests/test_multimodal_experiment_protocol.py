@@ -1371,6 +1371,61 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
 
         self.assertTrue(report.ok, report.errors)
 
+    def test_topconf_main_entry_cli_accepts_artifact_reports_and_cache_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "artifacts"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+            controlled_report_path = tmp_path / "controlled_report.json"
+            region_gate_path = tmp_path / "region_gate_report.json"
+            sentiment_gate_path = tmp_path / "sentiment_gate_report.json"
+            controlled_report_path.write_text(
+                json.dumps(_complete_controlled_public_entry_report(artifact_root / "controlled"), sort_keys=True) + "\n"
+            )
+            region_gate_path.write_text(
+                json.dumps(_passing_region_text_public_gate_report(artifact_root / "region"), sort_keys=True) + "\n"
+            )
+            sentiment_gate_path.write_text(
+                json.dumps(_passing_sentiment_public_gate_report(artifact_root / "sentiment"), sort_keys=True) + "\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "validate_topconf_entry.py"),
+                    "--controlled-report",
+                    str(controlled_report_path),
+                    "--region-gate-report",
+                    str(region_gate_path),
+                    "--sentiment-gate-report",
+                    str(sentiment_gate_path),
+                    "--cache-target",
+                    "refcoco",
+                    str(cache_root),
+                    "refcoco",
+                    "v0.1",
+                    "val,test",
+                    "--cache-target",
+                    "cmu_mosei",
+                    str(cache_root),
+                    "cmu_mosei",
+                    "v0.1",
+                    "val,test",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "topconf_main_entry_validation")
+        self.assertEqual(payload["cache_targets"], ["cmu_mosei", "refcoco"])
+
     def test_topconf_main_entry_requires_region_and_sentiment_cache_coverage(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
         from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
