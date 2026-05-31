@@ -11,17 +11,27 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from moat_ovha_torch.data.multimodal.adapters.cmu_mosei import CMUMOSEIAdapter
-from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import ControlledSyntheticMultimodalAdapter
-from moat_ovha_torch.data.multimodal.adapters.refcoco import RefCOCOAdapter
+from moat_ovha_torch.data.multimodal.adapters import (
+    CMUMOSEIAdapter,
+    ControlledSyntheticMultimodalAdapter,
+    Flickr30kEntitiesAdapter,
+    MELDAdapter,
+    RefCOCOAdapter,
+    VisualGenomeAdapter,
+)
 from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, default_data_card
 
 
 ADAPTERS = {
     "controlled_multimodal": ControlledSyntheticMultimodalAdapter,
     "refcoco": RefCOCOAdapter,
+    "flickr30k_entities": Flickr30kEntitiesAdapter,
+    "visual_genome": VisualGenomeAdapter,
     "cmu_mosei": CMUMOSEIAdapter,
+    "meld": MELDAdapter,
 }
+REGION_TEXT_DATASETS = {"refcoco", "flickr30k_entities", "visual_genome"}
+SENTIMENT_DATASETS = {"cmu_mosei", "meld"}
 
 
 def main() -> int:
@@ -45,17 +55,17 @@ def main() -> int:
 
 
 def _modalities_for(name: str) -> list[str]:
-    if name == "cmu_mosei":
+    if name in SENTIMENT_DATASETS:
         return ["text", "audio", "vision"]
-    if name == "refcoco":
+    if name in REGION_TEXT_DATASETS:
         return ["text", "region"]
     return ["text", "region", "audio"]
 
 
 def _tasks_for(name: str) -> list[str]:
-    if name == "cmu_mosei":
+    if name in SENTIMENT_DATASETS:
         return ["sentiment_regression", "emotion_classification"]
-    if name == "refcoco":
+    if name in REGION_TEXT_DATASETS:
         return ["phrase_region_grounding"]
     return ["controlled_relation_operator"]
 
