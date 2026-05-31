@@ -481,6 +481,33 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
 
         self.assertTrue(complete_report.ok, complete_report.errors)
 
+    def test_diagnostics_schema_rejects_non_finite_and_non_probability_values(self):
+        from moat_ovha_torch.eval.multimodal_diagnostics import validate_diagnostic_row
+
+        row = _complete_diagnostic_row()
+        row["router_entropy"] = "nan"
+        row["router_load_by_candidate"] = {"TLEO": -0.1, "SPO": 0.4, "LRIO": 0.4, "CATO": 0.4}
+        row["router_logit_parts"]["reliability"] = "inf"
+        row["candidate_loss"]["LRIO"] = "nan"
+        row["adapter_params"]["CATO_alignment_temperature"] = "bad"
+        row["memory_slot_norm"]["SPO"] = -1.0
+        row["candidate_diagnostics"]["RCEO"]["modality_reliability"] = 1.4
+        row["stackability_passed"] = "true"
+
+        report = validate_diagnostic_row(row)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("router_entropy must be finite", joined)
+        self.assertIn("router_load_by_candidate.TLEO must be a finite probability", joined)
+        self.assertIn("router_load_by_candidate values must sum to 1", joined)
+        self.assertIn("router_logit_parts.reliability must be finite", joined)
+        self.assertIn("candidate_loss.LRIO must be finite non-negative", joined)
+        self.assertIn("adapter_params.CATO_alignment_temperature must be finite", joined)
+        self.assertIn("memory_slot_norm.SPO must be finite non-negative", joined)
+        self.assertIn("candidate_diagnostics.RCEO.modality_reliability must be a finite probability", joined)
+        self.assertIn("stackability_passed must be true", joined)
+
 def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
     from moat_ovha_torch.data.multimodal.cache_schema import (
         MultimodalCacheLayout,
@@ -566,6 +593,45 @@ def _valid_adapter_params() -> dict[str, list[str]]:
         "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
         "LRIO": ["rank_logits", "interaction_temperature", "scale", "bias"],
         "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"],
+    }
+
+
+def _complete_diagnostic_row() -> dict[str, object]:
+    return {
+        "router_entropy": 1.0,
+        "router_load_by_candidate": {"TLEO": 0.25, "SPO": 0.25, "LRIO": 0.25, "CATO": 0.25},
+        "router_logit_parts": {"memory": 0.1, "evidence": 0.2, "reliability": 0.3},
+        "candidate_loss": {"TLEO": 0.1, "SPO": 0.2, "LRIO": 0.3, "CATO": 0.4},
+        "adapter_params": {
+            "TLEO_lengthscale": 0.5,
+            "SPO_temperature": 1.0,
+            "LRIO_rank_entropy": 0.6,
+            "CATO_alignment_temperature": 0.7,
+        },
+        "memory_slot_norm": {"TLEO": 1.0, "SPO": 1.0, "LRIO": 1.0, "CATO": 1.0},
+        "stackability_passed": True,
+        "candidate_diagnostics": {
+            "TLEO": {"lengthscale": 0.5, "local_entropy": 0.2, "local_window_size": 5, "candidate_loss": 0.1},
+            "SPO": {
+                "prototype_entropy": 0.4,
+                "top_prototype": 2,
+                "prototype_temperature": 1.0,
+                "candidate_loss": 0.2,
+            },
+            "LRIO": {
+                "rank_entropy": 0.6,
+                "rank_top_k": [0, 1],
+                "pair_interaction_strength": 0.8,
+                "candidate_loss": 0.3,
+            },
+            "CATO": {
+                "alignment_entropy": 0.3,
+                "top_k_alignment": [0, 2],
+                "transport_marginal_error": 0.03,
+                "candidate_loss": 0.4,
+            },
+            "RCEO": {"modality_reliability": 0.9, "reliability_bias_norm": 0.1, "corruption_response": 0.2},
+        },
     }
 
 
