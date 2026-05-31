@@ -847,6 +847,58 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             joined,
         )
 
+    def test_topconf_main_entry_rejects_public_gate_statistics_without_per_seed_evidence(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+
+            region_report = _passing_region_text_public_gate_report(tmp_path / "artifacts")
+            region_statistics = Path(region_report["evidence_artifacts"]["statistics_summary"]["path"])
+            summary = json.loads(region_statistics.read_text())
+            summary["per_seed_appendix"] = [
+                row
+                for row in summary["per_seed_appendix"]
+                if not (
+                    row["task"] == "phrase_region_grounding"
+                    and row["split"] == "test"
+                    and row["model"] == "ovha_full"
+                    and row["seed"] == 3
+                )
+            ]
+            region_statistics.write_text(json.dumps(summary, sort_keys=True) + "\n")
+            region_report["evidence_artifacts"]["statistics_summary"]["sha256"] = file_sha256(region_statistics)
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"),
+                region_gate_report=region_report,
+                sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "region_text_public gate statistics_summary validation failed: "
+            "phrase_region_grounding/test/ovha_full seed_count disagrees with per_seed_appendix",
+            "\n".join(report.errors),
+        )
+
     def test_topconf_main_entry_rejects_public_gate_diagnostics_and_robustness_content_mismatch(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256
         from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
