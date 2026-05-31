@@ -510,6 +510,35 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
 
         self.assertTrue(report.ok, report.errors)
 
+    def test_topconf_main_entry_requires_region_and_sentiment_cache_coverage(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_root = Path(tmp) / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=_complete_controlled_public_entry_report(),
+                region_gate_report=_passing_region_text_public_gate_report(),
+                sentiment_gate_report=_passing_sentiment_public_gate_report(),
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "top-conference main experiments require at least one sentiment/emotion data cache",
+            "\n".join(report.errors),
+        )
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
