@@ -677,16 +677,34 @@ def _complete_controlled_public_entry_report() -> dict[str, object]:
     return {
         "oracle_matrix_cells": ("learned_learned", "true_learned", "learned_true", "true_true"),
         "families": {
-            "tleo_local_evidence": {},
-            "spo_global_prototype": {},
-            "lrio_low_rank_interaction": {},
-            "cato_alignment_transport": {},
-            "rceo_reliability_corruption": {},
-            "mixed_relation_operator": {},
+            "tleo_local_evidence": _complete_controlled_family_row(),
+            "spo_global_prototype": _complete_controlled_family_row(),
+            "lrio_low_rank_interaction": _complete_controlled_family_row(),
+            "cato_alignment_transport": _complete_controlled_family_row(),
+            "rceo_reliability_corruption": _complete_controlled_family_row(rceo=True),
+            "mixed_relation_operator": _complete_controlled_family_row(),
         },
         "gate_table": gate_table,
         "go_no_go": {"controlled_multimodal_passed": True, "enter_public_multimodal": True},
     }
+
+
+def _complete_controlled_family_row(*, rceo: bool = False) -> dict[str, object]:
+    row = {
+        "oracle_matrix": {
+            "learned_learned": {"loss": 0.1},
+            "true_learned": {"loss": 0.1},
+            "learned_true": {"loss": 0.1},
+            "true_true": {"loss": 0.0},
+        },
+        "TLEO_oracle_gap": 0.1,
+        "SPO_oracle_gap": 0.1,
+        "LRIO_oracle_gap": 0.1,
+        "CATO_oracle_gap": 0.1,
+    }
+    if rceo:
+        row["rceo_prior_effect"] = 0.1
+    return row
 
 
 def _complete_diagnostic_row() -> dict[str, object]:

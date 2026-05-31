@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 from moat_ovha_torch.eval.multimodal_controlled_report import (
+    CANDIDATE_ORACLE_GAP_KEYS,
     CONTROLLED_REQUIRED_FAMILIES,
     CONTROLLED_REQUIRED_GATES,
     ORACLE_MATRIX_CELLS,
@@ -108,8 +110,11 @@ def _require_complete_controlled_report(controlled_report: dict[str, Any], error
         families = {}
         errors.append("controlled report must include controlled families")
     for family in CONTROLLED_REQUIRED_FAMILIES:
-        if not isinstance(families.get(family), dict):
+        family_row = families.get(family)
+        if not isinstance(family_row, dict):
             errors.append(f"controlled report missing controlled family: {family}")
+        else:
+            _require_family_oracle_evidence(family, family_row, errors)
     for family in sorted(set(families) - set(CONTROLLED_REQUIRED_FAMILIES)):
         errors.append(f"controlled report contains unknown controlled family: {family}")
 
@@ -123,3 +128,36 @@ def _require_complete_controlled_report(controlled_report: dict[str, Any], error
             errors.append(f"controlled report missing required gate: {gate_name}")
         elif gate.get("passed") is not True:
             errors.append(f"controlled report required gate did not pass: {gate_name}")
+
+
+def _require_family_oracle_evidence(family: str, row: dict[str, Any], errors: list[str]) -> None:
+    matrix = row.get("oracle_matrix")
+    if not isinstance(matrix, dict):
+        errors.append(f"controlled report family {family} missing oracle_matrix")
+    else:
+        for cell in ORACLE_MATRIX_CELLS:
+            cell_payload = matrix.get(cell)
+            if not isinstance(cell_payload, dict):
+                errors.append(f"controlled report family {family} missing oracle_matrix cell: {cell}")
+                continue
+            loss = _finite_float(cell_payload.get("loss"))
+            if loss is None or loss < 0.0:
+                errors.append(f"controlled report family {family} oracle_matrix.{cell}.loss must be finite non-negative")
+    for key in CANDIDATE_ORACLE_GAP_KEYS:
+        value = _finite_float(row.get(key))
+        if value is None or value < 0.0:
+            errors.append(f"controlled report family {family} missing oracle gap evidence: {key}")
+    if family == "rceo_reliability_corruption":
+        prior_effect = _finite_float(row.get("rceo_prior_effect"))
+        if prior_effect is None or prior_effect <= 0.0:
+            errors.append("controlled report family rceo_reliability_corruption missing positive rceo_prior_effect")
+
+
+def _finite_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
