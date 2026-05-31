@@ -5,6 +5,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Any
 
 
@@ -174,6 +175,7 @@ def _run_public_training_smoke(
     max_grad_norm = 0.0
 
     for seed in seed_values:
+        seed_started_at = time.perf_counter()
         torch.manual_seed(seed)
         batch = _load_public_batch(layout, config, args.train_split, device)
         field_dims = {name: int(field.x.shape[-1]) for name, field in batch.fields.items()}
@@ -184,6 +186,7 @@ def _run_public_training_smoke(
             d_model=args.d_model,
             memory_tokens=args.memory_tokens,
         ).to(device)
+        parameter_count = _parameter_count(model)
         initial_parameters = _parameter_vector(model)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
         model.train()
@@ -219,12 +222,19 @@ def _run_public_training_smoke(
                 eval_output = model(eval_batch)
                 eval_components = _public_loss_components(eval_output, eval_batch, config)
                 eval_total_loss = torch.stack([value for value in eval_components.values()]).sum()
+            seed_elapsed_seconds = time.perf_counter() - seed_started_at
             eval_history.append(
                 {
                     "seed": seed,
                     "dataset": config.dataset_name,
                     "task": config.task_type,
                     "model": "ovha_full",
+                    "parameter_count": parameter_count,
+                    "training_steps": int(args.train_smoke_steps),
+                    "frozen_feature_extractor_version": dict(eval_batch.provenance.feature_extractor_version),
+                    "hardware": _hardware_metadata(device, seed_elapsed_seconds),
+                    "label_provenance": _label_provenance_for_batch(eval_batch),
+                    "seed_count_rationale": _seed_count_rationale(args.train_all_config_seeds),
                     "stage": "T5_eval",
                     "split": args.eval_smoke_split,
                     "loss_names_observed": sorted(eval_components),
@@ -468,6 +478,10 @@ def _parameter_vector(model: MultimodalOVHA) -> torch.Tensor:
     return torch.cat(parts) if parts else torch.zeros(0)
 
 
+def _parameter_count(model: MultimodalOVHA) -> int:
+    return int(sum(param.numel() for param in model.parameters() if param.requires_grad))
+
+
 def _grad_l2_norm(model: MultimodalOVHA) -> float:
     total = 0.0
     for param in model.parameters():
@@ -530,6 +544,12 @@ def _public_smoke_raw_metric_rows(
             "metric_name": "heldout_task_loss_smoke",
             "score": float(row["task_loss"]),
             "higher_is_better": False,
+            "parameter_count": int(row["parameter_count"]),
+            "training_steps": int(row["training_steps"]),
+            "frozen_feature_extractor_version": dict(row["frozen_feature_extractor_version"]),
+            "hardware": dict(row["hardware"]),
+            "label_provenance": dict(row["label_provenance"]),
+            "seed_count_rationale": str(row["seed_count_rationale"]),
             "raw_metric_path": str(raw_metric_path),
             "source_total_loss": float(row["total_loss"]),
             "loss_names_observed": list(row["loss_names_observed"]),
@@ -541,6 +561,35 @@ def _public_smoke_raw_metric_rows(
         }
         for row in eval_history
     ]
+
+
+def _hardware_metadata(device: torch.device, elapsed_seconds: float) -> dict[str, object]:
+    return {
+        "accelerator": device.type,
+        "device": str(device),
+        "wall_clock_hours": float(elapsed_seconds) / 3600.0,
+        "measurement_scope": "public_smoke_train_eval_seed",
+    }
+
+
+def _label_provenance_for_batch(batch: MultimodalEpisodeBatch) -> dict[str, str]:
+    return {
+        "supervision_type": "ground_truth",
+        "source": batch.source_dataset,
+        "must_report_as": "ground_truth",
+    }
+
+
+def _seed_count_rationale(train_all_config_seeds: bool) -> str:
+    if train_all_config_seeds:
+        return (
+            "public smoke executed all configured development seeds; "
+            "production main tables should use 5 seeds or at least 3 with explicit rationale"
+        )
+    return (
+        "public smoke defaults to one seed for execution validation only; "
+        "production main tables should use 5 seeds or at least 3 with explicit rationale"
+    )
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
