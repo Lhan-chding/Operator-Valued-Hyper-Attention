@@ -260,6 +260,61 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("paired comparison requires at least 3 common seeds", joined)
         self.assertIn("paired comparison missing paired_bootstrap_ci95", joined)
 
+    def test_public_gate_rejects_non_boolean_metric_direction_summary(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["main_table"]["phrase_region_grounding"]["test"]["ovha_full"]["higher_is_better"] = "true"
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn("ovha_full higher_is_better must be boolean", "\n".join(report["reasons"]))
+
+    def test_public_gate_rejects_mixed_metric_direction_summary(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["main_table"]["phrase_region_grounding"]["test"]["cross_attention_transformer"]["higher_is_better"] = False
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn("statistics summary higher_is_better must be consistent across models", "\n".join(report["reasons"]))
+
+    def test_public_gate_requires_paired_metric_direction_and_mean_delta(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        paired = summary["paired_tests"]["phrase_region_grounding"]["test"]
+        paired.pop("metric_direction")
+        paired.pop("mean_delta")
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("paired comparison missing metric_direction", joined)
+        self.assertIn("paired comparison missing mean_delta", joined)
+
     def test_public_gate_requires_topconf_reporting_metadata_not_only_mean(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
@@ -436,7 +491,13 @@ def _summary(
     include_reporting_metadata: bool = True,
     include_required_baselines: bool = True,
 ) -> dict[str, object]:
-    paired = {"common_seed_count": common_seed_count, "paired_permutation_p": 0.25}
+    mean_delta = (full - baseline) if higher_is_better else (baseline - full)
+    paired = {
+        "common_seed_count": common_seed_count,
+        "mean_delta": mean_delta,
+        "metric_direction": "higher_is_better" if higher_is_better else "lower_is_better",
+        "paired_permutation_p": 0.25,
+    }
     if include_bootstrap:
         paired["paired_bootstrap_ci95"] = [0.01, 0.12]
     models = ["ovha_full", "cross_attention_transformer"]
@@ -497,6 +558,35 @@ def _model_summary_row(
             }
         )
     return row
+
+
+def _passing_region_text_diagnostics() -> list[dict[str, object]]:
+    return [
+        _diagnostic(
+            "clean",
+            {"CATO": 0.55, "TLEO": 0.2, "SPO": 0.15, "LRIO": 0.1},
+            cato_entropy=0.30,
+            grounding_accuracy=0.74,
+            top_alignment_accuracy=0.72,
+            rceo_reliability=0.90,
+        ),
+        _diagnostic(
+            "no_cato",
+            {"CATO": 0.0, "TLEO": 0.4, "SPO": 0.4, "LRIO": 0.2},
+            cato_entropy=0.90,
+            grounding_accuracy=0.52,
+            top_alignment_accuracy=0.20,
+        ),
+        _diagnostic(
+            "corrupted_visual",
+            {"CATO": 0.28, "TLEO": 0.30, "SPO": 0.32, "LRIO": 0.10},
+            cato_entropy=0.58,
+            grounding_accuracy=0.61,
+            top_alignment_accuracy=0.56,
+            rceo_reliability=0.55,
+            rceo_corruption_response=0.35,
+        ),
+    ]
 
 
 def _required_baselines_for_task(task: str) -> tuple[str, ...]:
