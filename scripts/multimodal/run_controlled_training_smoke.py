@@ -339,6 +339,8 @@ def _trainable_parameter_groups_for_stage(stage: str, family: str) -> set[str]:
             f"candidate_primitives.{candidate}",
             f"joint_router_adapter.hyper_adapter.{candidate}",
         }
+    if stage == "T2":
+        return _adapter_candidate_parameter_groups()
     if stage == "T3":
         return {"joint_router_adapter.router"}
     groups = {
@@ -352,6 +354,13 @@ def _trainable_parameter_groups_for_stage(stage: str, family: str) -> set[str]:
     groups.update(f"candidate_primitives.{candidate}" for candidate in CONTROLLED_CANDIDATE_NAMES)
     groups.update(f"joint_router_adapter.hyper_adapter.{candidate}" for candidate in CONTROLLED_CANDIDATE_NAMES)
     return groups
+
+
+def _adapter_candidate_parameter_groups() -> set[str]:
+    return {
+        *(f"candidate_primitives.{candidate}" for candidate in CONTROLLED_CANDIDATE_NAMES),
+        *(f"joint_router_adapter.hyper_adapter.{candidate}" for candidate in CONTROLLED_CANDIDATE_NAMES),
+    }
 
 
 def _trainable_parameter_scope_name(stage: str) -> str:
