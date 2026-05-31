@@ -447,6 +447,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                 if (raw_root / "metadata" / "missing_modality_mask.npy").exists()
                 else np.zeros((0, 0), dtype=bool)
             )
+            task_labels_train_exists = (layout.root / "supervision" / "task_labels_train.npy").exists()
 
         self.assertEqual(stage_result.returncode, 0, stage_result.stdout + stage_result.stderr)
         self.assertEqual(build_result.returncode, 0, build_result.stdout + build_result.stderr)
@@ -458,7 +459,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(feature_versions["vision"], "unit-vision-v1")
         self.assertEqual([row["source_id"] for row in utterances], ["mosei-train-1", "mosei-val-1", "mosei-test-1"])
         self.assertEqual(staged_missing.shape, (3, 3))
-        self.assertTrue((layout.root / "supervision" / "task_labels_train.npy").exists())
+        self.assertTrue(task_labels_train_exists)
 
     def test_build_cache_cli_writes_valid_meld_cache_from_dialogue_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout

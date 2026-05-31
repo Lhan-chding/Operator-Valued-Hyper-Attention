@@ -164,6 +164,41 @@ python scripts/multimodal/validate_cache.py data/multimodal_cache cmu_mosei v0.1
 python scripts/multimodal/validate_cache.py data/multimodal_cache refcoco v0.1 --splits train val test
 ```
 
+如果你已经从 CMU SDK / MultiBench / 自己的冻结特征流程拿到了按同一 sample 顺序排列的 `.npy` 特征和标签，可以先用 staging 脚本生成 `cmu_mosei` raw manifest，再交给 cache builder：
+
+```bash
+python scripts/multimodal/stage_cmu_sentiment_raw.py \
+  cmu_mosei \
+  data/raw_multimodal/cmu_mosei \
+  --splits data/raw_multimodal/_downloads/cmu_mosei_splits.json \
+  --text-features data/raw_multimodal/_downloads/cmu_mosei_text_features.npy \
+  --audio-features data/raw_multimodal/_downloads/cmu_mosei_audio_features.npy \
+  --visual-features data/raw_multimodal/_downloads/cmu_mosei_visual_features.npy \
+  --sentiment-labels data/raw_multimodal/_downloads/cmu_mosei_sentiment.npy \
+  --emotion-labels data/raw_multimodal/_downloads/cmu_mosei_emotion.npy \
+  --feature-version text=cmu-sdk-text-v1 \
+  --feature-version audio=cmu-sdk-audio-v1 \
+  --feature-version vision=cmu-sdk-vision-v1 \
+  --license-tag cmu-mosei \
+  --preprocessing-version cmu-mosei-frozen-features-v0.1
+
+python scripts/multimodal/build_cache.py \
+  cmu_mosei \
+  data/raw_multimodal/cmu_mosei \
+  data/multimodal_cache \
+  --version v0.1
+```
+
+`--splits` 的 source_id 顺序必须和所有 `.npy` 第一维一致，例如：
+
+```json
+{
+  "train": ["videoA::utterance0001", "videoA::utterance0002"],
+  "val": ["videoB::utterance0001"],
+  "test": ["videoC::utterance0001"]
+}
+```
+
 ## 3. Region-text grounding 数据
 
 ### 3.1 RefCOCO / RefCOCO+ / RefCOCOg
