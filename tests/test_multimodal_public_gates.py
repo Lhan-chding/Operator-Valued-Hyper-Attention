@@ -212,6 +212,26 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("full model does not beat same-feature baseline", "\n".join(report["reasons"]))
         self.assertIn("no-CATO ablation score missing", "\n".join(report["reasons"]))
 
+    def test_region_text_gate_requires_full_to_beat_moe_baseline(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+        summary["main_table"]["phrase_region_grounding"]["test"]["modality_expert_moe"]["mean"] = 0.82
+
+        report = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "full model does not beat required same-feature baseline: modality_expert_moe",
+            "\n".join(report["reasons"]),
+        )
+
     def test_region_text_gate_rejects_missing_alignment_accuracy_and_visual_stress(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
