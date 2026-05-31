@@ -10,7 +10,16 @@ def apply_modality_dropout(batch: MultimodalEpisodeBatch, modality: str) -> Mult
     if modality not in batch.fields:
         raise ValueError(f"cannot drop missing modality: {modality}")
     field = batch.fields[modality]
-    dropped = TokenField(field.modality, field.x * 0, field.pos, field.mask & False, quality=field.quality, attrs=field.attrs)
+    quality = _zero_quality_like(field)
+    dropped = TokenField(field.modality, field.x * 0, field.pos, field.mask & False, quality=quality, attrs=field.attrs)
     fields = {**batch.fields, modality: dropped}
     supervision = replace(batch.supervision, modality_missing_mask=missing_mask_for(batch, modality))
     return replace(batch, fields=fields, supervision=supervision)
+
+
+def _zero_quality_like(field: TokenField):
+    if field.quality is not None:
+        return field.quality * 0
+    if hasattr(field.x, "new_zeros"):
+        return field.x.new_zeros((*field.x.shape[:2], 1))
+    return None

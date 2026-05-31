@@ -1367,8 +1367,8 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
         self.assertTrue(torch.all(corrupted.fields["region"].quality < batch.fields["region"].quality))
         self.assertAlmostEqual(float(corrupted.fields["region"].quality.mean()), 0.75, places=6)
         self.assertIn("gaussian_noise_strength", corrupted.supervision.corruption_metadata)
-        self.assertLess(float(dropped_reliability[:, 0].mean()), float(clean_reliability[:, 0].mean()))
-        self.assertLess(float(corrupted_reliability[:, 0].mean()), float(clean_reliability[:, 0].mean()))
+        self.assertLess(float(dropped_reliability[:, 1].mean()), float(clean_reliability[:, 1].mean()))
+        self.assertLess(float(corrupted_reliability[:, 1].mean()), float(clean_reliability[:, 1].mean()))
 
 
 class _ArrayTensor:
