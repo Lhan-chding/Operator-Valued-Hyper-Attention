@@ -177,6 +177,19 @@ python scripts/multimodal/build_cache.py cmu_mosei data/raw_multimodal/cmu_mosei
 python scripts/multimodal/build_cache.py refcoco data/raw_multimodal/refcoco data/multimodal_cache --version v0.1
 ```
 
+下载、转换、stage raw manifest、build cache 之间如果不确定当前缺哪一步，直接跑状态检查器。它只输出 JSON 和下一条建议命令，不作为训练 gate：
+
+```bash
+python scripts/multimodal/check_public_data_readiness.py \
+  --datasets refcoco cmu_mosei \
+  --download-root data/raw_multimodal/_downloads \
+  --raw-root-base data/raw_multimodal \
+  --cache-root data/multimodal_cache \
+  --controlled-report outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json
+```
+
+当 formal cache 已经有效时，它会直接给出对应 `accept_public_data.py` 命令；如果 RefCOCO / CMU-MOSEI 还停在下载或 feature freeze 阶段，它会指向 `build_refcoco_stage_records.py`、`align_refcoco_stage_features.py`、`write_cmu_sdk_splits.py`、`inspect_cmu_sdk_sequences.py` 或 `extract_cmu_sdk_stage_inputs.py` 中下一条应执行的命令。
+
 当缺失项全部补齐后，同一命令会写入正式 cache，再执行：
 
 ```bash
