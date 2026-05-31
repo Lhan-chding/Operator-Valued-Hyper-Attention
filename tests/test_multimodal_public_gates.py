@@ -1266,7 +1266,10 @@ class MultimodalPublicGateTests(unittest.TestCase):
             stats_path = root / "stats.json"
             diagnostics_path = root / "diagnostics.jsonl"
             robustness_path = root / "robustness.json"
+            raw_metrics_path = root / "raw_metrics_seed1.jsonl"
             summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
+            summary["metadata"] = {"raw_metric_paths": [str(raw_metrics_path)]}
+            raw_metrics_path.write_text(json.dumps({"seed": 1, "score": 0.80}) + "\n")
             stats_path.write_text(json.dumps(summary))
             robustness_path.write_text(json.dumps(_passing_sentiment_robustness()))
             diagnostics_path.write_text(
@@ -1329,6 +1332,15 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
         self.assertTrue(payload["passed"], payload["reasons"])
+        artifacts = payload["evidence_artifacts"]
+        self.assertEqual(artifacts["task"], "phrase_region_grounding")
+        self.assertEqual(artifacts["split"], "test")
+        self.assertIn("evaluate_public_gates.py", artifacts["generated_by"])
+        self.assertRegex(artifacts["statistics_summary"]["sha256"], r"^[a-f0-9]{64}$")
+        self.assertRegex(artifacts["diagnostics"]["sha256"], r"^[a-f0-9]{64}$")
+        self.assertRegex(artifacts["robustness_summary"]["sha256"], r"^[a-f0-9]{64}$")
+        self.assertEqual(len(artifacts["raw_metrics"]), 1)
+        self.assertRegex(artifacts["raw_metrics"][0]["sha256"], r"^[a-f0-9]{64}$")
 
 
 def _summary(
