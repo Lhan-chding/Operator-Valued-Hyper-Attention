@@ -22,7 +22,11 @@ from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
 )
 from moat_ovha_torch.data.multimodal.cache_schema import file_sha256
 from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
-from moat_ovha_torch.eval.multimodal_oracle import controlled_row_from_oracle_report, evaluate_oracle_matrix
+from moat_ovha_torch.eval.multimodal_oracle import (
+    ORACLE_MATRIX_CELLS,
+    controlled_row_from_oracle_report,
+    evaluate_oracle_matrix,
+)
 from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA, MultimodalOVHAOutput
 
 
@@ -215,6 +219,7 @@ def _run_configured_stage_training(
             components = _controlled_loss_components(output, batch, specialist_candidate=specialist_candidate)
             stage_components = {name: components[name] for name in configured_losses if name in components}
             total_loss = _stage_total_loss(stage_components, output)
+            oracle_matrix_snapshot = _oracle_matrix_snapshot_for_stage(stage, batch, output)
             total_loss.backward()
             grad_norm = _grad_l2_norm(model)
             max_grad_norm = max(max_grad_norm, grad_norm)
@@ -234,22 +239,24 @@ def _run_configured_stage_training(
             }
             if specialist_candidate is not None:
                 step_row["specialist_candidate"] = specialist_candidate
+            if oracle_matrix_snapshot is not None:
+                step_row["oracle_matrix_snapshot"] = oracle_matrix_snapshot
             stage_rows.append(step_row)
             loss_history.append(step_row)
         stage_parameter_scope = _merge_parameter_scopes(stage, parameter_scopes)
-        stage_history.append(
-            {
-                "stage": stage,
-                "loss_names_configured": list(configured_losses),
-                "loss_names_observed": sorted({name for row in stage_rows for name in row["loss_names_observed"]}),
-                "optimizer_steps": len(stage_rows),
-                "family_schedule_scope": _family_schedule_scope(stage),
-                "route_override_mode": _stage_route_override_mode(stage),
-                **stage_parameter_scope,
-                "mean_total_loss": float(sum(float(row["total_loss"]) for row in stage_rows) / max(len(stage_rows), 1)),
-                "families_seen": sorted({str(row["family"]) for row in stage_rows}),
-            }
-        )
+        stage_summary = {
+            "stage": stage,
+            "loss_names_configured": list(configured_losses),
+            "loss_names_observed": sorted({name for row in stage_rows for name in row["loss_names_observed"]}),
+            "optimizer_steps": len(stage_rows),
+            "family_schedule_scope": _family_schedule_scope(stage),
+            "route_override_mode": _stage_route_override_mode(stage),
+            **stage_parameter_scope,
+            "mean_total_loss": float(sum(float(row["total_loss"]) for row in stage_rows) / max(len(stage_rows), 1)),
+            "families_seen": sorted({str(row["family"]) for row in stage_rows}),
+        }
+        stage_summary.update(_oracle_matrix_monitoring_summary(stage, stage_rows))
+        stage_history.append(stage_summary)
     return {
         "optimizer_steps": optimizer_steps,
         "max_grad_norm": max_grad_norm,
@@ -262,6 +269,34 @@ def _stage_total_loss(stage_components: dict[str, torch.Tensor], output: Multimo
     if not stage_components:
         return output.y_hat.sum() * 0.0
     return torch.stack([value for value in stage_components.values()]).sum()
+
+
+def _oracle_matrix_snapshot_for_stage(
+    stage: str,
+    batch: Any,
+    output: MultimodalOVHAOutput,
+) -> dict[str, dict[str, float]] | None:
+    if stage != "T4":
+        return None
+    oracle_report = evaluate_oracle_matrix(
+        batch,
+        learned_candidate_values=output.candidate_values.detach(),
+        learned_router_weights=output.router_weights.detach(),
+    )
+    return {
+        cell: {"loss": _as_float(oracle_report[cell]["loss"])}
+        for cell in ORACLE_MATRIX_CELLS
+    }
+
+
+def _oracle_matrix_monitoring_summary(stage: str, rows: list[dict[str, object]]) -> dict[str, object]:
+    if stage != "T4":
+        return {}
+    return {
+        "oracle_matrix_monitoring": "per_step",
+        "oracle_matrix_cells": list(ORACLE_MATRIX_CELLS),
+        "oracle_matrix_snapshot_count": sum(1 for row in rows if "oracle_matrix_snapshot" in row),
+    }
 
 
 def _families_for_stage(stage: str) -> tuple[str, ...]:
