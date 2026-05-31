@@ -275,6 +275,7 @@ def _reporting_metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
     hardware: dict[str, Any] = {}
     wall_clock: dict[str, Any] = {}
     per_seed_table: list[dict[str, Any]] = []
+    seed_count_rationales: set[str] = set()
     for row in rows:
         model = str(row["model"])
         if "parameter_count" in row:
@@ -287,6 +288,10 @@ def _reporting_metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
             hardware.update(dict(row["hardware"]))
             if row["hardware"].get("wall_clock_hours") is not None:
                 wall_clock["wall_clock_hours"] = row["hardware"]["wall_clock_hours"]
+        if "seed_count_rationale" in row:
+            rationale = str(row["seed_count_rationale"]).strip()
+            if rationale:
+                seed_count_rationales.add(rationale)
         per_seed_table.append(
             {
                 "task": str(row["task"]),
@@ -297,7 +302,7 @@ def _reporting_metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "raw_metric_path": str(row["raw_metric_path"]) if row.get("raw_metric_path") else "",
             }
         )
-    return {
+    metadata = {
         "parameter_count": parameter_count,
         "training_steps": training_steps,
         "frozen_feature_versions": feature_versions,
@@ -308,6 +313,9 @@ def _reporting_metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
             key=lambda row: (row["task"], row["split"], row["model"], row["seed"]),
         ),
     }
+    if seed_count_rationales:
+        metadata["seed_count_rationale"] = "; ".join(sorted(seed_count_rationales))
+    return metadata
 
 
 def _label_provenance(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -479,6 +487,7 @@ def _validate_report_facing_metadata(summary: dict[str, Any], errors: list[str])
     for key in ("frozen_feature_versions", "hardware", "wall_clock_summary"):
         if _is_empty_report_value(metadata.get(key)):
             errors.append(f"reporting_metadata missing {key}")
+    _validate_seed_count_rationale(summary, metadata, errors)
     per_seed_table = metadata.get("per_seed_table")
     if not isinstance(per_seed_table, list) or not per_seed_table:
         errors.append("reporting_metadata missing per_seed_table")
@@ -488,6 +497,38 @@ def _validate_report_facing_metadata(summary: dict[str, Any], errors: list[str])
     for model in sorted(models):
         if model not in covered_models:
             errors.append(f"reporting_metadata per_seed_table missing model: {model}")
+
+
+def _validate_seed_count_rationale(
+    summary: dict[str, Any],
+    metadata: dict[str, Any],
+    errors: list[str],
+) -> None:
+    under_five_seed_main_rows = False
+    main_table = summary.get("main_table", {})
+    if isinstance(main_table, dict):
+        for splits in main_table.values():
+            if not isinstance(splits, dict):
+                continue
+            for models in splits.values():
+                if not isinstance(models, dict):
+                    continue
+                for values in models.values():
+                    if not isinstance(values, dict):
+                        continue
+                    seed_count = _safe_int(values.get("seed_count"))
+                    if seed_count is not None and 3 <= seed_count < 5:
+                        under_five_seed_main_rows = True
+                        break
+                if under_five_seed_main_rows:
+                    break
+            if under_five_seed_main_rows:
+                break
+    if not under_five_seed_main_rows:
+        return
+    rationale = metadata.get("seed_count_rationale")
+    if not isinstance(rationale, str) or not rationale.strip():
+        errors.append("reporting_metadata seed_count_rationale required when main table uses fewer than 5 seeds")
 
 
 def _validate_report_model_map(
