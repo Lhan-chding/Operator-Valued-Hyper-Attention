@@ -919,7 +919,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             region_report = _passing_region_text_public_gate_report(tmp_path / "artifacts")
             region_diagnostics = Path(region_report["evidence_artifacts"]["diagnostics"]["path"])
             rows = _gate_diagnostic_rows("phrase_region_grounding")
-            rows[0]["public_diagnostics"]["cato_router_load_by_phrase_type"] = {"object": "not-a-number"}
+            for row in rows:
+                row["public_diagnostics"]["cato_router_load_by_phrase_type"] = {"object": "not-a-number"}
             region_diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
             region_report["evidence_artifacts"]["diagnostics"]["sha256"] = file_sha256(region_diagnostics)
 

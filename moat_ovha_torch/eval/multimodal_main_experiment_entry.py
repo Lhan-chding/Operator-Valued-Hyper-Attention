@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any
@@ -13,6 +14,10 @@ from moat_ovha_torch.eval.multimodal_public_entry import (
     REGION_TEXT_TASK_TYPES,
     SENTIMENT_EMOTION_TASK_TYPES,
     validate_public_entry_requirements,
+)
+from moat_ovha_torch.eval.multimodal_public_gates import (
+    evaluate_region_text_gate,
+    evaluate_sentiment_gate,
 )
 
 
@@ -177,6 +182,18 @@ def _require_gate_evidence_artifacts(label: str, evidence: Any, errors: list[str
         _validate_diagnostics_artifact_content(label, artifact_paths["diagnostics"], errors)
     if "robustness_summary" in artifact_paths:
         _validate_robustness_artifact_content(label, artifact_paths["robustness_summary"], errors)
+    if (
+        isinstance(task, str)
+        and _non_empty_text(evidence.get("split"))
+        and all(artifact_name in artifact_paths for artifact_name in TOPCONF_GATE_EVIDENCE_ARTIFACTS)
+    ):
+        _validate_recomputed_public_gate(
+            label,
+            task.strip(),
+            str(evidence["split"]).strip(),
+            artifact_paths,
+            errors,
+        )
 
 
 def _validate_artifact_descriptor(label: str, artifact_name: str, artifact: Any, errors: list[str]) -> Path | None:
@@ -365,6 +382,75 @@ def _read_jsonl_artifact(label: str, artifact_name: str, path: Path, errors: lis
     return rows
 
 
+def _read_json_artifact(label: str, artifact_name: str, path: Path, errors: list[str]) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"{label} gate {artifact_name} must be valid JSON: {exc}")
+        return None
+    if not isinstance(payload, dict):
+        errors.append(f"{label} gate {artifact_name} must be a JSON object")
+        return None
+    return payload
+
+
+def _validate_recomputed_public_gate(
+    label: str,
+    task: str,
+    split: str,
+    artifact_paths: dict[str, Path],
+    errors: list[str],
+) -> None:
+    summary = _read_json_artifact(label, "statistics_summary", artifact_paths["statistics_summary"], errors)
+    diagnostics = _read_jsonl_artifact(label, "diagnostics", artifact_paths["diagnostics"], errors)
+    robustness = _read_json_artifact(label, "robustness_summary", artifact_paths["robustness_summary"], errors)
+    if summary is None or robustness is None:
+        return
+
+    if label == "region_text_public":
+        recomputed = evaluate_region_text_gate(
+            statistics_summary=summary,
+            diagnostics_rows=diagnostics,
+            no_cato_score=_summary_model_mean(summary, task, split, "ovha_no_cato"),
+            robustness_summary=robustness,
+            task=task,
+            split=split,
+        )
+    elif label == "sentiment_emotion_public":
+        recomputed = evaluate_sentiment_gate(
+            statistics_summary=summary,
+            diagnostics_rows=diagnostics,
+            ablation_scores={
+                "ovha_no_lrio": _summary_model_mean(summary, task, split, "ovha_no_lrio"),
+                "ovha_no_spo": _summary_model_mean(summary, task, split, "ovha_no_spo"),
+                "ovha_no_rceo": _summary_model_mean(summary, task, split, "ovha_no_rceo"),
+            },
+            robustness_summary=robustness,
+            task=task,
+            split=split,
+        )
+    else:
+        return
+
+    if recomputed.get("passed") is True:
+        return
+    reasons = recomputed.get("reasons")
+    if not isinstance(reasons, list) or not reasons:
+        errors.append(f"{label} gate artifact recomputation failed")
+        return
+    errors.extend(f"{label} gate artifact recomputation failed: {reason}" for reason in reasons)
+
+
+def _summary_model_mean(summary: Mapping[str, Any], task: str, split: str, model: str) -> float | None:
+    main_table = summary.get("main_table")
+    task_table = main_table.get(task) if isinstance(main_table, Mapping) else None
+    split_table = task_table.get(split) if isinstance(task_table, Mapping) else None
+    row = split_table.get(model) if isinstance(split_table, Mapping) else None
+    if not isinstance(row, Mapping):
+        return None
+    return _finite_float(row.get("mean"))
+
+
 def _require_any_public_payload_key(
     label: str,
     payloads: list[Any],
@@ -410,6 +496,14 @@ def _validate_robustness_artifact_content(label: str, path: Path, errors: list[s
 
 def _non_empty_text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
 
 
 def _sha256(path: Path) -> str:
