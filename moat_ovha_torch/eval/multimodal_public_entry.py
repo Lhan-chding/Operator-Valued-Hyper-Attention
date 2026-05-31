@@ -41,6 +41,14 @@ def validate_public_entry_requirements(task_type: str, controlled_report: dict[s
         errors.append("controlled_multimodal_passed must be true before public multimodal entry")
     if not isinstance(go_no_go, dict) or go_no_go.get("enter_public_multimodal") is not True:
         errors.append("enter_public_multimodal must be true before public multimodal entry")
+    if (
+        isinstance(go_no_go, dict)
+        and go_no_go.get("controlled_multimodal_passed") is True
+        and go_no_go.get("enter_public_multimodal") is True
+    ):
+        reasons = go_no_go.get("reasons", [])
+        if not isinstance(reasons, (list, tuple)) or reasons:
+            errors.append("controlled report go_no_go.reasons must be empty when public entry flags are true")
 
     _require_complete_controlled_report(controlled_report, errors)
 
