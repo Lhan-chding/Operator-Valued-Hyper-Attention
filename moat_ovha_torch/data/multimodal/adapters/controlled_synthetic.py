@@ -236,8 +236,8 @@ class ControlledSyntheticMultimodalAdapter:
         candidate_values = _candidate_values(torch, text_x, region_x, audio_x, query_x, self.output_dim)
         target_y = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
         true_lengthscale = torch.full((batch_size, query_count, 1), 0.16, device=device)
-        true_rank_logits = torch.zeros(batch_size, query_count, 4, device=device)
-        true_prototype_logits = torch.zeros(batch_size, query_count, 4, device=device)
+        true_rank_logits = _structured_adapter_logits(torch, batch_size, query_count, 4, device, offset=1, scale=1.5)
+        true_prototype_logits = _structured_adapter_logits(torch, batch_size, query_count, 4, device, offset=0, scale=1.5)
         true_alignment_pairs = _alignment_pairs(torch, batch_size, query_count, token_count, device)
         true_adapter_params = _true_adapter_params(
             torch,
@@ -488,6 +488,11 @@ def _inject_relation_query_code(torch, query_x, active):
     coded = query_x.clone()
     coded[..., :width] = relation_code[..., :width]
     return coded
+
+
+def _structured_adapter_logits(torch, batch_size: int, query_count: int, width: int, device: str, *, offset: int, scale: float):
+    indices = (torch.arange(query_count, device=device).view(1, query_count).repeat(batch_size, 1) + offset) % width
+    return torch.nn.functional.one_hot(indices, num_classes=width).to(dtype=torch.float32) * scale
 
 
 def _quality_for_family(torch, family: str, batch_size: int, token_count: int, device: str):
