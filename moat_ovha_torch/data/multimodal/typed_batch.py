@@ -286,8 +286,13 @@ def _validate_field_attrs(name: str, attrs: dict[str, Any] | None, errors: list[
 
 
 def _contains_forbidden_metadata_key(key: str) -> bool:
+    normalized = _normalized_metadata_key(key)
+    return any(forbidden in normalized for forbidden in FORBIDDEN_MULTIMODAL_INPUT_KEYS)
+
+
+def _normalized_metadata_key(key: str) -> str:
     lowered = key.lower()
-    return any(forbidden in lowered for forbidden in FORBIDDEN_MULTIMODAL_INPUT_KEYS)
+    return "".join(character if character.isalnum() else "_" for character in lowered)
 
 
 def _validate_provenance_bank(provenance: ProvenanceBank, batch_size: int, split: str, errors: list[str]) -> None:
