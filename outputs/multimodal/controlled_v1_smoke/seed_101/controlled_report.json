@@ -1,0 +1,413 @@
+{
+  "evidence_artifacts": {
+    "controlled_rows": {
+      "path": "outputs/multimodal/controlled_v1_smoke/seed_101/controlled_training_rows.jsonl",
+      "sha256": "3af3f77a867f74839f0d07c310ad26ed18b85e30f320d91254c77e4f83c967e9"
+    },
+    "diagnostics_report": {
+      "path": "outputs/multimodal/controlled_v1_smoke/seed_101/controlled_training_diagnostics.jsonl",
+      "sha256": "b345f385a6b449f00eae30c008f5e36074ce4215819767832c961a88d115b4d8"
+    },
+    "generated_by": "scripts/multimodal/run_controlled_training_smoke.py",
+    "task": "controlled_multimodal"
+  },
+  "families": {
+    "cato_alignment_transport": {
+      "CATO_oracle_gap": 0.30888837575912476,
+      "LRIO_oracle_gap": 0.42024701833724976,
+      "SPO_oracle_gap": 0.3761153817176819,
+      "TLEO_oracle_gap": 0.5229660272598267,
+      "active_operator": "CATO",
+      "alignment_entropy_delta": 0.03287148475646973,
+      "alignment_topk_delta": 1.25,
+      "candidate_oracle_mse": 0.10420858860015869,
+      "evidence_only_router_delta": 0.004993349444703199,
+      "family": "cato_alignment_transport",
+      "learned_router_entropy": 0.0001879148476291448,
+      "learned_task_loss": 0.6177771687507629,
+      "memory_only_router_delta": 1.4591800273774425,
+      "no_evidence_router_delta": 0.007929496598080732,
+      "no_hyper_adapter_delta": 0.13127046823501587,
+      "no_operator_memory_delta": 0.07480579614639282,
+      "no_reliability_prior_delta": 0.005403839182690717,
+      "oracle_matrix": {
+        "learned_learned": {
+          "loss": 0.30888858437538147
+        },
+        "learned_true": {
+          "loss": 6.808246327816292e-11
+        },
+        "true_learned": {
+          "loss": 0.30888837575912476
+        },
+        "true_true": {
+          "loss": 0.0
+        }
+      },
+      "router_accuracy": 1.0,
+      "specialist_loss": 0.30888837575912476,
+      "stackability_passed": true,
+      "training_config_name": "multimodal_controlled_v1_smoke",
+      "training_mode": "trained_smoke",
+      "training_steps": 24
+    },
+    "lrio_low_rank_interaction": {
+      "CATO_oracle_gap": 0.007995864376425743,
+      "LRIO_oracle_gap": 0.004176349379122257,
+      "SPO_oracle_gap": 0.005964639596641064,
+      "TLEO_oracle_gap": 0.16022542119026184,
+      "active_operator": "LRIO",
+      "candidate_oracle_mse": 0.31265494227409363,
+      "evidence_only_router_delta": 0.008819537004455924,
+      "family": "lrio_low_rank_interaction",
+      "learned_router_entropy": 0.0009539902675896883,
+      "learned_task_loss": 0.008349016308784485,
+      "memory_only_router_delta": 1.8303791235666722,
+      "no_evidence_router_delta": 0.02400229382328689,
+      "no_hyper_adapter_delta": 0.02928563579916954,
+      "no_lrio_delta": 0.13395637273788452,
+      "no_operator_memory_delta": 0.03401023522019386,
+      "no_reliability_prior_delta": 0.015248150331899524,
+      "oracle_matrix": {
+        "learned_learned": {
+          "loss": 0.004174508154392242
+        },
+        "learned_true": {
+          "loss": 6.833097643266228e-09
+        },
+        "true_learned": {
+          "loss": 0.004176349379122257
+        },
+        "true_true": {
+          "loss": 0.0
+        }
+      },
+      "rank_logits_kl_delta": 0.13778138160705566,
+      "router_accuracy": 1.0,
+      "specialist_loss": 0.004176349379122257,
+      "stackability_passed": true,
+      "training_config_name": "multimodal_controlled_v1_smoke",
+      "training_mode": "trained_smoke",
+      "training_steps": 24
+    },
+    "mixed_relation_operator": {
+      "CATO_oracle_gap": 0.16724979877471924,
+      "LRIO_oracle_gap": 0.17341351509094238,
+      "SPO_oracle_gap": 0.16191816329956055,
+      "TLEO_oracle_gap": 0.29614049196243286,
+      "active_operator": "mixed",
+      "candidate_oracle_mse": 0.25607001781463623,
+      "evidence_only_router_delta": 0.0011544075098868234,
+      "family": "mixed_relation_operator",
+      "learned_router_entropy": 9.30141959543107e-06,
+      "learned_task_loss": 0.5372657775878906,
+      "memory_only_router_delta": 1.2290524542334538,
+      "no_evidence_router_delta": 0.0012902781602974756,
+      "no_hyper_adapter_delta": 0.0010766983032226562,
+      "no_lrio_delta": 0.010257124900817871,
+      "no_operator_memory_delta": 0.10930478572845459,
+      "no_rceo_delta": 0.0009050584051806254,
+      "no_reliability_prior_delta": 0.0009050584051806254,
+      "oracle_matrix": {
+        "learned_learned": {
+          "loss": 0.2686328887939453
+        },
+        "learned_true": {
+          "loss": 5.6479750347102065e-14
+        },
+        "true_learned": {
+          "loss": 0.2686328887939453
+        },
+        "true_true": {
+          "loss": 0.0
+        }
+      },
+      "router_accuracy": 1.0,
+      "specialist_loss": 0.2686328887939453,
+      "stackability_passed": true,
+      "training_config_name": "multimodal_controlled_v1_smoke",
+      "training_mode": "trained_smoke",
+      "training_steps": 24
+    },
+    "rceo_reliability_corruption": {
+      "CATO_oracle_gap": 0.030220720916986465,
+      "LRIO_oracle_gap": 0.0051678502932190895,
+      "SPO_oracle_gap": 0.014163246378302574,
+      "TLEO_oracle_gap": 0.0856507420539856,
+      "active_operator": "LRIO",
+      "candidate_oracle_mse": 0.3314954936504364,
+      "evidence_only_router_delta": 0.008507454331265762,
+      "family": "rceo_reliability_corruption",
+      "learned_router_entropy": 0.0027745647821575403,
+      "learned_task_loss": 0.010331583209335804,
+      "memory_only_router_delta": 1.8628450273827184,
+      "no_evidence_router_delta": 0.08069772415910847,
+      "no_hyper_adapter_delta": 0.0288265785202384,
+      "no_operator_memory_delta": 0.024818981997668743,
+      "no_rceo_delta": 0.015147842961596325,
+      "no_reliability_prior_delta": 0.015147842961596325,
+      "oracle_matrix": {
+        "learned_learned": {
+          "loss": 0.005165791604667902
+        },
+        "learned_true": {
+          "loss": 0.0007312219822779298
+        },
+        "true_learned": {
+          "loss": 0.00405058404430747
+        },
+        "true_true": {
+          "loss": 0.0
+        }
+      },
+      "rceo_prior_effect": 0.4899999797344208,
+      "rceo_reliability_curve": [
+        {
+          "corruption_strength": 0.0,
+          "mean_reliability": 1.0
+        },
+        {
+          "corruption_strength": 0.7,
+          "mean_reliability": 0.7666666507720947
+        }
+      ],
+      "rceo_reliability_monotonic": true,
+      "rceo_router_load_shift": 0.007505323737859726,
+      "router_accuracy": 1.0,
+      "specialist_loss": 0.00405058404430747,
+      "stackability_passed": true,
+      "training_config_name": "multimodal_controlled_v1_smoke",
+      "training_mode": "trained_smoke",
+      "training_steps": 24
+    },
+    "spo_global_prototype": {
+      "CATO_oracle_gap": 0.059625983238220215,
+      "LRIO_oracle_gap": 0.018219904974102974,
+      "SPO_oracle_gap": 0.018039433285593987,
+      "TLEO_oracle_gap": 0.04986487329006195,
+      "active_operator": "SPO",
+      "candidate_oracle_mse": 0.16630622744560242,
+      "evidence_only_router_delta": 0.011423187264881562,
+      "family": "spo_global_prototype",
+      "learned_router_entropy": 0.000645554973743856,
+      "learned_task_loss": 0.03607441112399101,
+      "memory_only_router_delta": 1.2867843079657177,
+      "no_evidence_router_delta": 0.013666447186551522,
+      "no_hyper_adapter_delta": 0.04738134518265724,
+      "no_operator_memory_delta": 0.005523320287466049,
+      "no_reliability_prior_delta": 0.00941600644000573,
+      "oracle_matrix": {
+        "learned_learned": {
+          "loss": 0.018037205561995506
+        },
+        "learned_true": {
+          "loss": 3.153764194241404e-10
+        },
+        "true_learned": {
+          "loss": 0.018039433285593987
+        },
+        "true_true": {
+          "loss": 0.0
+        }
+      },
+      "prototype_kl_delta": 0.13563355803489685,
+      "router_accuracy": 1.0,
+      "specialist_loss": 0.018039433285593987,
+      "stackability_passed": true,
+      "training_config_name": "multimodal_controlled_v1_smoke",
+      "training_mode": "trained_smoke",
+      "training_steps": 24
+    },
+    "tleo_local_evidence": {
+      "CATO_oracle_gap": 0.3580459654331207,
+      "LRIO_oracle_gap": 0.3424070179462433,
+      "SPO_oracle_gap": 0.33492398262023926,
+      "TLEO_oracle_gap": 0.3064712584018707,
+      "active_operator": "TLEO",
+      "candidate_oracle_mse": 0.1364198625087738,
+      "evidence_only_router_delta": 0.007361412497630226,
+      "family": "tleo_local_evidence",
+      "learned_router_entropy": 0.00030112540116533637,
+      "learned_task_loss": 0.6129382252693176,
+      "memory_only_router_delta": 1.414787114581486,
+      "no_evidence_router_delta": 0.00843506025375973,
+      "no_hyper_adapter_delta": 0.11681908369064331,
+      "no_operator_memory_delta": 0.050615549087524414,
+      "no_reliability_prior_delta": 0.00824812704922806,
+      "oracle_matrix": {
+        "learned_learned": {
+          "loss": 0.3064691126346588
+        },
+        "learned_true": {
+          "loss": 1.3633026652026814e-10
+        },
+        "true_learned": {
+          "loss": 0.3064712584018707
+        },
+        "true_true": {
+          "loss": 0.0
+        }
+      },
+      "router_accuracy": 1.0,
+      "specialist_loss": 0.3064712584018707,
+      "stackability_passed": true,
+      "training_config_name": "multimodal_controlled_v1_smoke",
+      "training_mode": "trained_smoke",
+      "training_steps": 24
+    }
+  },
+  "gate_table": {
+    "Adapter gate": {
+      "condition": "Adapter gate ablation is worse than full model for every controlled row",
+      "passed": true,
+      "reasons": [],
+      "value": 0.0010766983032226562
+    },
+    "CATO alignment diagnostics": {
+      "condition": "CATO alignment diagnostics are present and improve on the CATO controlled family",
+      "operator": "CATO",
+      "passed": true,
+      "reasons": [],
+      "required_diagnostics": [
+        "alignment_entropy_delta",
+        "alignment_topk_delta"
+      ]
+    },
+    "CATO collapse": {
+      "condition": "CATO true-router + learned-adapter loss <= specialist * 1.05 + eps",
+      "diagnostic_reasons": [],
+      "loss_passed": true,
+      "oracle_cell": "true_learned",
+      "passed": true,
+      "threshold": 0.324333794547081,
+      "value": 0.30888837575912476
+    },
+    "LRIO collapse": {
+      "condition": "LRIO true-router + learned-adapter loss <= specialist * 1.05 + eps",
+      "diagnostic_reasons": [],
+      "loss_passed": true,
+      "oracle_cell": "true_learned",
+      "passed": true,
+      "threshold": 0.00438616684807837,
+      "value": 0.004176349379122257
+    },
+    "Memory gate": {
+      "condition": "Memory gate ablation is worse than full model for every controlled row",
+      "passed": true,
+      "reasons": [],
+      "value": 0.005523320287466049
+    },
+    "RCEO gate": {
+      "condition": "reliability decreases with corruption, router load shifts coherently, and RCEO prior improves loss",
+      "passed": true,
+      "reasons": [],
+      "value": {
+        "monotonic": true,
+        "prior_effect": 0.4899999797344208,
+        "reliability_curve": [
+          {
+            "corruption_strength": 0.0,
+            "mean_reliability": 1.0
+          },
+          {
+            "corruption_strength": 0.7,
+            "mean_reliability": 0.7666666507720947
+          }
+        ],
+        "router_load_shift": 0.007505323737859726
+      }
+    },
+    "Router decomposition ablations": {
+      "condition": "router logit decomposition ablations must degrade: no-evidence, no-reliability, memory-only, evidence-only",
+      "passed": true,
+      "reasons": [],
+      "value": {
+        "cato_alignment_transport.evidence_only_router_delta": 0.004993349444703199,
+        "cato_alignment_transport.memory_only_router_delta": 1.4591800273774425,
+        "cato_alignment_transport.no_evidence_router_delta": 0.007929496598080732,
+        "cato_alignment_transport.no_reliability_prior_delta": 0.005403839182690717,
+        "lrio_low_rank_interaction.evidence_only_router_delta": 0.008819537004455924,
+        "lrio_low_rank_interaction.memory_only_router_delta": 1.8303791235666722,
+        "lrio_low_rank_interaction.no_evidence_router_delta": 0.02400229382328689,
+        "lrio_low_rank_interaction.no_reliability_prior_delta": 0.015248150331899524,
+        "mixed_relation_operator.evidence_only_router_delta": 0.0011544075098868234,
+        "mixed_relation_operator.memory_only_router_delta": 1.2290524542334538,
+        "mixed_relation_operator.no_evidence_router_delta": 0.0012902781602974756,
+        "mixed_relation_operator.no_reliability_prior_delta": 0.0009050584051806254,
+        "rceo_reliability_corruption.evidence_only_router_delta": 0.008507454331265762,
+        "rceo_reliability_corruption.memory_only_router_delta": 1.8628450273827184,
+        "rceo_reliability_corruption.no_evidence_router_delta": 0.08069772415910847,
+        "rceo_reliability_corruption.no_reliability_prior_delta": 0.015147842961596325,
+        "spo_global_prototype.evidence_only_router_delta": 0.011423187264881562,
+        "spo_global_prototype.memory_only_router_delta": 1.2867843079657177,
+        "spo_global_prototype.no_evidence_router_delta": 0.013666447186551522,
+        "spo_global_prototype.no_reliability_prior_delta": 0.00941600644000573,
+        "tleo_local_evidence.evidence_only_router_delta": 0.007361412497630226,
+        "tleo_local_evidence.memory_only_router_delta": 1.414787114581486,
+        "tleo_local_evidence.no_evidence_router_delta": 0.00843506025375973,
+        "tleo_local_evidence.no_reliability_prior_delta": 0.00824812704922806
+      }
+    },
+    "Router gate": {
+      "condition": "mixed relation active_operator accuracy >= 80% test",
+      "passed": true,
+      "reasons": [],
+      "threshold": 0.8,
+      "value": 1.0
+    },
+    "SPO collapse": {
+      "condition": "SPO true-router + learned-adapter loss <= specialist * 1.05 + eps",
+      "diagnostic_reasons": [],
+      "loss_passed": true,
+      "oracle_cell": "true_learned",
+      "passed": true,
+      "threshold": 0.018942404949873686,
+      "value": 0.018039433285593987
+    },
+    "Stackability": {
+      "condition": "all candidate values are [B,Q,Dy] and stackability_passed is explicit true",
+      "passed": true,
+      "reasons": []
+    },
+    "TLEO collapse": {
+      "condition": "TLEO true-router + learned-adapter loss <= specialist * 1.05 + eps",
+      "diagnostic_reasons": [],
+      "loss_passed": true,
+      "oracle_cell": "true_learned",
+      "passed": true,
+      "threshold": 0.32179582132196427,
+      "value": 0.3064712584018707
+    },
+    "no-LRIO ablation": {
+      "condition": "no-LRIO ablation is worse than full model on targeted sentiment-entry controlled families",
+      "passed": true,
+      "reasons": [],
+      "required_families": [
+        "lrio_low_rank_interaction",
+        "mixed_relation_operator"
+      ],
+      "value": 0.010257124900817871
+    },
+    "no-RCEO ablation": {
+      "condition": "no-RCEO ablation is worse than full model on targeted sentiment-entry controlled families",
+      "passed": true,
+      "reasons": [],
+      "required_families": [
+        "rceo_reliability_corruption",
+        "mixed_relation_operator"
+      ],
+      "value": 0.0009050584051806254
+    }
+  },
+  "go_no_go": {
+    "controlled_multimodal_passed": true,
+    "enter_public_multimodal": true,
+    "reasons": []
+  },
+  "oracle_matrix_cells": [
+    "learned_learned",
+    "true_learned",
+    "learned_true",
+    "true_true"
+  ]
+}

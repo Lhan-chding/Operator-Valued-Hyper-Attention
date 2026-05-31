@@ -1,0 +1,1 @@
+.venv/bin/python scripts/multimodal/run_controlled_training_smoke.py --config configs/multimodal_controlled_v1_smoke.json --steps-per-stage 6 --batch-size 2 --query-count 4 --d-model 16 --artifact-root outputs/multimodal/controlled_v1_smoke/seed_101

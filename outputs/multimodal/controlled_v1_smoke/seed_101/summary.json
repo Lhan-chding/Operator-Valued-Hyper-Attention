@@ -1,0 +1,170 @@
+{
+  "artifact_files": [
+    "command.txt",
+    "controlled_report.json",
+    "controlled_training_diagnostics.jsonl",
+    "controlled_training_payload.json",
+    "controlled_training_rows.jsonl",
+    "git_commit.txt"
+  ],
+  "cato_no_hyper_adapter_delta": 0.13127046823501587,
+  "cato_no_operator_memory_delta": 0.07480579614639282,
+  "config_name": "multimodal_controlled_v1_smoke",
+  "controlled_multimodal_passed": true,
+  "enter_public_multimodal": true,
+  "failed_gates": {},
+  "family_task_losses": {
+    "cato_alignment_transport": 0.6177771687507629,
+    "lrio_low_rank_interaction": 0.008349016308784485,
+    "mixed_relation_operator": 0.5372657775878906,
+    "rceo_reliability_corruption": 0.010331583209335804,
+    "spo_global_prototype": 0.03607441112399101,
+    "tleo_local_evidence": 0.6129382252693176
+  },
+  "gate_table": {
+    "Adapter gate": {
+      "condition": "Adapter gate ablation is worse than full model for every controlled row",
+      "passed": true,
+      "reasons": [],
+      "value": 0.0010766983032226562
+    },
+    "CATO alignment diagnostics": {
+      "condition": "CATO alignment diagnostics are present and improve on the CATO controlled family",
+      "operator": "CATO",
+      "passed": true,
+      "reasons": [],
+      "required_diagnostics": [
+        "alignment_entropy_delta",
+        "alignment_topk_delta"
+      ]
+    },
+    "CATO collapse": {
+      "condition": "CATO true-router + learned-adapter loss <= specialist * 1.05 + eps",
+      "diagnostic_reasons": [],
+      "loss_passed": true,
+      "oracle_cell": "true_learned",
+      "passed": true,
+      "threshold": 0.324333794547081,
+      "value": 0.30888837575912476
+    },
+    "LRIO collapse": {
+      "condition": "LRIO true-router + learned-adapter loss <= specialist * 1.05 + eps",
+      "diagnostic_reasons": [],
+      "loss_passed": true,
+      "oracle_cell": "true_learned",
+      "passed": true,
+      "threshold": 0.00438616684807837,
+      "value": 0.004176349379122257
+    },
+    "Memory gate": {
+      "condition": "Memory gate ablation is worse than full model for every controlled row",
+      "passed": true,
+      "reasons": [],
+      "value": 0.005523320287466049
+    },
+    "RCEO gate": {
+      "condition": "reliability decreases with corruption, router load shifts coherently, and RCEO prior improves loss",
+      "passed": true,
+      "reasons": [],
+      "value": {
+        "monotonic": true,
+        "prior_effect": 0.4899999797344208,
+        "reliability_curve": [
+          {
+            "corruption_strength": 0.0,
+            "mean_reliability": 1.0
+          },
+          {
+            "corruption_strength": 0.7,
+            "mean_reliability": 0.7666666507720947
+          }
+        ],
+        "router_load_shift": 0.007505323737859726
+      }
+    },
+    "Router decomposition ablations": {
+      "condition": "router logit decomposition ablations must degrade: no-evidence, no-reliability, memory-only, evidence-only",
+      "passed": true,
+      "reasons": [],
+      "value": {
+        "cato_alignment_transport.evidence_only_router_delta": 0.004993349444703199,
+        "cato_alignment_transport.memory_only_router_delta": 1.4591800273774425,
+        "cato_alignment_transport.no_evidence_router_delta": 0.007929496598080732,
+        "cato_alignment_transport.no_reliability_prior_delta": 0.005403839182690717,
+        "lrio_low_rank_interaction.evidence_only_router_delta": 0.008819537004455924,
+        "lrio_low_rank_interaction.memory_only_router_delta": 1.8303791235666722,
+        "lrio_low_rank_interaction.no_evidence_router_delta": 0.02400229382328689,
+        "lrio_low_rank_interaction.no_reliability_prior_delta": 0.015248150331899524,
+        "mixed_relation_operator.evidence_only_router_delta": 0.0011544075098868234,
+        "mixed_relation_operator.memory_only_router_delta": 1.2290524542334538,
+        "mixed_relation_operator.no_evidence_router_delta": 0.0012902781602974756,
+        "mixed_relation_operator.no_reliability_prior_delta": 0.0009050584051806254,
+        "rceo_reliability_corruption.evidence_only_router_delta": 0.008507454331265762,
+        "rceo_reliability_corruption.memory_only_router_delta": 1.8628450273827184,
+        "rceo_reliability_corruption.no_evidence_router_delta": 0.08069772415910847,
+        "rceo_reliability_corruption.no_reliability_prior_delta": 0.015147842961596325,
+        "spo_global_prototype.evidence_only_router_delta": 0.011423187264881562,
+        "spo_global_prototype.memory_only_router_delta": 1.2867843079657177,
+        "spo_global_prototype.no_evidence_router_delta": 0.013666447186551522,
+        "spo_global_prototype.no_reliability_prior_delta": 0.00941600644000573,
+        "tleo_local_evidence.evidence_only_router_delta": 0.007361412497630226,
+        "tleo_local_evidence.memory_only_router_delta": 1.414787114581486,
+        "tleo_local_evidence.no_evidence_router_delta": 0.00843506025375973,
+        "tleo_local_evidence.no_reliability_prior_delta": 0.00824812704922806
+      }
+    },
+    "Router gate": {
+      "condition": "mixed relation active_operator accuracy >= 80% test",
+      "passed": true,
+      "reasons": [],
+      "threshold": 0.8,
+      "value": 1.0
+    },
+    "SPO collapse": {
+      "condition": "SPO true-router + learned-adapter loss <= specialist * 1.05 + eps",
+      "diagnostic_reasons": [],
+      "loss_passed": true,
+      "oracle_cell": "true_learned",
+      "passed": true,
+      "threshold": 0.018942404949873686,
+      "value": 0.018039433285593987
+    },
+    "Stackability": {
+      "condition": "all candidate values are [B,Q,Dy] and stackability_passed is explicit true",
+      "passed": true,
+      "reasons": []
+    },
+    "TLEO collapse": {
+      "condition": "TLEO true-router + learned-adapter loss <= specialist * 1.05 + eps",
+      "diagnostic_reasons": [],
+      "loss_passed": true,
+      "oracle_cell": "true_learned",
+      "passed": true,
+      "threshold": 0.32179582132196427,
+      "value": 0.3064712584018707
+    },
+    "no-LRIO ablation": {
+      "condition": "no-LRIO ablation is worse than full model on targeted sentiment-entry controlled families",
+      "passed": true,
+      "reasons": [],
+      "required_families": [
+        "lrio_low_rank_interaction",
+        "mixed_relation_operator"
+      ],
+      "value": 0.010257124900817871
+    },
+    "no-RCEO ablation": {
+      "condition": "no-RCEO ablation is worse than full model on targeted sentiment-entry controlled families",
+      "passed": true,
+      "reasons": [],
+      "required_families": [
+        "rceo_reliability_corruption",
+        "mixed_relation_operator"
+      ],
+      "value": 0.0009050584051806254
+    }
+  },
+  "ok": true,
+  "optimizer_steps": 24,
+  "seed": 101
+}
