@@ -42,6 +42,26 @@ class MultimodalControlledReportingTests(unittest.TestCase):
         self.assertIn("missing controlled family", "\n".join(report["go_no_go"]["reasons"]))
         self.assertFalse(report["gate_table"]["TLEO collapse"]["passed"])
 
+    def test_controlled_report_rejects_unknown_or_duplicate_families(self):
+        from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
+
+        rows = [
+            _row("tleo_local_evidence", "TLEO", 0.010, 0.010),
+            _row("spo_global_prototype", "SPO", 0.020, 0.020),
+            _row("lrio_low_rank_interaction", "LRIO", 0.030, 0.030),
+            _row("cato_alignment_transport", "CATO", 0.040, 0.040),
+            _row("rceo_reliability_corruption", "LRIO", 0.050, 0.050, rceo=True),
+            _row("mixed_relation_operator", "mixed", 0.060, 0.060, router_accuracy=0.85),
+            _row("unplanned_relation_operator", "TLEO", 0.070, 0.070),
+            _row("tleo_local_evidence", "TLEO", 0.011, 0.011),
+        ]
+        report = build_controlled_report(rows)
+
+        self.assertFalse(report["go_no_go"]["controlled_multimodal_passed"])
+        joined = "\n".join(report["go_no_go"]["reasons"])
+        self.assertIn("unknown controlled family: unplanned_relation_operator", joined)
+        self.assertIn("duplicate controlled family row: tleo_local_evidence", joined)
+
     def test_controlled_report_requires_candidate_specific_collapse_diagnostics(self):
         from moat_ovha_torch.eval.multimodal_controlled_report import build_controlled_report
 
