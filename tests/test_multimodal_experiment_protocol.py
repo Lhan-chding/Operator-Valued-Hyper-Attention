@@ -344,6 +344,62 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("data_card.json", "\n".join(payload["errors"]))
         self.assertIn("fail-fast", payload["policy"])
 
+    def test_public_data_acceptance_builds_cache_and_runs_public_smoke_from_raw_manifest(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for public data acceptance smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_root = tmp_path / "raw_refcoco"
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "acceptance_artifacts"
+            _write_valid_refcoco_raw_manifest(raw_root)
+            controlled_report_path = tmp_path / "controlled_report.json"
+            controlled_report_path.write_text(
+                json.dumps(_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"), sort_keys=True) + "\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "accept_public_data.py"),
+                    str(ROOT / "configs" / "multimodal_refcoco_public_smoke.json"),
+                    "--raw-root",
+                    str(raw_root),
+                    "--cache-root",
+                    str(cache_root),
+                    "--controlled-report",
+                    str(controlled_report_path),
+                    "--train-smoke-steps",
+                    "1",
+                    "--train-split",
+                    "train",
+                    "--eval-smoke-split",
+                    "val",
+                    "--artifact-root",
+                    str(artifact_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            smoke_payload_path = artifact_root / "public_acceptance_smoke_payload.json"
+
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "public_data_acceptance")
+        self.assertEqual(payload["dataset_name"], "refcoco")
+        self.assertEqual(payload["phases"]["raw_manifest"]["ok"], True)
+        self.assertEqual(payload["phases"]["cache"]["ok"], True)
+        self.assertEqual(payload["phases"]["public_entry"]["ok"], True)
+        self.assertEqual(payload["phases"]["public_smoke"]["ok"], True)
+        self.assertEqual(payload["phases"]["public_smoke"]["optimizer_steps"], 1)
+        self.assertEqual(payload["phases"]["public_smoke"]["eval_smoke_rows"], 1)
+        self.assertTrue(smoke_payload_path.exists())
+
     def test_public_entry_requires_controlled_go_no_go_report(self):
         from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
 
@@ -2601,6 +2657,43 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
         if path.is_file():
             checksums.setdefault(str(path.relative_to(root)), file_sha256(path))
     (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
+
+
+def _write_valid_refcoco_raw_manifest(raw_root: Path) -> None:
+    import numpy as np
+
+    for folder in ("annotations", "features", "provenance"):
+        (raw_root / folder).mkdir(parents=True, exist_ok=True)
+    split_ids = {"train": ["train-source"], "val": ["val-source"], "test": ["test-source"]}
+    records = []
+    for row_index, (split, source_ids) in enumerate(split_ids.items()):
+        source_id = source_ids[0]
+        records.append(
+            {
+                "source_id": source_id,
+                "split": split,
+                "original_split": split,
+                "raw_ref": f"raw://{source_id}",
+                "license_tag": "test-license",
+                "preprocessing_version": "preprocess-v1",
+                "image_id": f"image-{source_id}",
+                "caption_id": f"caption-{source_id}",
+                "phrase_span": {"start": 0, "end": 2},
+                "region_box": [0.0, 0.0, 1.0, 1.0],
+                "target_region_index": row_index % 2,
+                "candidate_region_source": "annotated_boxes",
+                "box_coordinate_convention": "xyxy_normalized",
+            }
+        )
+    (raw_root / "splits.json").write_text(json.dumps(split_ids, sort_keys=True) + "\n")
+    (raw_root / "annotations" / "refs.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
+    (raw_root / "annotations" / "instances.json").write_text(
+        json.dumps({"records": [{"source_id": record["source_id"], "image_id": record["image_id"]} for record in records]}, sort_keys=True)
+        + "\n"
+    )
+    (raw_root / "provenance" / "failed_samples.jsonl").write_text("")
+    np.save(raw_root / "features" / "text_features.npy", np.zeros((3, 2, 3), dtype=np.float32))
+    np.save(raw_root / "features" / "region_features.npy", np.zeros((3, 2, 3), dtype=np.float32))
 
 
 def _write_valid_cmu_mosei_public_cache(cache_root: Path) -> None:
