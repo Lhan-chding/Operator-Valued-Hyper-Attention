@@ -326,6 +326,24 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         self.assertIn("reporting_metadata missing training_steps", joined)
         self.assertIn("reporting_metadata missing per_seed_table", joined)
 
+    def test_region_public_summary_requires_plan_metric_inventory(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        rows = _metric_rows()
+        for row in rows:
+            row["public_metrics"] = dict(row["public_metrics"])
+            if row["model"] == "ovha_full":
+                row["public_metrics"].pop("mean_iou")
+
+        summary = summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        self.assertIn(
+            "phrase_region_grounding/test/ovha_full/seed=11 missing required public metric: mean_iou",
+            "\n".join(validation.errors),
+        )
+
     def test_public_summary_cli_emits_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             metrics_path = Path(tmp) / "metrics.jsonl"
@@ -417,6 +435,7 @@ def _metric_rows_for_models(models):
                     "seed": seed,
                     "score": score,
                     "higher_is_better": True,
+                    "public_metrics": _region_public_metrics(score),
                     "parameter_count": 1234 if model == "ovha_full" else 1000,
                     "training_steps": 1000,
                     "frozen_feature_extractor_version": {"text": "clip-text-test", "region": "clip-region-test"},
@@ -457,6 +476,7 @@ def _lower_is_better_sentiment_rows():
                     "seed": seed,
                     "score": scores_by_model[model][seed_index],
                     "higher_is_better": False,
+                    "public_metrics": _sentiment_public_metrics(scores_by_model[model][seed_index]),
                     "parameter_count": 1234 if model == "ovha_full" else 1000,
                     "training_steps": 1000,
                     "frozen_feature_extractor_version": {
@@ -469,6 +489,36 @@ def _lower_is_better_sentiment_rows():
                 }
             )
     return rows
+
+
+def _region_public_metrics(score: float) -> dict[str, object]:
+    return {
+        "acc_at_0_5": score,
+        "recall_at_1": score - 0.02,
+        "recall_at_5": min(score + 0.10, 1.0),
+        "mean_iou": score - 0.05,
+        "phrase_region_topk_accuracy": score - 0.01,
+        "alignment_entropy": 0.30,
+        "cato_router_load": 0.55,
+        "cato_candidate_loss": 0.20,
+        "cato_top_alignment_accuracy": score - 0.03,
+        "null_unmatched_rate": 0.02,
+    }
+
+
+def _sentiment_public_metrics(score: float) -> dict[str, object]:
+    return {
+        "mae": score,
+        "pearson_correlation": 0.62,
+        "accuracy": 0.70,
+        "f1": 0.68,
+        "missing_modality_performance_drop": 0.04,
+        "corruption_robustness_auc": 0.73,
+        "router_load_by_corruption_type": {"audio_noise": {"LRIO": 0.20, "SPO": 0.35}},
+        "lrio_rank_entropy": 0.60,
+        "spo_prototype_entropy": 0.50,
+        "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+    }
 
 
 if __name__ == "__main__":
