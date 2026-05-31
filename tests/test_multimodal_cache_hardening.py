@@ -1258,6 +1258,44 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("pseudo_label_versions.json version must be a non-empty string", "\n".join(report.errors))
 
+    def test_cache_validator_rejects_weak_label_artifacts_without_pseudo_or_weak_provenance(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(layout.root, train_ids=["train-source"], test_ids=["test-source"], mismatched_features=False)
+            (layout.root / "supervision" / "weak_labels_train.parquet").write_text("placeholder weak labels\n")
+            (layout.root / "provenance" / "pseudo_label_versions.json").write_text(
+                json.dumps(
+                    {
+                        "generated_from_splits": ["train"],
+                        "version": "weak-v1",
+                        "label_provenance": {
+                            "supervision_type": "ground_truth",
+                            "source": "cross_modal_disagreement_v0",
+                            "must_report_as": "ground_truth",
+                        },
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "pseudo_label_versions.json label_provenance.supervision_type must be weak or pseudo "
+            "when weak label artifacts exist",
+            joined,
+        )
+        self.assertIn(
+            "pseudo_label_versions.json label_provenance.must_report_as must match supervision_type",
+            joined,
+        )
+
 
 def _write_minimal_cache(
     root: Path,
