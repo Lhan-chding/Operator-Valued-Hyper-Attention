@@ -83,6 +83,27 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
             "\n".join(validation.errors),
         )
 
+    def test_public_summary_rejects_non_boolean_raw_metric_direction(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results
+
+        rows = _lower_is_better_sentiment_rows()
+        for row in rows:
+            row["higher_is_better"] = "false"
+
+        with self.assertRaisesRegex(ValueError, "higher_is_better must be boolean"):
+            summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+
+    def test_public_summary_rejects_inconsistent_raw_metric_direction_for_model(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results
+
+        rows = _lower_is_better_sentiment_rows()
+        for row in rows:
+            if row["model"] == "cross_attention_transformer" and row["seed"] == 13:
+                row["higher_is_better"] = True
+
+        with self.assertRaisesRegex(ValueError, "higher_is_better must be consistent"):
+            summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+
     def test_public_summary_rejects_paired_delta_that_disagrees_with_metric_direction(self):
         from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
 
@@ -329,6 +350,32 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertIn("main_table", payload)
         self.assertTrue(payload["validation"]["ok"])
+
+    def test_public_summary_cli_rejects_non_boolean_metric_direction(self):
+        rows = _lower_is_better_sentiment_rows()
+        for row in rows:
+            row["higher_is_better"] = "false"
+        with tempfile.TemporaryDirectory() as tmp:
+            metrics_path = Path(tmp) / "metrics.jsonl"
+            metrics_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "summarize_public_results.py"),
+                    str(metrics_path),
+                    "--full-model",
+                    "ovha_full",
+                    "--baseline-model",
+                    "cross_attention_transformer",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("higher_is_better must be boolean", result.stderr)
 
 
 def _metric_rows():
