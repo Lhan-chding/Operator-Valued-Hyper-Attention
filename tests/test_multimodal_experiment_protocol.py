@@ -23,6 +23,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             ROOT / "moat_ovha_torch" / "models" / "multimodal" / "baselines.py",
             ROOT / "moat_ovha_torch" / "eval" / "multimodal_diagnostics.py",
             ROOT / "scripts" / "multimodal" / "run_public_smoke.py",
+            ROOT / "scripts" / "multimodal" / "bootstrap_public_downloads.py",
             ROOT / "scripts" / "multimodal" / "run_robustness_stress_smoke.py",
             ROOT / "scripts" / "multimodal" / "summarize_diagnostics.py",
         ]
@@ -478,6 +479,52 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 self.assertIn("--train-all-config-seeds", block)
                 self.assertIn("--train-baseline-smoke-steps", block)
                 self.assertIn("1", block)
+
+    def test_ubuntu_public_dataset_bootstrap_writes_fast_download_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            output = tmp_path / "ovha_public_downloads.sh"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "bootstrap_public_downloads.py"),
+                    "--datasets",
+                    "refcoco",
+                    "cmu_mosei",
+                    "--repo-root",
+                    "/srv/Operator-Valued-Hyper-Attention",
+                    "--download-root",
+                    "/data/ovha_datasets/raw_multimodal/_downloads",
+                    "--use-hf-mirror",
+                    "--include-system-packages",
+                    "--output",
+                    str(output),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            payload = json.loads(result.stdout) if result.stdout.strip() else {}
+            script = output.read_text() if output.exists() else ""
+            executable = bool(output.stat().st_mode & 0o111) if output.exists() else False
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["datasets"], ["refcoco", "cmu_mosei"])
+        self.assertEqual(payload["output"], str(output))
+        self.assertTrue(executable)
+        self.assertIn("NEEDRESTART_MODE=l", script)
+        self.assertIn("DEBIAN_FRONTEND=noninteractive", script)
+        self.assertIn("HF_XET_HIGH_PERFORMANCE=1", script)
+        self.assertIn("HF_ENDPOINT=https://hf-mirror.com", script)
+        self.assertIn("aria2c -c -x16 -s16 -k1M", script)
+        self.assertIn("http://images.cocodataset.org/zips/train2014.zip", script)
+        self.assertIn("https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcoco.zip", script)
+        self.assertIn("mmdatasdk.cmu_mosei", script)
+        self.assertIn("CMU-MultimodalSDK", script)
 
     def test_public_entry_requires_controlled_go_no_go_report(self):
         from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
