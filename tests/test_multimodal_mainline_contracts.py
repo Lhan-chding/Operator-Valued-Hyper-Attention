@@ -326,6 +326,32 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("provenance.feature_extractor_version must map strings to non-empty strings", joined)
         self.assertIn("provenance.pseudo_label_version must map strings to non-empty strings", joined)
 
+    def test_typed_batch_rejects_blank_provenance_and_version_strings(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import ProvenanceBank, validate_multimodal_batch_contract
+
+        batch = _static_batch(
+            provenance=ProvenanceBank(
+                source_id=["sample-0", "   "],
+                original_split=["train", "train"],
+                raw_ref=["shape", "\t"],
+                license_tag=["test", "\n"],
+                preprocessing_version="   ",
+                feature_extractor_version={"text": "   "},
+                pseudo_label_version={"teacher": "\t"},
+            )
+        )
+
+        report = validate_multimodal_batch_contract(batch)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("provenance.source_id entries must be non-empty strings", joined)
+        self.assertIn("provenance.raw_ref entries must be non-empty strings", joined)
+        self.assertIn("provenance.license_tag entries must be non-empty strings", joined)
+        self.assertIn("provenance.preprocessing_version must be a non-empty string", joined)
+        self.assertIn("provenance.feature_extractor_version must map strings to non-empty strings", joined)
+        self.assertIn("provenance.pseudo_label_version must map strings to non-empty strings", joined)
+
     def test_typed_batch_rejects_unmarked_weak_or_pseudo_supervision(self):
         from moat_ovha_torch.data.multimodal.typed_batch import SupervisionBank, validate_multimodal_batch_contract
 
