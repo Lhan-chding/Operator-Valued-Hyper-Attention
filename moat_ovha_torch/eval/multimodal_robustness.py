@@ -40,6 +40,7 @@ def summarize_robustness_rows(
     auc = {model: _auc_over_corruption(model_rows) for model, model_rows in by_model.items()}
     full_rows = sorted(by_model.get(full_model, []), key=lambda row: float(row["corruption_strength"]))
     reliability_monotonic = _non_increasing([float(row.get("rceo_reliability", 0.0)) for row in full_rows])
+    reliability_shift = _rceo_reliability_shift(full_rows)
     load_shift = _operator_load_shift(full_rows)
     required_ablation_degradation = _required_ablation_degradation(
         relative_drop,
@@ -57,6 +58,7 @@ def summarize_robustness_rows(
         "relative_drop": relative_drop,
         "auc_over_corruption_strength": auc,
         "rceo_reliability_monotonic": reliability_monotonic,
+        "rceo_reliability_shift": reliability_shift,
         "operator_load_shift": load_shift,
         "required_stress_coverage": required_stress_coverage,
         "required_ablation_degradation": required_ablation_degradation,
@@ -101,6 +103,17 @@ def _operator_load_shift(rows: list[dict[str, Any]]) -> dict[str, float]:
     last = rows[-1].get("router_load_by_candidate", {}) or {}
     names = sorted(set(first) | set(last))
     return {name: float(last.get(name, 0.0)) - float(first.get(name, 0.0)) for name in names}
+
+
+def _rceo_reliability_shift(rows: list[dict[str, Any]]) -> float | None:
+    if len(rows) < 2:
+        return None
+    try:
+        first = float(rows[0]["rceo_reliability"])
+        last = float(rows[-1]["rceo_reliability"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return last - first
 
 
 def _required_ablation_degradation(

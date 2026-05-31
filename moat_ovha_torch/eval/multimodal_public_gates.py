@@ -386,6 +386,7 @@ def _robustness_passes(
     summary_full_model = str(summary.get("full_model") or full_model)
     summary_baseline_model = str(summary.get("baseline_model") or baseline_model)
     metric_reasons = _robustness_metric_reasons(summary, summary_full_model, summary_baseline_model)
+    reliability_shift_reasons = _rceo_reliability_shift_reasons(summary.get("rceo_reliability_shift"))
     operator_load_shift_reasons = _operator_load_shift_reasons(summary.get("operator_load_shift"))
     passed = (
         bool(summary.get("full_drop_less_than_baseline"))
@@ -393,6 +394,7 @@ def _robustness_passes(
         and ablations_pass
         and coverage_pass
         and not metric_reasons
+        and not reliability_shift_reasons
         and not operator_load_shift_reasons
     )
     ablation_reasons = "; ".join(str(reason) for reason in ablations.get("reasons", ()) if reason)
@@ -403,6 +405,7 @@ def _robustness_passes(
     if not coverage_pass:
         reason_parts.append("robustness stress family coverage missing")
     reason_parts.extend(metric_reasons)
+    reason_parts.extend(reliability_shift_reasons)
     reason_parts.extend(operator_load_shift_reasons)
     if ablation_reasons:
         reason_parts.append(ablation_reasons)
@@ -445,6 +448,15 @@ def _robustness_metric_reasons(summary: dict[str, Any], full_model: str, baselin
                 reasons.append("robustness AUC over corruption strength values must be keyed by model and finite")
                 break
     return reasons
+
+
+def _rceo_reliability_shift_reasons(value: Any, *, minimum_drop: float = 0.05) -> list[str]:
+    shift = _finite_float(value)
+    if shift is None:
+        return ["robustness RCEO reliability shift missing"]
+    if shift > -minimum_drop:
+        return ["robustness RCEO reliability shift must be a finite negative drop under corruption"]
+    return []
 
 
 def _operator_load_shift_reasons(value: Any, *, minimum_abs_shift: float = 0.05) -> list[str]:
