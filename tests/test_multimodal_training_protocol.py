@@ -72,6 +72,48 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
         self.assertIn("hidden loss is controlled-only", joined)
         self.assertIn("weak reliability loss must be explicitly marked", joined)
 
+    def test_public_weak_losses_require_structured_marking_metadata(self):
+        from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
+
+        missing_metadata = validate_training_protocol(
+            {
+                "task_type": "sentiment_emotion",
+                "training_stages": ["T0", "T5"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T5": ["task_loss", "weak_rceo_unimodal_disagreement_marked"],
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+
+        self.assertFalse(missing_metadata.ok)
+        self.assertIn(
+            "weak loss requires structured marking metadata: weak_rceo_unimodal_disagreement_marked",
+            "\n".join(missing_metadata.errors),
+        )
+
+        marked = validate_training_protocol(
+            {
+                "task_type": "sentiment_emotion",
+                "training_stages": ["T0", "T5"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T5": ["task_loss", "weak_rceo_unimodal_disagreement_marked"],
+                },
+                "loss_metadata": {
+                    "weak_rceo_unimodal_disagreement_marked": {
+                        "supervision_type": "weak",
+                        "source": "unimodal_entropy_calibration_v1",
+                        "must_report_as": "weak",
+                    }
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+
+        self.assertTrue(marked.ok, marked.errors)
+
     def test_v1_adapter_params_reject_forbidden_v2_dynamic_params(self):
         from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
 
