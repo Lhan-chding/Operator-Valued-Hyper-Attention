@@ -171,6 +171,7 @@ def _run_public_training_smoke(
     diagnostic_history: list[dict[str, object]] = []
     eval_history: list[dict[str, object]] = []
     eval_diagnostic_history: list[dict[str, object]] = []
+    eval_baseline_history: list[dict[str, object]] = []
     parameter_deltas: dict[int, float] = {}
     max_grad_norm = 0.0
 
@@ -243,6 +244,16 @@ def _run_public_training_smoke(
                     **{name: _as_float(value) for name, value in eval_components.items()},
                 }
             )
+            eval_baseline_history.extend(
+                _public_smoke_baseline_history_rows(
+                    config,
+                    eval_batch,
+                    seed=seed,
+                    training_steps=int(args.train_smoke_steps),
+                    hardware=_hardware_metadata(device, seed_elapsed_seconds),
+                    seed_count_rationale=_seed_count_rationale(args.train_all_config_seeds),
+                )
+            )
             eval_diagnostic_history.append(
                 _public_training_diagnostics_row(eval_output, config, eval_batch, 0, seed, artifact_type="public_eval_diagnostics", stage="T5_eval")
             )
@@ -250,7 +261,14 @@ def _run_public_training_smoke(
     parameter_l2_delta_min = min(parameter_deltas.values()) if parameter_deltas else 0.0
     expected_steps = int(args.train_smoke_steps) * len(seed_values)
     artifacts = (
-        _write_training_artifacts(args.artifact_root, loss_history, diagnostic_history, eval_history, eval_diagnostic_history)
+        _write_training_artifacts(
+            args.artifact_root,
+            loss_history,
+            diagnostic_history,
+            eval_history,
+            eval_diagnostic_history,
+            eval_baseline_history,
+        )
         if args.artifact_root
         else {}
     )
@@ -275,6 +293,7 @@ def _run_public_training_smoke(
         "max_grad_norm": max_grad_norm,
         "eval_smoke_split": args.eval_smoke_split,
         "eval_smoke_rows": len(eval_history),
+        "eval_smoke_baseline_rows": len(eval_baseline_history),
         "stage_history": [
             {
                 "stage": "T0",
@@ -496,6 +515,7 @@ def _write_training_artifacts(
     diagnostic_history: list[dict[str, object]],
     eval_history: list[dict[str, object]],
     eval_diagnostic_history: list[dict[str, object]],
+    eval_baseline_history: list[dict[str, object]],
 ) -> dict[str, object]:
     artifact_root.mkdir(parents=True, exist_ok=True)
     metrics = artifact_root / "public_training_metrics.jsonl"
@@ -523,7 +543,107 @@ def _write_training_artifacts(
         artifacts["eval_metrics"] = {"path": str(eval_metrics), "sha256": file_sha256(eval_metrics)}
         artifacts["eval_diagnostics"] = {"path": str(eval_diagnostics), "sha256": file_sha256(eval_diagnostics)}
         artifacts["smoke_raw_metrics"] = {"path": str(smoke_raw_metrics), "sha256": file_sha256(smoke_raw_metrics)}
+    if eval_baseline_history:
+        smoke_baseline_metrics = artifact_root / "public_smoke_baseline_raw_metrics.jsonl"
+        baseline_raw_rows = _public_smoke_baseline_raw_metric_rows(
+            eval_baseline_history,
+            smoke_baseline_metrics,
+        )
+        smoke_baseline_metrics.write_text(
+            "\n".join(json.dumps(row, sort_keys=True) for row in baseline_raw_rows) + "\n"
+        )
+        artifacts["smoke_baseline_raw_metrics"] = {
+            "path": str(smoke_baseline_metrics),
+            "sha256": file_sha256(smoke_baseline_metrics),
+        }
     return artifacts
+
+
+def _public_smoke_baseline_history_rows(
+    config: MultimodalExperimentConfig,
+    batch: MultimodalEpisodeBatch,
+    *,
+    seed: int,
+    training_steps: int,
+    hardware: dict[str, object],
+    seed_count_rationale: str,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for baseline_name in config.baseline_names:
+        prediction = _same_feature_probe_prediction(str(baseline_name), batch)
+        rows.append(
+            {
+                "dataset": config.dataset_name,
+                "task": config.task_type,
+                "model": str(baseline_name),
+                "stage": "T5_eval_baseline_smoke",
+                "split": batch.split,
+                "seed": seed,
+                "metric_name": "heldout_task_loss_smoke",
+                "score": _as_float(_task_loss(prediction, batch)),
+                "higher_is_better": False,
+                "parameter_count": 0,
+                "training_steps": 0,
+                "ovha_reference_training_steps": training_steps,
+                "frozen_feature_extractor_version": dict(batch.provenance.feature_extractor_version),
+                "hardware": dict(hardware),
+                "label_provenance": _label_provenance_for_batch(batch),
+                "seed_count_rationale": seed_count_rationale,
+                "baseline_protocol": "deterministic_same_feature_probe_smoke",
+                "training_status": "not_trained",
+                "same_feature_source": True,
+            }
+        )
+    return rows
+
+
+def _same_feature_probe_prediction(model_name: str, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    target_dim = int(batch.target_y.shape[-1])
+    modality_names = _probe_modalities_for_model(model_name, tuple(batch.fields))
+    vectors = [
+        _adapt_feature_dim(_masked_field_mean(batch.fields[modality]), target_dim)
+        for modality in modality_names
+        if modality in batch.fields
+    ]
+    if not vectors:
+        batch_size = int(batch.target_y.shape[0])
+        base = torch.zeros(batch_size, target_dim, dtype=batch.target_y.dtype, device=batch.target_y.device)
+    else:
+        base = torch.stack(vectors, dim=0).mean(dim=0).to(dtype=batch.target_y.dtype, device=batch.target_y.device)
+    query_count = int(batch.target_y.shape[1])
+    return base.unsqueeze(1).expand(-1, query_count, -1).contiguous()
+
+
+def _probe_modalities_for_model(model_name: str, available: tuple[str, ...]) -> tuple[str, ...]:
+    available_set = set(available)
+    if model_name == "text_only" and "text" in available_set:
+        return ("text",)
+    if model_name == "region_only":
+        return tuple(name for name in ("region", "vision") if name in available_set) or available
+    if model_name in {"cato_only", "clip_style_region_text_retrieval"}:
+        region_like = tuple(name for name in ("region", "vision") if name in available_set)
+        return tuple(name for name in ("text", *region_like) if name in available_set) or available
+    return available
+
+
+def _masked_field_mean(field: TokenField) -> torch.Tensor:
+    weights = field.mask.to(dtype=field.x.dtype, device=field.x.device).unsqueeze(-1)
+    return (field.x * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
+
+
+def _adapt_feature_dim(features: torch.Tensor, target_dim: int) -> torch.Tensor:
+    feature_dim = int(features.shape[-1])
+    if feature_dim == target_dim:
+        return features
+    if feature_dim > target_dim:
+        return features[..., :target_dim]
+    pad = torch.zeros(
+        *features.shape[:-1],
+        target_dim - feature_dim,
+        dtype=features.dtype,
+        device=features.device,
+    )
+    return torch.cat([features, pad], dim=-1)
 
 
 def _public_smoke_raw_metric_rows(
@@ -560,6 +680,45 @@ def _public_smoke_raw_metric_rows(
             ],
         }
         for row in eval_history
+    ]
+
+
+def _public_smoke_baseline_raw_metric_rows(
+    eval_baseline_history: list[dict[str, object]],
+    raw_metric_path: Path,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "artifact_type": "public_smoke_baseline_raw_metric",
+            "evidence_scope": "same_feature_baseline_smoke_only_not_topconf_main_table",
+            "not_topconf_main_table": True,
+            "dataset": str(row["dataset"]),
+            "task": str(row["task"]),
+            "model": str(row["model"]),
+            "stage": str(row["stage"]),
+            "split": str(row["split"]),
+            "seed": int(row["seed"]),
+            "metric_name": str(row["metric_name"]),
+            "score": float(row["score"]),
+            "higher_is_better": bool(row["higher_is_better"]),
+            "parameter_count": int(row["parameter_count"]),
+            "training_steps": int(row["training_steps"]),
+            "ovha_reference_training_steps": int(row["ovha_reference_training_steps"]),
+            "frozen_feature_extractor_version": dict(row["frozen_feature_extractor_version"]),
+            "hardware": dict(row["hardware"]),
+            "label_provenance": dict(row["label_provenance"]),
+            "seed_count_rationale": str(row["seed_count_rationale"]),
+            "baseline_protocol": str(row["baseline_protocol"]),
+            "training_status": str(row["training_status"]),
+            "same_feature_source": bool(row["same_feature_source"]),
+            "raw_metric_path": str(raw_metric_path),
+            "evidence_limitations": [
+                "not a trained strong baseline",
+                "not a top-conference same-feature baseline comparison",
+                "deterministic probe only verifies baseline artifact plumbing and same-feature provenance",
+            ],
+        }
+        for row in eval_baseline_history
     ]
 
 
