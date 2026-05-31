@@ -30,6 +30,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "moat_ovha_torch" / "models" / "multimodal" / "ovha_multimodal.py",
             ROOT / "scripts" / "multimodal" / "validate_cache.py",
             ROOT / "scripts" / "multimodal" / "extract_cmu_sdk_stage_inputs.py",
+            ROOT / "scripts" / "multimodal" / "inspect_cmu_sdk_sequences.py",
         ]
         for path in expected:
             with self.subTest(path=path):
@@ -728,6 +729,73 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(manifest["temporal_policy"], "mean")
         self.assertIn("next", payload)
         self.assertTrue(validation.ok, validation.errors)
+
+    def test_inspect_cmu_sdk_sequences_cli_suggests_extract_command_from_download_dir(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sdk_root = tmp_path / "cmu_sdk" / "cmu_mosei"
+            sdk_root.mkdir(parents=True)
+            source_ids = ("mosei-train-1", "mosei-val-1", "mosei-test-1")
+            _write_cmu_sequence_json(
+                sdk_root / "BERT_text_features.json",
+                {source_id: np.ones((2, 4), dtype=np.float32) for source_id in source_ids},
+            )
+            _write_cmu_sequence_json(
+                sdk_root / "COVAREP_audio_features.json",
+                {source_id: np.ones((3, 2), dtype=np.float32) for source_id in source_ids},
+            )
+            _write_cmu_sequence_json(
+                sdk_root / "FACET_visual_features.json",
+                {source_id: np.ones((1, 5), dtype=np.float32) for source_id in source_ids},
+            )
+            _write_cmu_sequence_json(
+                sdk_root / "Opinion_Labels.json",
+                {source_id: np.array([[0.5, *np.eye(7, dtype=np.float32)[0]]], dtype=np.float32) for source_id in source_ids},
+            )
+            splits = sdk_root / "splits.json"
+            splits.write_text(
+                json.dumps({"train": ["mosei-train-1"], "val": ["mosei-val-1"], "test": ["mosei-test-1"]}, sort_keys=True)
+                + "\n"
+            )
+            output = tmp_path / "inspection.json"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "inspect_cmu_sdk_sequences.py"),
+                    "cmu_mosei",
+                    str(sdk_root),
+                    "--splits",
+                    str(splits),
+                    "--stage-output-dir",
+                    "data/raw_multimodal/_downloads/cmu_mosei_stage_inputs",
+                    "--temporal-policy",
+                    "mean",
+                    "--preprocessing-version",
+                    "unit-cmu-sdk-mean-v1",
+                    "--output",
+                    str(output),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(result.stdout) if result.stdout.strip() else {}
+            written = json.loads(output.read_text()) if output.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["sequence_count"], 4)
+        self.assertEqual(payload["suggested_roles"]["text"]["path"], str(sdk_root / "BERT_text_features.json"))
+        self.assertEqual(payload["suggested_roles"]["audio"]["path"], str(sdk_root / "COVAREP_audio_features.json"))
+        self.assertEqual(payload["suggested_roles"]["vision"]["path"], str(sdk_root / "FACET_visual_features.json"))
+        self.assertEqual(payload["suggested_roles"]["labels"]["path"], str(sdk_root / "Opinion_Labels.json"))
+        self.assertIn("scripts/multimodal/extract_cmu_sdk_stage_inputs.py", payload["suggested_extract_command"])
+        self.assertIn("--text-sequence", payload["suggested_extract_command"])
+        self.assertEqual(written["suggested_roles"], payload["suggested_roles"])
 
     def test_build_cache_cli_writes_valid_meld_cache_from_dialogue_manifest(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
