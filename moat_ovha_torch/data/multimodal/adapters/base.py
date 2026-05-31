@@ -35,6 +35,7 @@ class SupervisionShard:
     bbox_targets_path: Path | None = None
     region_targets_path: Path | None = None
     timestamp_targets_path: Path | None = None
+    modality_missing_mask_path: Path | None = None
     corruption_metadata_path: Path | None = None
     weak_labels_path: Path | None = None
 

@@ -50,7 +50,12 @@ class CMUMOSEIAdapter:
 
     def extract_supervision(self, rows, split: str) -> SupervisionShard:
         root = Path(rows["cache_root"]) if isinstance(rows, dict) and "cache_root" in rows else Path(".")
-        return SupervisionShard(split=split, task_label_path=root / f"sentiment_{split}.npy", corruption_metadata_path=root / f"corruption_{split}.parquet")
+        return SupervisionShard(
+            split=split,
+            task_label_path=root / f"sentiment_{split}.npy",
+            modality_missing_mask_path=root / f"missing_modality_mask_{split}.npy",
+            corruption_metadata_path=root / f"corruption_{split}.parquet",
+        )
 
     def write_cache(self, cache_root: Path, split: str) -> None:
         raise NotImplementedError("CMU-MOSEI cache writing requires frozen text/audio/visual features; use scripts/multimodal/build_cache.py")

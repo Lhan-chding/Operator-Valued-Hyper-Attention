@@ -49,7 +49,12 @@ class RefCOCOAdapter:
 
     def extract_supervision(self, rows, split: str) -> SupervisionShard:
         root = Path(rows["cache_root"]) if isinstance(rows, dict) and "cache_root" in rows else Path(".")
-        return SupervisionShard(split=split, alignment_pairs_path=root / f"alignment_pairs_{split}.parquet", bbox_targets_path=root / f"bbox_targets_{split}.npy")
+        return SupervisionShard(
+            split=split,
+            alignment_pairs_path=root / f"alignment_pairs_{split}.parquet",
+            bbox_targets_path=root / f"bbox_targets_{split}.npy",
+            region_targets_path=root / f"region_targets_{split}.npy",
+        )
 
     def write_cache(self, cache_root: Path, split: str) -> None:
         raise NotImplementedError("RefCOCO cache writing requires raw annotations and frozen feature files; use scripts/multimodal/build_cache.py")
