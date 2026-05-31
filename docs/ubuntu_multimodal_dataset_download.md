@@ -427,6 +427,10 @@ hf download reeha-parkar/cmu-mosei-comp-seq \
 CMU SDK 下载完成后，先检查下载目录里的 `.csd` / `.h5` / `.json` sequence 文件。这个检查脚本会列出 sample count、feature shape，并按文件名给出 text/audio/vision/labels 候选和下一条 extract 命令；正式执行前仍要人工审阅候选是否符合你选定的特征方案：
 
 ```bash
+python scripts/multimodal/write_cmu_sdk_splits.py \
+  cmu_mosei \
+  data/raw_multimodal/_downloads/cmu_mosei_splits.json
+
 python scripts/multimodal/inspect_cmu_sdk_sequences.py \
   cmu_mosei \
   data/raw_multimodal/_downloads/cmu_sdk/cmu_mosei \
