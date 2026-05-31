@@ -4,24 +4,22 @@ from collections import defaultdict
 from typing import Any
 
 
-DEFAULT_REQUIRED_STRESS_FAMILIES = {
+DEFAULT_REQUIRED_STRESS_TARGETS = {
     "missing_text": ("missing_text", "text_missing"),
     "missing_vision": ("missing_vision", "missing_visual", "vision_missing", "visual_missing"),
     "missing_audio": ("missing_audio", "audio_missing"),
-    "image_quality": ("image_blur", "image_crop", "image_occlusion", "visual_blur", "visual_crop", "visual_occlusion"),
-    "audio_quality": ("audio_noise", "audio_masking", "audio_mask"),
-    "text_noise": ("text_token_mask", "text_mask", "paraphrase_noise", "text_paraphrase"),
-    "hard_negative_mismatch": (
-        "hard_negative_mismatch",
-        "hard_negative_caption_mismatch",
-        "hard_negative_region_mismatch",
-        "hard_negative_audio_mismatch",
-        "caption_mismatch",
-        "region_mismatch",
-        "audio_mismatch",
-    ),
+    "image_blur": ("image_blur", "visual_blur"),
+    "image_crop": ("image_crop", "visual_crop"),
+    "image_occlusion": ("image_occlusion", "visual_occlusion"),
+    "audio_noise": ("audio_noise",),
+    "audio_masking": ("audio_masking", "audio_mask"),
+    "text_token_mask": ("text_token_mask", "text_mask"),
+    "text_paraphrase": ("paraphrase_noise", "text_paraphrase"),
+    "hard_negative_caption_mismatch": ("hard_negative_caption_mismatch", "caption_mismatch"),
+    "hard_negative_region_mismatch": ("hard_negative_region_mismatch", "region_mismatch"),
+    "hard_negative_audio_mismatch": ("hard_negative_audio_mismatch", "audio_mismatch"),
 }
-TEMPORAL_STRESS_FAMILIES = {"temporal_shift": ("temporal_shift", "temporal_shift_sec")}
+TEMPORAL_STRESS_TARGETS = {"temporal_shift": ("temporal_shift", "temporal_shift_sec")}
 
 
 def summarize_robustness_rows(
@@ -184,17 +182,17 @@ def _required_stress_coverage(
     required_stress_families: dict[str, tuple[str, ...]] | None,
     temporal_data: bool,
 ) -> dict[str, Any]:
-    required = dict(required_stress_families or DEFAULT_REQUIRED_STRESS_FAMILIES)
+    required = dict(required_stress_families or DEFAULT_REQUIRED_STRESS_TARGETS)
     if temporal_data:
-        required.update(TEMPORAL_STRESS_FAMILIES)
+        required.update(TEMPORAL_STRESS_TARGETS)
     observed = _observed_stress_families(rows, required)
-    missing = sorted(family for family in required if family not in observed)
+    missing = sorted(target for target in required if target not in observed)
     return {
         "passed": not missing,
         "observed": sorted(observed),
         "required": sorted(required),
-        "condition": "robustness rows must cover every required Step 6 stress family",
-        "reasons": [f"missing robustness stress family: {family}" for family in missing],
+        "condition": "robustness rows must cover every required Step 6 stress target",
+        "reasons": [f"missing robustness stress target: {target}" for target in missing],
     }
 
 
@@ -210,11 +208,10 @@ def _observed_stress_families(
     }
     for row in rows:
         corruption_type = _normalize_stress_name(row.get("corruption_type", ""))
-        if corruption_type in alias_to_family:
-            observed.add(alias_to_family[corruption_type])
+        target = alias_to_family.get(corruption_type)
+        if target is not None and (not _requires_mismatch_source(target) or _has_mismatch_metadata(row)):
+            observed.add(target)
         observed.update(_families_from_missing_modalities(row, alias_to_family))
-        if _has_mismatch_metadata(row):
-            observed.add("hard_negative_mismatch")
         if _has_temporal_shift(row):
             observed.add("temporal_shift")
     return observed
@@ -234,10 +231,11 @@ def _families_from_missing_modalities(row: dict[str, Any], alias_to_family: dict
 
 def _has_mismatch_metadata(row: dict[str, Any]) -> bool:
     mismatch = row.get("mismatch_source_id")
-    if isinstance(mismatch, str) and mismatch:
-        return True
-    corruption_type = _normalize_stress_name(row.get("corruption_type", ""))
-    return "mismatch" in corruption_type or "hard_negative" in corruption_type
+    return isinstance(mismatch, str) and bool(mismatch.strip())
+
+
+def _requires_mismatch_source(target: str) -> bool:
+    return target.startswith("hard_negative_") and target.endswith("_mismatch")
 
 
 def _has_temporal_shift(row: dict[str, Any]) -> bool:

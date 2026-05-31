@@ -498,10 +498,10 @@ class MultimodalControlledReportingTests(unittest.TestCase):
 
         self.assertFalse(summary["required_stress_coverage"]["passed"])
         joined = "\n".join(summary["required_stress_coverage"]["reasons"])
-        self.assertIn("missing robustness stress family: missing_text", joined)
-        self.assertIn("missing robustness stress family: missing_vision", joined)
-        self.assertIn("missing robustness stress family: audio_quality", joined)
-        self.assertIn("missing robustness stress family: hard_negative_mismatch", joined)
+        self.assertIn("missing robustness stress target: missing_text", joined)
+        self.assertIn("missing robustness stress target: missing_vision", joined)
+        self.assertIn("missing robustness stress target: audio_noise", joined)
+        self.assertIn("missing robustness stress target: hard_negative_caption_mismatch", joined)
 
     def test_robustness_summary_requires_each_plan_stress_transform(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
@@ -542,9 +542,15 @@ class MultimodalControlledReportingTests(unittest.TestCase):
             _stress_row("missing_modality", missing_modalities=["vision"]),
             _stress_row("missing_modality", missing_modalities=["audio"]),
             _stress_row("image_blur"),
+            _stress_row("image_crop"),
+            _stress_row("image_occlusion"),
             _stress_row("audio_noise"),
+            _stress_row("audio_masking"),
             _stress_row("text_token_mask"),
-            _stress_row("hard_negative_mismatch", mismatch_source_id="other-sample"),
+            _stress_row("text_paraphrase"),
+            _stress_row("hard_negative_caption_mismatch", mismatch_source_id="other-caption"),
+            _stress_row("hard_negative_region_mismatch", mismatch_source_id="other-region"),
+            _stress_row("hard_negative_audio_mismatch", mismatch_source_id="other-audio"),
             _stress_row("temporal_shift", temporal_shift_sec=1.2),
         ]
 
