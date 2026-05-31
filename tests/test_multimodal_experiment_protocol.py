@@ -1181,6 +1181,44 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_topconf_main_entry_rejects_controlled_report_stackability_disagreeing_with_artifacts(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+
+            controlled_report = _complete_controlled_public_entry_report(tmp_path / "controlled_artifacts")
+            controlled_report["families"]["tleo_local_evidence"]["stackability_passed"] = False
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=controlled_report,
+                region_gate_report=_passing_region_text_public_gate_report(tmp_path / "artifacts"),
+                sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "controlled report tleo_local_evidence.stackability_passed disagrees with artifact recomputation",
+            "\n".join(report.errors),
+        )
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
