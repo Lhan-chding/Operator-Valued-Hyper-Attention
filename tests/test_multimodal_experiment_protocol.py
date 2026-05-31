@@ -401,6 +401,84 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(payload["phases"]["public_smoke"]["eval_smoke_rows"], 1)
         self.assertTrue(smoke_payload_exists)
 
+    def test_public_data_acceptance_summary_exposes_multiseed_baseline_artifact_bundle(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for public data acceptance smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_root = tmp_path / "raw_refcoco"
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "acceptance_artifacts"
+            _write_valid_refcoco_raw_manifest(raw_root)
+            controlled_report_path = tmp_path / "controlled_report.json"
+            controlled_report_path.write_text(
+                json.dumps(_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"), sort_keys=True) + "\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "accept_public_data.py"),
+                    str(ROOT / "configs" / "multimodal_refcoco_public_smoke.json"),
+                    "--raw-root",
+                    str(raw_root),
+                    "--cache-root",
+                    str(cache_root),
+                    "--controlled-report",
+                    str(controlled_report_path),
+                    "--train-smoke-steps",
+                    "1",
+                    "--train-baseline-smoke-steps",
+                    "1",
+                    "--train-all-config-seeds",
+                    "--train-split",
+                    "train",
+                    "--eval-smoke-split",
+                    "val",
+                    "--artifact-root",
+                    str(artifact_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            public_smoke = payload["phases"]["public_smoke"]
+
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(public_smoke["seed_count"], 3)
+        self.assertEqual(public_smoke["seeds"], [201, 202, 203])
+        self.assertEqual(public_smoke["optimizer_steps"], 3)
+        self.assertEqual(public_smoke["eval_smoke_rows"], 3)
+        self.assertEqual(public_smoke["eval_smoke_baseline_rows"], 30)
+        self.assertEqual(public_smoke["baseline_training_status"], "trained_smoke")
+        self.assertEqual(public_smoke["baseline_smoke_training_steps"], 1)
+        self.assertEqual(public_smoke["baseline_optimizer_steps"], 30)
+        self.assertIn("smoke_raw_metrics", public_smoke["artifacts"])
+        self.assertIn("smoke_baseline_raw_metrics", public_smoke["artifacts"])
+        self.assertIn("smoke_statistics_preview", public_smoke["artifacts"])
+        self.assertIn("smoke_robustness_summary", public_smoke["artifacts"])
+        self.assertIn("smoke_robustness_rows", public_smoke["artifacts"])
+
+    def test_ubuntu_public_acceptance_commands_request_multiseed_and_baseline_smoke(self):
+        guide = (ROOT / "docs" / "ubuntu_multimodal_dataset_download.md").read_text()
+
+        for marker in (
+            "RefCOCO public acceptance",
+            "CMU-MOSEI public acceptance",
+        ):
+            start = guide.index(marker)
+            end = guide.index("```", guide.index("```bash", start) + len("```bash"))
+            block = guide[start:end]
+            with self.subTest(marker=marker):
+                self.assertIn("--train-all-config-seeds", block)
+                self.assertIn("--train-baseline-smoke-steps", block)
+                self.assertIn("1", block)
+
     def test_public_entry_requires_controlled_go_no_go_report(self):
         from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
 

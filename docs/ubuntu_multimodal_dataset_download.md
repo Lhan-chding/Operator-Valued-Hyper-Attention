@@ -459,10 +459,11 @@ python scripts/multimodal/accept_public_data.py \
   --cache-root data/multimodal_cache \
   --controlled-report outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json \
   --train-smoke-steps 1 \
+  --train-baseline-smoke-steps 1 \
+  --train-all-config-seeds \
   --train-split train \
   --eval-smoke-split val \
-  --artifact-root outputs/multimodal/refcoco_public_acceptance_seed201 \
-  --seed 201
+  --artifact-root outputs/multimodal/refcoco_public_acceptance_multiseed
 ```
 
 CMU-MOSEI public acceptance：
@@ -474,13 +475,14 @@ python scripts/multimodal/accept_public_data.py \
   --cache-root data/multimodal_cache \
   --controlled-report outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json \
   --train-smoke-steps 1 \
+  --train-baseline-smoke-steps 1 \
+  --train-all-config-seeds \
   --train-split train \
   --eval-smoke-split val \
-  --artifact-root outputs/multimodal/cmu_mosei_public_acceptance_seed301 \
-  --seed 301
+  --artifact-root outputs/multimodal/cmu_mosei_public_acceptance_multiseed
 ```
 
-这一步仍然只是 public smoke acceptance，不是顶会主表。主表必须继续补齐强 baseline、multi-seed、统计检验和 robustness stress。
+这一步会跑配置里的 3 个开发种子，并为同特征 baseline 训练一轮 smoke probe，产出 raw metrics、diagnostics、statistics preview 和 robustness preview。它仍然只是 public smoke acceptance，不是顶会主表；主表必须继续补齐强 baseline、完整 multi-seed、统计检验和真实 robustness stress。
 
 ## 6. 速度与稳定性建议
 

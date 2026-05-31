@@ -125,10 +125,19 @@ def accept_public_data(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 
     if int(args.train_smoke_steps) > 0:
         smoke_payload = _public_smoke_payload(config, layout, args)
+        smoke_training = smoke_payload["training"]
         phases["public_smoke"] = {
             "ok": bool(smoke_payload["ok"]),
-            "optimizer_steps": int(smoke_payload["training"]["optimizer_steps"]),
-            "eval_smoke_rows": int(smoke_payload["training"]["eval_smoke_rows"]),
+            "seed_count": len(smoke_training["seeds"]),
+            "seeds": list(smoke_training["seeds"]),
+            "optimizer_steps": int(smoke_training["optimizer_steps"]),
+            "optimizer_steps_per_seed": int(smoke_training["optimizer_steps_per_seed"]),
+            "eval_smoke_rows": int(smoke_training["eval_smoke_rows"]),
+            "eval_smoke_baseline_rows": int(smoke_training["eval_smoke_baseline_rows"]),
+            "baseline_training_status": str(smoke_training["baseline_training_status"]),
+            "baseline_smoke_training_steps": int(smoke_training["baseline_smoke_training_steps"]),
+            "baseline_optimizer_steps": int(smoke_training["baseline_optimizer_steps"]),
+            "artifacts": dict(smoke_training["artifacts"]),
             "artifact_root": str(args.artifact_root) if args.artifact_root else None,
         }
         if args.artifact_root is not None:
