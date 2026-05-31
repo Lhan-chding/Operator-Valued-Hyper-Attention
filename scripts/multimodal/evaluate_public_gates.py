@@ -196,6 +196,7 @@ def _robustness_rows_consistency_errors(
         "required_stress_coverage",
         "required_ablation_degradation",
         "rceo_reliability_calibration",
+        "robustness_significance",
     ):
         if field in supplied_summary and field in recomputed:
             _append_mismatch_errors(

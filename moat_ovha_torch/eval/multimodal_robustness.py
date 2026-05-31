@@ -59,6 +59,11 @@ def summarize_robustness_rows(
         full_model,
         required_ablation_models,
     )
+    robustness_significance = _robustness_significance(
+        by_model,
+        full_model=full_model,
+        baseline_model=baseline_model,
+    )
     required_stress_coverage = _required_stress_coverage(
         rows,
         required_stress_families=required_stress_families,
@@ -79,6 +84,7 @@ def summarize_robustness_rows(
         "candidate_loss_shift": candidate_loss_shift,
         "required_stress_coverage": required_stress_coverage,
         "required_ablation_degradation": required_ablation_degradation,
+        "robustness_significance": robustness_significance,
         "full_drop_less_than_baseline": relative_drop.get(full_model, float("inf")) < relative_drop.get(baseline_model, float("-inf")),
     }
 
@@ -268,6 +274,95 @@ def _required_ablation_degradation(
         "condition": "required robustness ablations must show larger relative drop than ovha_full",
         "reasons": reasons,
     }
+
+
+def _robustness_significance(
+    by_model: dict[str, list[dict[str, Any]]],
+    *,
+    full_model: str,
+    baseline_model: str,
+) -> dict[str, Any]:
+    full_by_seed = _relative_drop_by_seed(by_model.get(full_model, []))
+    baseline_by_seed = _relative_drop_by_seed(by_model.get(baseline_model, []))
+    common = sorted(set(full_by_seed) & set(baseline_by_seed))
+    per_seed = [
+        {
+            "seed": seed,
+            "full_relative_drop": full_by_seed[seed],
+            "baseline_relative_drop": baseline_by_seed[seed],
+            "drop_delta": baseline_by_seed[seed] - full_by_seed[seed],
+        }
+        for seed in common
+    ]
+    deltas = [row["drop_delta"] for row in per_seed]
+    drop_delta = _mean(deltas) if deltas else None
+    return {
+        "model_delta": f"{baseline_model}_relative_drop_minus_{full_model}_relative_drop",
+        "metric": "relative_drop_delta",
+        "delta_interpretation": f"positive means {full_model} drops less under robustness stress",
+        "common_seed_count": len(common),
+        "drop_delta": drop_delta,
+        "paired_permutation_p": _paired_sign_permutation_p(deltas),
+        "paired_bootstrap_ci95": list(_bootstrap_ci95(deltas)),
+        "per_seed_drop_delta": per_seed,
+    }
+
+
+def _relative_drop_by_seed(rows: list[dict[str, Any]]) -> dict[int, float]:
+    grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        seed = _seed_value(row.get("seed"))
+        if seed is not None:
+            grouped[seed].append(row)
+    drops: dict[int, float] = {}
+    for seed, seed_rows in grouped.items():
+        drop = _relative_drop(seed_rows)
+        if math.isfinite(drop):
+            drops[seed] = drop
+    return drops
+
+
+def _seed_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / max(len(values), 1)
+
+
+def _paired_sign_permutation_p(deltas: list[float]) -> float:
+    if not deltas:
+        return 1.0
+    observed = abs(sum(deltas))
+    total = 2 ** len(deltas)
+    extreme = 0
+    for mask in range(total):
+        signed_sum = 0.0
+        for index, delta in enumerate(deltas):
+            signed_sum += delta if mask & (1 << index) else -delta
+        if abs(signed_sum) >= observed - 1e-12:
+            extreme += 1
+    return extreme / total
+
+
+def _bootstrap_ci95(deltas: list[float]) -> tuple[float, float]:
+    if not deltas:
+        return (0.0, 0.0)
+    if len(deltas) == 1:
+        return (deltas[0], deltas[0])
+    means = []
+    for start in range(len(deltas)):
+        sample = [deltas[(start + offset) % len(deltas)] for offset in range(len(deltas))]
+        means.append(_mean(sample))
+    means = sorted(means)
+    low_index = int(0.025 * (len(means) - 1))
+    high_index = int(0.975 * (len(means) - 1))
+    return (means[low_index], means[high_index])
 
 
 def _required_stress_coverage(

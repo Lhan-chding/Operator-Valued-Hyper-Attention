@@ -952,6 +952,7 @@ def _validate_robustness_summary_matches_rows(
         "required_stress_coverage",
         "required_ablation_degradation",
         "rceo_reliability_calibration",
+        "robustness_significance",
     ):
         if field not in recomputed:
             continue
