@@ -256,10 +256,31 @@ def _controlled_report_phase(path: Path) -> dict[str, Any]:
         payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         return {"ok": False, "path": str(path), "errors": [str(exc)]}
+    report = _controlled_report_payload(payload)
     reported_ok = bool(payload.get("ok")) if isinstance(payload, dict) else False
-    if not reported_ok:
-        return {"ok": False, "path": str(path), "reported_ok": reported_ok, "errors": ["controlled report ok is not true"]}
-    return {"ok": True, "path": str(path), "reported_ok": reported_ok}
+    go_no_go = report.get("go_no_go", {}) if isinstance(report, dict) else {}
+    go_no_go_ok = (
+        isinstance(go_no_go, dict)
+        and go_no_go.get("controlled_multimodal_passed") is True
+        and go_no_go.get("enter_public_multimodal") is True
+        and go_no_go.get("reasons", []) == []
+    )
+    if not (reported_ok or go_no_go_ok):
+        return {
+            "ok": False,
+            "path": str(path),
+            "reported_ok": reported_ok,
+            "go_no_go_ok": go_no_go_ok,
+            "errors": ["controlled report must have ok=true or go_no_go public-entry flags true with empty reasons"],
+        }
+    return {"ok": True, "path": str(path), "reported_ok": reported_ok, "go_no_go_ok": go_no_go_ok}
+
+
+def _controlled_report_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    nested = payload.get("controlled_report")
+    return nested if isinstance(nested, dict) else payload
 
 
 def _next_commands_for_dataset(
@@ -273,6 +294,8 @@ def _next_commands_for_dataset(
     all_datasets: list[str],
 ) -> list[str]:
     commands: list[str] = []
+    if phases["cache"]["ok"]:
+        return [_acceptance_command(dataset_name, raw_root, cache_root, controlled_report)]
     if _needs_download_command(dataset_name, phases):
         commands.append(_bootstrap_command(all_datasets, download_root))
 
