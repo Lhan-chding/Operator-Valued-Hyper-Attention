@@ -344,6 +344,52 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
             "\n".join(validation.errors),
         )
 
+    def test_public_summary_rejects_invalid_plan_metric_ranges(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        region_rows = _metric_rows()
+        for row in region_rows:
+            row["public_metrics"] = dict(row["public_metrics"])
+            if row["model"] == "ovha_full" and row["seed"] == 11:
+                row["public_metrics"]["acc_at_0_5"] = 1.2
+                row["public_metrics"]["cato_candidate_loss"] = -0.01
+        region_summary = summarize_public_results(
+            region_rows,
+            full_model="ovha_full",
+            baseline_model="cross_attention_transformer",
+        )
+
+        sentiment_rows = _lower_is_better_sentiment_rows()
+        for row in sentiment_rows:
+            row["public_metrics"] = dict(row["public_metrics"])
+            if row["model"] == "ovha_full" and row["seed"] == 11:
+                row["public_metrics"]["pearson_correlation"] = 1.2
+        sentiment_summary = summarize_public_results(
+            sentiment_rows,
+            full_model="ovha_full",
+            baseline_model="cross_attention_transformer",
+        )
+
+        region_validation = validate_public_summary(region_summary)
+        sentiment_validation = validate_public_summary(sentiment_summary)
+
+        self.assertFalse(region_validation.ok)
+        self.assertFalse(sentiment_validation.ok)
+        region_errors = "\n".join(region_validation.errors)
+        sentiment_errors = "\n".join(sentiment_validation.errors)
+        self.assertIn(
+            "phrase_region_grounding/test/ovha_full/seed=11 public metric acc_at_0_5 must be in [0, 1]",
+            region_errors,
+        )
+        self.assertIn(
+            "phrase_region_grounding/test/ovha_full/seed=11 public metric cato_candidate_loss must be finite non-negative",
+            region_errors,
+        )
+        self.assertIn(
+            "sentiment_emotion/test/ovha_full/seed=11 public metric pearson_correlation must be in [-1, 1]",
+            sentiment_errors,
+        )
+
     def test_public_summary_cli_emits_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             metrics_path = Path(tmp) / "metrics.jsonl"
