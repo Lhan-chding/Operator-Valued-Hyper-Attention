@@ -1504,6 +1504,67 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "topconf_main_entry_validation")
         self.assertEqual(payload["cache_targets"], ["cmu_mosei", "refcoco"])
 
+    def test_topconf_main_entry_cli_accepts_public_gate_bundle_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "artifacts"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+            controlled_report_path = tmp_path / "controlled_report.json"
+            controlled_report_path.write_text(
+                json.dumps(_complete_controlled_public_entry_report(artifact_root / "controlled"), sort_keys=True) + "\n"
+            )
+            region_bundle = _build_public_gate_bundle_fixture(
+                tmp_path,
+                gate="region_text",
+                task="phrase_region_grounding",
+            )
+            sentiment_bundle = _build_public_gate_bundle_fixture(
+                tmp_path,
+                gate="sentiment",
+                task="sentiment_emotion",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "validate_topconf_entry.py"),
+                    "--controlled-report",
+                    str(controlled_report_path),
+                    "--region-gate-bundle",
+                    str(region_bundle),
+                    "--sentiment-gate-bundle",
+                    str(sentiment_bundle),
+                    "--cache-target",
+                    "refcoco",
+                    str(cache_root),
+                    "refcoco",
+                    "v0.1",
+                    "val,test",
+                    "--cache-target",
+                    "cmu_mosei",
+                    str(cache_root),
+                    "cmu_mosei",
+                    "v0.1",
+                    "val,test",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "topconf_main_entry_validation")
+        self.assertEqual(payload["gate_sources"]["region_text_public"], str(region_bundle / "region_text_gate_report.json"))
+        self.assertEqual(
+            payload["gate_sources"]["sentiment_emotion_public"],
+            str(sentiment_bundle / "sentiment_gate_report.json"),
+        )
+
     def test_topconf_main_entry_cli_rejects_missing_required_cache_family(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -3791,6 +3852,50 @@ def _canonical_stress_rows() -> list[dict[str, object]]:
             "mismatch_source_id": "other-audio",
         },
     ]
+
+
+def _build_public_gate_bundle_fixture(tmp_path: Path, *, gate: str, task: str) -> Path:
+    bundle_root = tmp_path / f"{gate}_bundle"
+    raw_metrics_path = tmp_path / f"{gate}_raw_metrics.jsonl"
+    diagnostics_path = tmp_path / f"{gate}_diagnostics.jsonl"
+    robustness_rows_path = tmp_path / f"{gate}_robustness_rows.jsonl"
+    raw_rows = [
+        {**row, "higher_is_better": True}
+        for row in _gate_statistics_summary(task, raw_metrics_path)["per_seed_appendix"]
+    ]
+    raw_metrics_path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in raw_rows) + "\n")
+    diagnostics_path.write_text(
+        "\n".join(json.dumps(row, sort_keys=True) for row in _gate_diagnostic_rows(task)) + "\n"
+    )
+    robustness_rows_path.write_text(
+        "\n".join(json.dumps(row, sort_keys=True) for row in _gate_robustness_rows()) + "\n"
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "multimodal" / "build_public_gate_report.py"),
+            gate,
+            "--raw-metrics",
+            str(raw_metrics_path),
+            "--diagnostics",
+            str(diagnostics_path),
+            "--robustness-rows",
+            str(robustness_rows_path),
+            "--task",
+            task,
+            "--split",
+            "test",
+            "--output-dir",
+            str(bundle_root),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(result.stdout + result.stderr)
+    return bundle_root
 
 
 def _complete_diagnostic_row() -> dict[str, object]:

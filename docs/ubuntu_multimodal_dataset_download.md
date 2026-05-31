@@ -508,7 +508,16 @@ python scripts/multimodal/build_public_gate_report.py sentiment \
   --output-dir outputs/multimodal/cmu_mosei_main/gate_bundle
 ```
 
-两个 gate bundle 都通过后，再把 `gate_report.json` 交给 `validate_topconf_entry.py` 做最终主实验入口验证。
+两个 gate bundle 都通过后，用 bundle 目录直接做最终主实验入口验证：
+
+```bash
+python scripts/multimodal/validate_topconf_entry.py \
+  --controlled-report outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json \
+  --region-gate-bundle outputs/multimodal/refcoco_main/gate_bundle \
+  --sentiment-gate-bundle outputs/multimodal/cmu_mosei_main/gate_bundle \
+  --cache-target refcoco data/multimodal_cache refcoco v0.1 val,test \
+  --cache-target cmu_mosei data/multimodal_cache cmu_mosei v0.1 val,test
+```
 
 ## 6. 速度与稳定性建议
 
