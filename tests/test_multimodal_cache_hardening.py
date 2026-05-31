@@ -116,6 +116,31 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_failed_sample_retained_in_another_split(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+            )
+            (layout.root / "provenance" / "failed_samples_train.jsonl").write_text(
+                json.dumps({"source_id": "test-source", "split": "train", "reason": "download_failed"}, sort_keys=True)
+                + "\n"
+            )
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "failed_samples_train.jsonl source_id must not also appear in retained test split source ids: test-source",
+            "\n".join(report.errors),
+        )
+
     def test_cache_validator_rejects_malformed_sample_provenance_manifest_entry(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
