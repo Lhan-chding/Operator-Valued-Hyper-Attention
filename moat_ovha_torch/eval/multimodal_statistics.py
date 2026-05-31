@@ -7,6 +7,43 @@ from typing import Any
 from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
 
 
+REGION_TEXT_REQUIRED_PUBLIC_METRICS = (
+    "acc_at_0_5",
+    "recall_at_1",
+    "recall_at_5",
+    "mean_iou",
+    "phrase_region_topk_accuracy",
+    "alignment_entropy",
+    "cato_router_load",
+    "cato_candidate_loss",
+    "cato_top_alignment_accuracy",
+    "null_unmatched_rate",
+)
+SENTIMENT_REQUIRED_PUBLIC_METRICS = (
+    "mae",
+    "pearson_correlation",
+    "accuracy",
+    "f1",
+    "missing_modality_performance_drop",
+    "corruption_robustness_auc",
+    "router_load_by_corruption_type",
+    "lrio_rank_entropy",
+    "spo_prototype_entropy",
+    "rceo_reliability_calibration",
+)
+REQUIRED_PUBLIC_METRICS_BY_TASK = {
+    "phrase_region_grounding": REGION_TEXT_REQUIRED_PUBLIC_METRICS,
+    "region_text_grounding": REGION_TEXT_REQUIRED_PUBLIC_METRICS,
+    "refcoco": REGION_TEXT_REQUIRED_PUBLIC_METRICS,
+    "flickr30k_entities": REGION_TEXT_REQUIRED_PUBLIC_METRICS,
+    "sentiment_emotion": SENTIMENT_REQUIRED_PUBLIC_METRICS,
+    "sentiment_regression": SENTIMENT_REQUIRED_PUBLIC_METRICS,
+    "emotion_classification": SENTIMENT_REQUIRED_PUBLIC_METRICS,
+    "cmu_mosei": SENTIMENT_REQUIRED_PUBLIC_METRICS,
+    "meld": SENTIMENT_REQUIRED_PUBLIC_METRICS,
+}
+
+
 @dataclass(frozen=True)
 class PublicSummaryValidationReport:
     ok: bool
@@ -102,6 +139,7 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
     _validate_report_facing_metadata(summary, errors)
     _validate_baseline_strength(summary.get("paired_tests", {}), metadata, errors)
     _validate_label_provenance(summary.get("per_seed_appendix", []), metadata, errors)
+    _validate_public_metric_inventory(summary.get("per_seed_appendix", []), errors)
     if not summary.get("per_seed_appendix"):
         errors.append("per_seed_appendix missing")
     return PublicSummaryValidationReport(ok=not errors, errors=errors, warnings=warnings)
@@ -280,6 +318,58 @@ def _validate_label_provenance(
         supervision_type, _ = _row_label_provenance(row)
         if supervision_type in {"weak", "pseudo"} and supervision_type not in metadata_provenance:
             errors.append(f"metadata.label_provenance missing {supervision_type} supervision summary")
+
+
+def _validate_public_metric_inventory(appendix_rows: Any, errors: list[str]) -> None:
+    if not isinstance(appendix_rows, list):
+        return
+    for row in appendix_rows:
+        if not isinstance(row, dict):
+            continue
+        task = str(row.get("task", ""))
+        required = REQUIRED_PUBLIC_METRICS_BY_TASK.get(task)
+        if not required:
+            continue
+        row_name = f"{row.get('task', '?')}/{row.get('split', '?')}/{row.get('model', '?')}/seed={row.get('seed', '?')}"
+        metrics = row.get("public_metrics")
+        if not isinstance(metrics, dict):
+            errors.append(f"{row_name} missing public_metrics object")
+            continue
+        for metric in required:
+            if metric not in metrics:
+                errors.append(f"{row_name} missing required public metric: {metric}")
+                continue
+            _validate_public_metric_value(row_name, metric, metrics.get(metric), errors)
+
+
+def _validate_public_metric_value(row_name: str, metric: str, value: Any, errors: list[str]) -> None:
+    if isinstance(value, dict):
+        if not value:
+            errors.append(f"{row_name} public metric {metric} must be non-empty")
+            return
+        _validate_nested_numeric_metric(row_name, metric, value, errors)
+        return
+    numeric = _finite_float(value)
+    if numeric is None:
+        errors.append(f"{row_name} public metric {metric} must be finite")
+
+
+def _validate_nested_numeric_metric(row_name: str, metric: str, value: dict[str, Any], errors: list[str]) -> None:
+    observed_numeric = False
+    for key, nested in value.items():
+        if not str(key).strip():
+            errors.append(f"{row_name} public metric {metric} contains empty nested key")
+            return
+        if isinstance(nested, dict):
+            _validate_nested_numeric_metric(row_name, f"{metric}.{key}", nested, errors)
+            observed_numeric = True
+        elif _finite_float(nested) is None:
+            errors.append(f"{row_name} public metric {metric}.{key} must be finite")
+            return
+        else:
+            observed_numeric = True
+    if not observed_numeric:
+        errors.append(f"{row_name} public metric {metric} must contain finite values")
 
 
 def _validate_reporting_metadata(summary: dict[str, Any], metadata: dict[str, Any], errors: list[str]) -> None:
