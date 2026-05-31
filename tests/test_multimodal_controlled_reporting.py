@@ -606,6 +606,40 @@ class MultimodalControlledReportingTests(unittest.TestCase):
             "\n".join(summary["required_stress_coverage"]["reasons"]),
         )
 
+    def test_robustness_summary_requires_non_negative_corruption_strength_metadata(self):
+        from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
+
+        rows = [
+            _stress_row("missing_modality", missing_modalities=["text"]),
+            _stress_row("missing_modality", missing_modalities=["vision"]),
+            _stress_row("missing_modality", missing_modalities=["audio"]),
+            _stress_row("image_blur"),
+            _stress_row("image_crop"),
+            _stress_row("image_occlusion"),
+            _stress_row("audio_noise"),
+            _stress_row("audio_masking"),
+            _stress_row("text_token_mask"),
+            _stress_row("text_paraphrase"),
+            _stress_row("hard_negative_caption_mismatch", mismatch_source_id="other-caption"),
+            _stress_row("hard_negative_region_mismatch", mismatch_source_id="other-region"),
+            _stress_row("hard_negative_audio_mismatch", mismatch_source_id="other-audio"),
+            _stress_row("temporal_shift", temporal_shift_sec=1.2),
+        ]
+        rows[4]["corruption_strength"] = -0.1
+
+        summary = summarize_robustness_rows(
+            rows,
+            full_model="ovha_full",
+            baseline_model="cross_attention_transformer",
+            temporal_data=True,
+        )
+
+        self.assertFalse(summary["required_stress_coverage"]["passed"])
+        self.assertIn(
+            "missing robustness stress target: image_crop",
+            "\n".join(summary["required_stress_coverage"]["reasons"]),
+        )
+
     def test_robustness_summary_accepts_plan_stress_metadata_coverage(self):
         from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 
