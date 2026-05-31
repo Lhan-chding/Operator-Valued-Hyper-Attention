@@ -567,6 +567,25 @@ class MultimodalPublicGateTests(unittest.TestCase):
             "\n".join(report["reasons"]),
         )
 
+    def test_region_text_gate_requires_step6_robustness_summary(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
+
+        robustness = _passing_sentiment_robustness()
+        robustness.pop("rceo_reliability_calibration")
+
+        report = evaluate_region_text_gate(
+            statistics_summary=_summary("phrase_region_grounding", "test", full=0.80, baseline=0.72),
+            diagnostics_rows=_passing_region_text_diagnostics(),
+            no_cato_score=0.70,
+            robustness_summary=robustness,
+            task="phrase_region_grounding",
+            split="test",
+        )
+
+        self.assertFalse(report["passed"])
+        joined = "\n".join(report["reasons"])
+        self.assertIn("RCEO reliability calibration missing", joined)
+
     def test_region_text_gate_rejects_missing_alignment_accuracy_and_visual_stress(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
