@@ -588,11 +588,12 @@ def _router_decomposition_ablation_deltas(
     batch: Any,
     full_loss: float,
 ) -> dict[str, float]:
+    full_ce = _as_float(_router_active_operator_ce(output.router_logits, batch))
     return {
-        "no_evidence_router_delta": _router_parts_delta(output, batch, ("memory", "reliability"), full_loss),
-        "no_reliability_prior_delta": _router_parts_delta(output, batch, ("memory", "evidence"), full_loss),
-        "memory_only_router_delta": _router_parts_delta(output, batch, ("memory",), full_loss),
-        "evidence_only_router_delta": _router_parts_delta(output, batch, ("evidence",), full_loss),
+        "no_evidence_router_delta": _router_parts_delta(output, batch, ("memory", "reliability"), full_ce),
+        "no_reliability_prior_delta": _router_parts_delta(output, batch, ("memory", "evidence"), full_ce),
+        "memory_only_router_delta": _router_parts_delta(output, batch, ("memory",), full_ce),
+        "evidence_only_router_delta": _router_parts_delta(output, batch, ("evidence",), full_ce),
     }
 
 
@@ -600,11 +601,18 @@ def _router_parts_delta(
     output: MultimodalOVHAOutput,
     batch: Any,
     parts: tuple[str, ...],
-    full_loss: float,
+    full_ce: float,
 ) -> float:
     logits = _router_logits_from_parts(output, parts)
-    weights = torch.softmax(logits, dim=-1)
-    return _candidate_mixture_delta(output.candidate_values, weights, batch, full_loss)
+    return _as_float(_router_active_operator_ce(logits, batch)) - full_ce
+
+
+def _router_active_operator_ce(logits: torch.Tensor, batch: Any) -> torch.Tensor:
+    active = batch.hidden["true_active_operator"]
+    return torch.nn.functional.cross_entropy(
+        logits.reshape(-1, logits.shape[-1]),
+        active.reshape(-1),
+    )
 
 
 def _router_logits_from_parts(output: MultimodalOVHAOutput, parts: tuple[str, ...]) -> torch.Tensor:

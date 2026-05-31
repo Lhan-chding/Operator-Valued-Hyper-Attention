@@ -996,12 +996,16 @@ class MultimodalControlledReportingTests(unittest.TestCase):
             target_y=torch.zeros(1, 4, 1),
             target_mask=torch.ones(1, 4, dtype=torch.bool),
         )
+        memory_logits = torch.nn.functional.one_hot(torch.arange(4).view(1, 4), num_classes=4).float() * 2.0
+        evidence_logits = torch.nn.functional.one_hot(torch.arange(4).view(1, 4), num_classes=4).float() * 2.0
+        reliability_logits = torch.zeros(1, 4, 4)
         output = SimpleNamespace(
             candidate_values=candidate_values,
+            router_logits=memory_logits + evidence_logits + reliability_logits,
             router_logit_parts={
-                "memory": torch.nn.functional.one_hot(torch.arange(4).view(1, 4), num_classes=4).float() * 2.0,
-                "evidence": torch.nn.functional.one_hot(torch.arange(4).view(1, 4), num_classes=4).float() * 2.0,
-                "reliability": torch.zeros(1, 4, 4),
+                "memory": memory_logits,
+                "evidence": evidence_logits,
+                "reliability": reliability_logits,
             },
         )
 
