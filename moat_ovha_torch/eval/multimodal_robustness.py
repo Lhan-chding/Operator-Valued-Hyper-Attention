@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from typing import Any
 
@@ -39,7 +40,7 @@ def summarize_robustness_rows(
     corrupted_score = {model: _endpoint_score(model_rows, first=False) for model, model_rows in by_model.items()}
     relative_drop = {model: _relative_drop(model_rows) for model, model_rows in by_model.items()}
     auc = {model: _auc_over_corruption(model_rows) for model, model_rows in by_model.items()}
-    full_rows = sorted(by_model.get(full_model, []), key=lambda row: float(row["corruption_strength"]))
+    full_rows = sorted(_finite_strength_rows(by_model.get(full_model, [])), key=lambda row: float(row["corruption_strength"]))
     reliability_curve = _rceo_reliability_curve(full_rows)
     reliability_monotonic = _non_increasing([point["mean_reliability"] for point in reliability_curve])
     reliability_shift = _rceo_reliability_shift(full_rows)
@@ -74,10 +75,11 @@ def summarize_robustness_rows(
 
 
 def _relative_drop(rows: list[dict[str, Any]]) -> float:
-    if not rows:
+    finite_rows = _finite_strength_rows(rows)
+    if not finite_rows:
         return float("inf")
-    clean = _endpoint_score(rows, first=True)
-    corrupted = _endpoint_score(rows, first=False)
+    clean = _endpoint_score(finite_rows, first=True)
+    corrupted = _endpoint_score(finite_rows, first=False)
     return (clean - corrupted) / max(abs(clean), 1e-12)
 
 
@@ -86,16 +88,22 @@ def _endpoint_score(rows: list[dict[str, Any]], *, first: bool) -> float:
         return float("inf")
     by_strength: dict[float, list[float]] = defaultdict(list)
     for row in rows:
-        by_strength[float(row["corruption_strength"])].append(float(row["score"]))
+        strength = _finite_float(row.get("corruption_strength"))
+        score = _finite_float(row.get("score"))
+        if strength is None or score is None:
+            continue
+        by_strength[strength].append(score)
+    if not by_strength:
+        return float("inf")
     strength = min(by_strength) if first else max(by_strength)
     values = by_strength[strength]
     return sum(values) / len(values)
 
 
 def _auc_over_corruption(rows: list[dict[str, Any]]) -> float:
-    if not rows:
+    ordered = sorted(_finite_strength_rows(rows), key=lambda row: float(row["corruption_strength"]))
+    if not ordered:
         return 0.0
-    ordered = sorted(rows, key=lambda row: float(row["corruption_strength"]))
     if len(ordered) == 1:
         return float(ordered[0]["score"])
     auc = 0.0
@@ -116,10 +124,9 @@ def _non_increasing(values: list[float]) -> bool:
 def _rceo_reliability_curve(rows: list[dict[str, Any]]) -> list[dict[str, float]]:
     reliability_by_strength: dict[float, list[float]] = defaultdict(list)
     for row in rows:
-        try:
-            strength = float(row["corruption_strength"])
-            reliability = float(row["rceo_reliability"])
-        except (KeyError, TypeError, ValueError):
+        strength = _finite_float(row.get("corruption_strength"))
+        reliability = _finite_float(row.get("rceo_reliability"))
+        if strength is None or reliability is None:
             continue
         reliability_by_strength[strength].append(reliability)
     return [
@@ -223,6 +230,8 @@ def _observed_stress_families(
     }
     for row in rows:
         corruption_type = _normalize_stress_name(row.get("corruption_type", ""))
+        if _finite_float(row.get("corruption_strength")) is None:
+            continue
         target = alias_to_family.get(corruption_type)
         if target is not None and _target_metadata_present(row, target):
             observed.add(target)
@@ -279,3 +288,15 @@ def _has_temporal_shift(row: dict[str, Any]) -> bool:
 
 def _normalize_stress_name(value: Any) -> str:
     return str(value).strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _finite_strength_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if _finite_float(row.get("corruption_strength")) is not None]
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
