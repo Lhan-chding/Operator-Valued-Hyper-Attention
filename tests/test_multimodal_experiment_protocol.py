@@ -787,6 +787,24 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertAlmostEqual(smoke_raw["score"], eval_rows[0]["task_loss"], places=7)
         self.assertEqual(smoke_raw["raw_metric_path"], str(smoke_raw_metrics_path))
         self.assertIn("not a same-feature baseline comparison", smoke_raw["evidence_limitations"])
+        self.assertGreater(smoke_raw["parameter_count"], 0)
+        self.assertEqual(smoke_raw["training_steps"], 1)
+        self.assertEqual(
+            smoke_raw["frozen_feature_extractor_version"],
+            {"region": "clip-region-test", "text": "clip-text-test"},
+        )
+        self.assertEqual(
+            smoke_raw["label_provenance"],
+            {
+                "must_report_as": "ground_truth",
+                "source": "refcoco",
+                "supervision_type": "ground_truth",
+            },
+        )
+        self.assertEqual(smoke_raw["hardware"]["accelerator"], "cpu")
+        self.assertEqual(smoke_raw["hardware"]["device"], "cpu")
+        self.assertGreaterEqual(smoke_raw["hardware"]["wall_clock_hours"], 0.0)
+        self.assertIn("production main tables should use 5 seeds", smoke_raw["seed_count_rationale"])
 
     def test_public_smoke_runner_rejects_unverified_controlled_artifact_descriptors(self):
         with tempfile.TemporaryDirectory() as tmp:
