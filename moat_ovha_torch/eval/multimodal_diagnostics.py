@@ -8,6 +8,9 @@ from typing import Any
 REQUIRED_DIAGNOSTIC_KEYS = (
     "router_entropy",
     "router_load_by_candidate",
+    "router_memory_logit_norm",
+    "router_evidence_logit_norm",
+    "router_reliability_logit_norm",
     "router_logit_parts",
     "candidate_loss",
     "adapter_params",
@@ -17,6 +20,11 @@ REQUIRED_DIAGNOSTIC_KEYS = (
 )
 MULTIMODAL_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
 REQUIRED_ROUTER_LOGIT_PARTS = ("memory", "evidence", "reliability")
+REQUIRED_ROUTER_LOGIT_NORM_KEYS = (
+    "router_memory_logit_norm",
+    "router_evidence_logit_norm",
+    "router_reliability_logit_norm",
+)
 REQUIRED_ADAPTER_PARAM_KEYS = (
     "TLEO_lengthscale",
     "SPO_temperature",
@@ -51,6 +59,12 @@ def validate_diagnostic_row(row: dict[str, Any]) -> DiagnosticValidationReport:
         errors.append("stackability_passed must be true")
     if "router_entropy" in row and _finite_float(row.get("router_entropy")) is None:
         errors.append("router_entropy must be finite")
+    for key in REQUIRED_ROUTER_LOGIT_NORM_KEYS:
+        if key not in row:
+            continue
+        value = _finite_float(row.get(key))
+        if value is None or value < 0.0:
+            errors.append(f"{key} must be finite non-negative")
     load = row.get("router_load_by_candidate")
     if isinstance(load, dict):
         for name in MULTIMODAL_CANDIDATE_NAMES:

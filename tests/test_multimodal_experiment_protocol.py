@@ -450,6 +450,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
 
         row = {
             "router_entropy": 1.0,
+            "router_memory_logit_norm": 0.1,
+            "router_evidence_logit_norm": 0.2,
+            "router_reliability_logit_norm": 0.3,
             "router_load_by_candidate": {"TLEO": 0.25, "SPO": 0.25, "LRIO": 0.25, "CATO": 0.25},
             "router_logit_parts": {"memory": 0.1, "evidence": 0.2, "reliability": 0.3},
             "candidate_loss": {"TLEO": 0.1, "SPO": 0.2, "LRIO": 0.3, "CATO": 0.4},
