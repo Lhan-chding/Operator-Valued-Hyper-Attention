@@ -16,11 +16,13 @@ def evaluate_region_text_gate(
     statistics_summary: dict[str, Any],
     diagnostics_rows: list[dict[str, Any]],
     no_cato_score: float | None,
+    robustness_summary: dict[str, Any] | None = None,
     task: str,
     split: str,
     full_model: str = "ovha_full",
     baseline_model: str = "cross_attention_transformer",
 ) -> dict[str, Any]:
+    robustness = robustness_summary or {}
     checks = {
         "full_beats_same_feature_baseline": _full_beats_baseline(statistics_summary, task, split, full_model, baseline_model),
         "full_beats_required_strong_baselines": _full_beats_required_strong_baselines(
@@ -41,6 +43,12 @@ def evaluate_region_text_gate(
         ),
         "grounding_accuracy_improves_with_entropy": _grounding_accuracy_improves_with_entropy(diagnostics_rows),
         "rceo_visual_stress_router_shift": _rceo_visual_stress_router_shift(diagnostics_rows),
+        "rceo_reliability_calibrated": _rceo_reliability_calibrated(robustness),
+        "robustness_passes": _robustness_passes(
+            robustness,
+            full_model=full_model,
+            baseline_model=baseline_model,
+        ),
     }
     return _gate_report("region_text_public", checks)
 

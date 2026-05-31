@@ -31,10 +31,12 @@ def main() -> int:
     statistics = json.loads(args.statistics_summary.read_text())
     diagnostics = _read_jsonl(args.diagnostics_jsonl)
     if args.gate == "region_text":
+        robustness = json.loads(args.robustness_summary.read_text()) if args.robustness_summary else {}
         report = evaluate_region_text_gate(
             statistics_summary=statistics,
             diagnostics_rows=diagnostics,
             no_cato_score=args.no_cato_score,
+            robustness_summary=robustness,
             task=args.task,
             split=args.split,
         )

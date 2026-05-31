@@ -42,6 +42,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                 ),
             ],
             no_cato_score=0.70,
+            robustness_summary=_passing_sentiment_robustness(),
             task="phrase_region_grounding",
             split="test",
         )
@@ -1137,7 +1138,9 @@ class MultimodalPublicGateTests(unittest.TestCase):
             root = Path(tmp)
             stats_path = root / "stats.json"
             diagnostics_path = root / "diagnostics.jsonl"
+            robustness_path = root / "robustness.json"
             stats_path.write_text(json.dumps(_summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)))
+            robustness_path.write_text(json.dumps(_passing_sentiment_robustness()))
             diagnostics_path.write_text(
                 json.dumps(
                     _diagnostic(
@@ -1186,6 +1189,8 @@ class MultimodalPublicGateTests(unittest.TestCase):
                     "test",
                     "--no-cato-score",
                     "0.70",
+                    "--robustness-summary",
+                    str(robustness_path),
                 ],
                 cwd=ROOT,
                 text=True,
