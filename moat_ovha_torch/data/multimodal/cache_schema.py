@@ -37,18 +37,26 @@ SENTIMENT_REQUIRED_SUPERVISION_PATTERNS = ("missing_modality_mask_{split}.npy",)
 RCEO_REQUIRED_SUPERVISION_PATTERNS = ("corruption_{split}.parquet",)
 FORBIDDEN_MODEL_INPUT_MODALITIES = frozenset(
     {
+        "corruption_metadata",
         "corruption_strength",
         "dataset_hidden_metadata",
+        "hidden",
         "hidden_metadata",
         "mismatch_source_id",
+        "oracle",
         "true_active_operator",
+        "true_adapter",
         "true_adapter_params",
+        "true_alignment",
         "true_alignment_pairs",
         "true_corruption_level",
         "true_lengthscale",
+        "true_prototype",
         "true_prototype_logits",
+        "true_rank",
         "true_rank_logits",
         "true_reliability",
+        "true_router",
         "true_router_weights",
     }
 )
@@ -283,11 +291,16 @@ def _validate_data_card_modalities(data_card: dict[str, Any], errors: list[str])
     if not isinstance(values, list):
         return
     for modality in values:
-        if isinstance(modality, str) and modality in FORBIDDEN_MODEL_INPUT_MODALITIES:
+        if isinstance(modality, str) and _contains_forbidden_model_input_modality(modality):
             errors.append(
                 "data_card.json modalities must not expose controlled or hidden metadata as model input: "
                 f"{modality}"
             )
+
+
+def _contains_forbidden_model_input_modality(modality: str) -> bool:
+    normalized = modality.strip().lower().replace("-", "_").replace(" ", "_")
+    return any(forbidden in normalized for forbidden in FORBIDDEN_MODEL_INPUT_MODALITIES)
 
 
 def _validate_leakage_controls(controls: Any, errors: list[str]) -> None:
