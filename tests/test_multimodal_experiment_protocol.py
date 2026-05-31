@@ -96,6 +96,35 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertTrue(required.issubset(registry), sorted(required - registry))
         self.assertTrue(required.issubset(set(config.baseline_names)), sorted(required - set(config.baseline_names)))
 
+    def test_robustness_config_requires_complete_step6_stress_family_coverage(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_robustness_smoke.json")
+
+        self.assertIn("missing_audio", config.robustness_corruptions)
+        self.assertIn("audio_noise", config.robustness_corruptions)
+
+        invalid = {
+            "name": "bad_robustness",
+            "dataset_name": "refcoco",
+            "task_type": "phrase_region_grounding",
+            "seeds": [1, 2, 3],
+            "training_stages": ["T0", "T6"],
+            "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
+            "baseline_names": [
+                "concat_fusion",
+                "cross_attention_transformer",
+                "modality_expert_moe",
+                "quality_aware_fusion",
+                "ovha_no_rceo",
+                "ovha_no_evidence_router",
+            ],
+            "eval_episode_count": 16,
+            "robustness_corruptions": ["missing_text", "missing_vision", "image_blur"],
+        }
+        with self.assertRaisesRegex(ValueError, "missing required robustness stress families"):
+            MultimodalExperimentConfig.from_mapping(invalid)
+
     def test_config_parser_requires_complete_same_feature_baseline_set(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
 
