@@ -81,6 +81,8 @@ def _require_public_gate_report(
     if not isinstance(report, dict):
         errors.append(f"{label} gate report is required before top-conference main experiments")
         return
+    if report.get("name") != label:
+        errors.append(f"{label} gate report name mismatch")
     if report.get("passed") is not True:
         errors.append(f"{label} gate must pass before top-conference main experiments")
     reasons = report.get("reasons", [])
@@ -90,6 +92,9 @@ def _require_public_gate_report(
     if not isinstance(checks, dict):
         errors.append(f"{label} gate report must include checks")
         return
+    for check_name, check in sorted(checks.items()):
+        if not isinstance(check, dict) or check.get("passed") is not True:
+            errors.append(f"{label} gate contains failed check: {check_name}")
     for check_name in required_checks:
         check = checks.get(check_name)
         if not isinstance(check, dict) or check.get("passed") is not True:
