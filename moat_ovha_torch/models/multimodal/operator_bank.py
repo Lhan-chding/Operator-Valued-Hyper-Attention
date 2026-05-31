@@ -31,6 +31,11 @@ def assert_stackable(outputs: dict[str, CandidateOutput], batch_size: int, q_cou
                 f"Candidate {name} returned {tuple(out.value.shape)}, expected {(batch_size, q_count, dy)}. "
                 "Only candidate operators may enter router mixture."
             )
+        if len(out.feature.shape) != 3 or tuple(out.feature.shape[:2]) != (batch_size, q_count):
+            raise ValueError(
+                f"Candidate {name} feature returned {tuple(out.feature.shape)}, "
+                f"expected leading axes {(batch_size, q_count)} for CandidateOutput.feature."
+            )
 
 
 def make_candidate_bank(d_model: int, output_dim: int) -> nn.ModuleDict:
