@@ -356,29 +356,40 @@ def _read_split_source_ids(path: Path) -> dict[str, list[str]]:
 
 
 def _utterance_records_by_source_id(manifest: RawDatasetManifest) -> dict[str, dict[str, Any]]:
-    path = manifest.files["metadata/utterances.json"]
+    path = _sentiment_record_manifest_path(manifest)
     payload = json.loads(path.read_text())
     if isinstance(payload, dict):
         records = payload.get("records")
     else:
         records = payload
     if not isinstance(records, list) or not records:
-        raise ValueError("metadata/utterances.json must contain a non-empty records list")
+        raise ValueError(f"{path.name} must contain a non-empty records list")
     by_source_id: dict[str, dict[str, Any]] = {}
     for index, record in enumerate(records):
         if not isinstance(record, dict):
-            raise ValueError(f"metadata/utterances.json records[{index}] must be an object")
+            raise ValueError(f"{path.name} records[{index}] must be an object")
         source_id = record.get("source_id")
         if not isinstance(source_id, str) or not source_id.strip() or source_id != source_id.strip():
-            raise ValueError(f"metadata/utterances.json records[{index}] source_id must be a normalized string")
+            raise ValueError(f"{path.name} records[{index}] source_id must be a normalized string")
         if source_id in by_source_id:
-            raise ValueError(f"metadata/utterances.json contains duplicate source_id: {source_id}")
-        _validate_utterance_record(index, record)
+            raise ValueError(f"{path.name} contains duplicate source_id: {source_id}")
+        _validate_utterance_record(path.name, index, record)
         by_source_id[source_id] = {**record, "_cache_row_index": index}
     return by_source_id
 
 
-def _validate_utterance_record(index: int, record: dict[str, Any]) -> None:
+def _sentiment_record_manifest_path(manifest: RawDatasetManifest) -> Path:
+    for relative in ("metadata/utterances.json", "metadata/dialogues.json"):
+        path = manifest.files.get(relative)
+        if path is not None:
+            return path
+    raise ValueError(
+        f"{manifest.dataset_name} raw manifest requires metadata/utterances.json "
+        "or metadata/dialogues.json with utterance-level records"
+    )
+
+
+def _validate_utterance_record(source_name: str, index: int, record: dict[str, Any]) -> None:
     required = (
         "source_id",
         "split",
@@ -392,16 +403,16 @@ def _validate_utterance_record(index: int, record: dict[str, Any]) -> None:
     )
     missing = [key for key in required if key not in record]
     if missing:
-        raise ValueError(f"metadata/utterances.json records[{index}] missing required keys: {', '.join(missing)}")
+        raise ValueError(f"{source_name} records[{index}] missing required keys: {', '.join(missing)}")
     for key in required:
         value = record.get(key)
         if not isinstance(value, str) or not value.strip() or value != value.strip():
-            raise ValueError(f"metadata/utterances.json records[{index}] {key} must be a non-empty normalized string")
+            raise ValueError(f"{source_name} records[{index}] {key} must be a non-empty normalized string")
     speaker_id = record.get("speaker_id")
     if speaker_id is not None and (
         not isinstance(speaker_id, str) or not speaker_id.strip() or speaker_id != speaker_id.strip()
     ):
-        raise ValueError(f"metadata/utterances.json records[{index}] speaker_id must be a non-empty normalized string")
+        raise ValueError(f"{source_name} records[{index}] speaker_id must be a non-empty normalized string")
 
 
 def _speaker_id_available(records_by_source_id: dict[str, dict[str, Any]]) -> bool:
