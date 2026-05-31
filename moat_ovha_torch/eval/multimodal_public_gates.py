@@ -485,10 +485,31 @@ def _summary_reporting_metadata_reasons(
         value = metadata.get(key)
         if _is_empty_reporting_value(value):
             reasons.append(f"reporting metadata missing {key}")
+    reasons.extend(_hardware_metadata_reasons(metadata.get("hardware")))
+    reasons.extend(_wall_clock_summary_reasons(metadata.get("wall_clock_summary")))
     per_seed_table = metadata.get("per_seed_table")
     if isinstance(per_seed_table, list):
         reasons.extend(_reporting_per_seed_table_reasons(per_seed_table, models, main_models))
     return reasons
+
+
+def _hardware_metadata_reasons(value: Any) -> list[str]:
+    if _is_empty_reporting_value(value):
+        return []
+    if not isinstance(value, dict) or _is_empty_reporting_value(value.get("accelerator")):
+        return ["reporting metadata hardware must include accelerator"]
+    return []
+
+
+def _wall_clock_summary_reasons(value: Any) -> list[str]:
+    if _is_empty_reporting_value(value):
+        return []
+    if not isinstance(value, dict):
+        return ["reporting metadata wall_clock_summary must include positive wall_clock_hours"]
+    hours = _finite_float(value.get("wall_clock_hours"))
+    if hours is None or hours <= 0.0:
+        return ["reporting metadata wall_clock_summary must include positive wall_clock_hours"]
+    return []
 
 
 def _reporting_per_seed_table_reasons(

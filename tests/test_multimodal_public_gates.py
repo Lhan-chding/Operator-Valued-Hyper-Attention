@@ -785,8 +785,8 @@ def _summary(
             "parameter_count": {model: 120000 + index for index, model in enumerate(models)},
             "training_steps": {model: 1000 for model in models},
             "frozen_feature_versions": {"text": "frozen-text-v1", "region": "frozen-region-v1"},
-            "hardware": "unit-test-cpu",
-            "wall_clock_summary": {model: "10m" for model in models},
+            "hardware": {"accelerator": "unit-test-cpu"},
+            "wall_clock_summary": {"wall_clock_hours": 0.17},
             "per_seed_table": [
                 {"model": model, "seed": seed, "score": score + (seed - 2) * 0.01}
                 for model, score in model_scores.items()
