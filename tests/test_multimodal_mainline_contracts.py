@@ -101,6 +101,34 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("annotations/phrase_regions.json", "\n".join(payload["errors"]))
         self.assertNotIn("Traceback", result.stderr)
 
+    def test_controlled_true_adapter_param_contract_matches_v1_protocol(self):
+        from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
+            CONTROLLED_FAMILY_ACTIVE_OPERATOR,
+            CONTROLLED_MULTIMODAL_FAMILIES,
+            CONTROLLED_TRUE_ADAPTER_PARAM_KEYS,
+            required_true_adapter_param_keys_for_family,
+        )
+        from moat_ovha_torch.train.multimodal_protocol import ALLOWED_V1_ADAPTER_PARAMS
+
+        self.assertEqual(set(CONTROLLED_FAMILY_ACTIVE_OPERATOR), set(CONTROLLED_MULTIMODAL_FAMILIES))
+        self.assertEqual(CONTROLLED_FAMILY_ACTIVE_OPERATOR["tleo_local_evidence"], "TLEO")
+        self.assertEqual(CONTROLLED_FAMILY_ACTIVE_OPERATOR["spo_global_prototype"], "SPO")
+        self.assertEqual(CONTROLLED_FAMILY_ACTIVE_OPERATOR["lrio_low_rank_interaction"], "LRIO")
+        self.assertEqual(CONTROLLED_FAMILY_ACTIVE_OPERATOR["cato_alignment_transport"], "CATO")
+        self.assertEqual(CONTROLLED_FAMILY_ACTIVE_OPERATOR["rceo_reliability_corruption"], "LRIO")
+        self.assertEqual(CONTROLLED_FAMILY_ACTIVE_OPERATOR["mixed_relation_operator"], "mixed")
+        self.assertEqual(CONTROLLED_TRUE_ADAPTER_PARAM_KEYS, ALLOWED_V1_ADAPTER_PARAMS)
+
+        for family in CONTROLLED_MULTIMODAL_FAMILIES:
+            expected_operator = CONTROLLED_FAMILY_ACTIVE_OPERATOR[family]
+            with self.subTest(family=family):
+                expected = (
+                    CONTROLLED_TRUE_ADAPTER_PARAM_KEYS
+                    if expected_operator == "mixed"
+                    else {expected_operator: CONTROLLED_TRUE_ADAPTER_PARAM_KEYS[expected_operator]}
+                )
+                self.assertEqual(required_true_adapter_param_keys_for_family(family), expected)
+
     def test_public_dataset_adapters_expose_cache_required_supervision_shards(self):
         from moat_ovha_torch.data.multimodal.adapters import (
             CMUMOSEIAdapter,
