@@ -115,6 +115,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
     def test_build_cache_cli_builds_valid_controlled_synthetic_cache_with_hidden_truth(self):
         import numpy as np
 
+        from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import CONTROLLED_MULTIMODAL_FAMILIES
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -145,6 +146,15 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             data_card = json.loads((layout.root / "data_card.json").read_text())
             hidden_active = np.load(layout.root / "controlled_hidden" / "true_active_operator_train.npy")
             hidden_router = np.load(layout.root / "controlled_hidden" / "true_router_weights_train.npy")
+            hidden_adapter_param_files = set(
+                np.load(layout.root / "controlled_hidden" / "true_adapter_params_train.npz").files
+            )
+            sample_records = [
+                json.loads(line)
+                for line in (layout.root / "provenance" / "sample_records_train.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+            data_card_exists = (layout.root / "data_card.json").exists()
 
         payload = json.loads(result.stdout)
         self.assertTrue(payload["ok"], payload)
@@ -153,10 +163,16 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(data_card["tasks"], ["controlled_relation_operator"])
         self.assertEqual(data_card["modalities"], ["text", "region", "audio"])
         self.assertEqual(sorted(manifest), ["audio", "region", "text"])
-        self.assertEqual(hidden_active.shape, (2, 4))
-        self.assertEqual(hidden_router.shape, (2, 4, 4))
+        self.assertEqual(hidden_active.shape, (2 * len(CONTROLLED_MULTIMODAL_FAMILIES), 4))
+        self.assertEqual(hidden_router.shape, (2 * len(CONTROLLED_MULTIMODAL_FAMILIES), 4, 4))
+        self.assertEqual(
+            {record["controlled_family"] for record in sample_records},
+            set(CONTROLLED_MULTIMODAL_FAMILIES),
+        )
+        self.assertIn("TLEO__lengthscale", hidden_adapter_param_files)
+        self.assertIn("CATO__alignment_temperature", hidden_adapter_param_files)
         self.assertNotIn("controlled_hidden", json.dumps(manifest, sort_keys=True))
-        self.assertFalse((cache_root / "controlled_multimodal" / "v0.1" / "data_card.json").exists())
+        self.assertTrue(data_card_exists)
         self.assertNotIn("Traceback", result.stderr)
 
     def test_build_cache_cli_writes_valid_refcoco_cache_from_raw_manifest(self):
