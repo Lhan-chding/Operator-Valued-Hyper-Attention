@@ -537,6 +537,34 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("source_dataset must be a non-empty string", joined)
         self.assertIn("provenance.original_split entries must match batch split val", joined)
 
+    def test_typed_batch_rejects_unnormalized_episode_identity_and_source_provenance(self):
+        from moat_ovha_torch.data.multimodal.typed_batch import ProvenanceBank, validate_multimodal_batch_contract
+
+        batch = _static_batch(
+            task_type=" phrase_region_grounding ",
+            split=" train ",
+            source_dataset=" shape-test ",
+            provenance=ProvenanceBank(
+                source_id=["sample-0 ", " sample-1"],
+                original_split=[" train ", " train "],
+                raw_ref=["shape", "shape"],
+                license_tag=["test", "test"],
+                preprocessing_version="test",
+                feature_extractor_version={"text": "test"},
+                pseudo_label_version={},
+            ),
+        )
+
+        report = validate_multimodal_batch_contract(batch)
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn("task_type must be a non-empty normalized string", joined)
+        self.assertIn("split must be a non-empty normalized string", joined)
+        self.assertIn("source_dataset must be a non-empty normalized string", joined)
+        self.assertIn("provenance.source_id entries must be non-empty normalized strings", joined)
+        self.assertIn("provenance.original_split entries must be non-empty normalized strings", joined)
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; multimodal tensor contract tests skipped.")
 class MultimodalMainlineTorchContractTests(unittest.TestCase):
