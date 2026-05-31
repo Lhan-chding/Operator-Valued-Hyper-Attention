@@ -188,16 +188,31 @@ def _full_beats_any_required_baseline(
     higher_is_better = _higher_is_better(summary, task, split, full_model)
     missing: list[str] = []
     values: dict[str, float] = {}
+    evidence_reasons: list[str] = []
+    has_positive_improvement = False
     for baseline_model in baseline_models:
         baseline = _model_mean(summary, task, split, baseline_model)
         if baseline is None:
             missing.append(baseline_model)
             continue
-        values[baseline_model] = _directional_improvement(full, baseline, higher_is_better)
-    best_improvement = max(values.values()) if values else None
-    passed = best_improvement is not None and best_improvement > 0.0
-    reasons = [] if passed else [failure_reason]
-    if missing and not passed:
+        improvement = _directional_improvement(full, baseline, higher_is_better)
+        values[baseline_model] = improvement
+        if improvement > 0.0:
+            has_positive_improvement = True
+            evidence_reasons.extend(
+                _sentiment_anchor_baseline_paired_reasons(
+                    summary,
+                    task,
+                    split,
+                    full_model,
+                    baseline_model,
+                )
+            )
+    passed = has_positive_improvement and not evidence_reasons
+    reasons = [] if passed else list(evidence_reasons)
+    if not has_positive_improvement:
+        reasons.insert(0, failure_reason)
+    if missing and not has_positive_improvement:
         reasons.append(f"required sentiment baseline missing: {', '.join(missing)}")
     return {
         "passed": passed,
@@ -646,15 +661,53 @@ def _required_strong_baseline_paired_reasons(
     full_model: str,
     baseline_model: str,
 ) -> list[str]:
+    return _baseline_comparison_paired_reasons(
+        summary,
+        task,
+        split,
+        full_model,
+        baseline_model,
+        f"required same-feature baseline paired comparison missing: {baseline_model}",
+        f"required same-feature baseline {baseline_model} paired comparison",
+    )
+
+
+def _sentiment_anchor_baseline_paired_reasons(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    full_model: str,
+    baseline_model: str,
+) -> list[str]:
+    return _baseline_comparison_paired_reasons(
+        summary,
+        task,
+        split,
+        full_model,
+        baseline_model,
+        f"required sentiment anchor {baseline_model} paired comparison missing",
+        f"required sentiment anchor {baseline_model} paired comparison",
+    )
+
+
+def _baseline_comparison_paired_reasons(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    full_model: str,
+    baseline_model: str,
+    missing_reason: str,
+    label: str,
+) -> list[str]:
     main_models = (((summary.get("main_table", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
     _, main_metric_direction = _metric_direction_reasons(main_models)
     paired = (((summary.get("paired_tests", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
     baseline_comparisons = paired.get("baseline_comparisons") if isinstance(paired, dict) else None
     if not isinstance(baseline_comparisons, dict):
-        return [f"required same-feature baseline paired comparison missing: {baseline_model}"]
+        return [missing_reason]
     baseline_paired = baseline_comparisons.get(baseline_model)
     if not isinstance(baseline_paired, dict) or not baseline_paired:
-        return [f"required same-feature baseline paired comparison missing: {baseline_model}"]
+        return [missing_reason]
     return _paired_comparison_payload_reasons(
         baseline_paired,
         main_models,
@@ -663,7 +716,7 @@ def _required_strong_baseline_paired_reasons(
         _seed_count(main_models.get(full_model, {})) if isinstance(main_models, dict) else 0,
         _seed_count(main_models.get(baseline_model, {})) if isinstance(main_models, dict) else 0,
         main_metric_direction,
-        f"required same-feature baseline {baseline_model} paired comparison",
+        label,
     )
 
 
