@@ -101,20 +101,32 @@ def _endpoint_score(rows: list[dict[str, Any]], *, first: bool) -> float:
 
 
 def _auc_over_corruption(rows: list[dict[str, Any]]) -> float:
-    ordered = sorted(_valid_strength_rows(rows), key=lambda row: float(row["corruption_strength"]))
-    if not ordered:
+    score_curve = _mean_score_by_strength(rows)
+    if not score_curve:
         return 0.0
-    if len(ordered) == 1:
-        return float(ordered[0]["score"])
+    if len(score_curve) == 1:
+        return score_curve[0][1]
     auc = 0.0
-    for left, right in zip(ordered, ordered[1:]):
-        x0 = float(left["corruption_strength"])
-        x1 = float(right["corruption_strength"])
-        y0 = float(left["score"])
-        y1 = float(right["score"])
+    for left, right in zip(score_curve, score_curve[1:]):
+        x0, y0 = left
+        x1, y1 = right
         auc += (x1 - x0) * (y0 + y1) / 2.0
-    span = float(ordered[-1]["corruption_strength"]) - float(ordered[0]["corruption_strength"])
+    span = score_curve[-1][0] - score_curve[0][0]
     return auc / max(span, 1e-12)
+
+
+def _mean_score_by_strength(rows: list[dict[str, Any]]) -> list[tuple[float, float]]:
+    by_strength: dict[float, list[float]] = defaultdict(list)
+    for row in rows:
+        strength = _valid_corruption_strength(row.get("corruption_strength"))
+        score = _finite_float(row.get("score"))
+        if strength is None or score is None:
+            continue
+        by_strength[strength].append(score)
+    return [
+        (strength, sum(values) / len(values))
+        for strength, values in sorted(by_strength.items())
+    ]
 
 
 def _non_increasing(values: list[float]) -> bool:
