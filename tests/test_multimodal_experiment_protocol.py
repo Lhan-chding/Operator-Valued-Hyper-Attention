@@ -1093,6 +1093,56 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_topconf_main_entry_rejects_controlled_diagnostics_missing_gate_fields(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256
+        from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
+            CacheValidationTarget,
+            validate_topconf_main_experiment_entry,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            _write_valid_refcoco_public_cache(cache_root)
+            _write_valid_cmu_mosei_public_cache(cache_root)
+
+            controlled_report = _complete_controlled_public_entry_report(tmp_path / "controlled_artifacts")
+            diagnostics_report = Path(controlled_report["evidence_artifacts"]["diagnostics_report"]["path"])
+            diagnostics_rows = [
+                json.loads(line)
+                for line in diagnostics_report.read_text().splitlines()
+                if line.strip()
+            ]
+            for row in diagnostics_rows:
+                if row["family"] == "cato_alignment_transport":
+                    row.pop("alignment_entropy_delta", None)
+            diagnostics_report.write_text(
+                "\n".join(json.dumps(row, sort_keys=True) for row in diagnostics_rows) + "\n"
+            )
+            controlled_report["evidence_artifacts"]["diagnostics_report"]["sha256"] = file_sha256(diagnostics_report)
+
+            report = validate_topconf_main_experiment_entry(
+                controlled_report=controlled_report,
+                region_gate_report=_passing_region_text_public_gate_report(tmp_path / "artifacts"),
+                sentiment_gate_report=_passing_sentiment_public_gate_report(tmp_path / "artifacts"),
+                cache_targets={
+                    "refcoco": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "refcoco", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                    "cmu_mosei": CacheValidationTarget(
+                        layout=MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                        splits=("val", "test"),
+                    ),
+                },
+            )
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "controlled report diagnostics_report cato_alignment_transport missing gate diagnostic: alignment_entropy_delta",
+            "\n".join(report.errors),
+        )
+
     def test_diagnostics_schema_requires_plan_keys(self):
         from moat_ovha_torch.eval.multimodal_diagnostics import required_diagnostic_keys, validate_diagnostic_row
 
@@ -1431,14 +1481,7 @@ def _complete_controlled_public_entry_report(artifact_root: Path | None = None) 
         controlled_rows.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
         diagnostics_report.write_text(
             "\n".join(
-                json.dumps(
-                    {
-                        "family": row["family"],
-                        "stackability_passed": row["stackability_passed"],
-                        "oracle_matrix": row["oracle_matrix"],
-                    },
-                    sort_keys=True,
-                )
+                json.dumps(_controlled_diagnostic_row(row), sort_keys=True)
                 for row in rows
             )
             + "\n"
@@ -1533,6 +1576,36 @@ def _complete_controlled_rows() -> list[dict[str, object]]:
         },
     ]
     return rows
+
+
+def _controlled_diagnostic_row(row: dict[str, object]) -> dict[str, object]:
+    keys = (
+        "family",
+        "stackability_passed",
+        "oracle_matrix",
+        "TLEO_oracle_gap",
+        "SPO_oracle_gap",
+        "LRIO_oracle_gap",
+        "CATO_oracle_gap",
+        "no_evidence_router_delta",
+        "no_reliability_prior_delta",
+        "memory_only_router_delta",
+        "evidence_only_router_delta",
+        "no_operator_memory_delta",
+        "no_hyper_adapter_delta",
+        "prototype_kl_delta",
+        "rank_logits_kl_delta",
+        "alignment_entropy_delta",
+        "alignment_topk_delta",
+        "rceo_prior_effect",
+        "rceo_reliability_monotonic",
+        "rceo_router_load_shift",
+        "rceo_reliability_curve",
+        "router_accuracy",
+        "no_lrio_delta",
+        "no_rceo_delta",
+    )
+    return {key: row[key] for key in keys if key in row}
 
 
 def _complete_controlled_family_row(*, rceo: bool = False) -> dict[str, object]:
