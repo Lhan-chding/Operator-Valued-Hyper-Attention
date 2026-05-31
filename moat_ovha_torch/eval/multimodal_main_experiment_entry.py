@@ -146,7 +146,7 @@ def _require_controlled_artifact_evidence(controlled_report: dict[str, Any] | No
     if not diagnostics_rows:
         errors.append("controlled report diagnostics_report artifact must contain JSONL rows")
         return
-    _validate_controlled_diagnostics_report_content(diagnostics_rows, errors)
+    _validate_controlled_diagnostics_report_content(rows, diagnostics_rows, errors)
 
     recomputed = build_controlled_report(rows, evidence_artifacts=dict(evidence))
     for task_type in ("phrase_region_grounding", "sentiment_emotion"):
@@ -159,9 +159,11 @@ def _require_controlled_artifact_evidence(controlled_report: dict[str, Any] | No
 
 
 def _validate_controlled_diagnostics_report_content(
+    controlled_rows: list[dict[str, Any]],
     diagnostics_rows: list[dict[str, Any]],
     errors: list[str],
 ) -> None:
+    controlled_by_family = _controlled_rows_by_family(controlled_rows)
     rows_by_family: dict[str, dict[str, Any]] = {}
     for row in diagnostics_rows:
         family = str(row.get("family", "")).strip()
@@ -183,6 +185,11 @@ def _validate_controlled_diagnostics_report_content(
             continue
         if row.get("stackability_passed") is not True:
             errors.append(f"controlled report diagnostics_report {family} stackability_passed must be explicit true")
+        controlled_row = controlled_by_family.get(family)
+        if controlled_row is not None and row.get("stackability_passed") != controlled_row.get("stackability_passed"):
+            errors.append(
+                f"controlled report diagnostics_report {family} stackability_passed disagrees with controlled_rows"
+            )
         matrix = row.get("oracle_matrix")
         if not isinstance(matrix, Mapping):
             errors.append(f"controlled report diagnostics_report {family} oracle_matrix must be an object")
@@ -191,6 +198,36 @@ def _validate_controlled_diagnostics_report_content(
             cell_payload = matrix.get(cell)
             if not isinstance(cell_payload, Mapping):
                 errors.append(f"controlled report diagnostics_report {family} missing oracle_matrix cell: {cell}")
+                continue
+            controlled_loss = _oracle_cell_loss(controlled_row, cell) if controlled_row is not None else None
+            diagnostics_loss = _finite_float(cell_payload.get("loss"))
+            if controlled_loss is not None and diagnostics_loss is not None:
+                if not math.isclose(diagnostics_loss, controlled_loss, rel_tol=1e-9, abs_tol=1e-9):
+                    errors.append(
+                        f"controlled report diagnostics_report {family} oracle_matrix.{cell}.loss "
+                        "disagrees with controlled_rows"
+                    )
+
+
+def _controlled_rows_by_family(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    by_family: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        family = str(row.get("family", "")).strip()
+        if family and family in CONTROLLED_REQUIRED_FAMILIES and family not in by_family:
+            by_family[family] = row
+    return by_family
+
+
+def _oracle_cell_loss(row: dict[str, Any] | None, cell: str) -> float | None:
+    if row is None:
+        return None
+    matrix = row.get("oracle_matrix")
+    if not isinstance(matrix, Mapping):
+        return None
+    cell_payload = matrix.get(cell)
+    if not isinstance(cell_payload, Mapping):
+        return None
+    return _finite_float(cell_payload.get("loss"))
 
 
 def _controlled_report_payload(controlled_report: dict[str, Any] | None) -> dict[str, Any] | None:
