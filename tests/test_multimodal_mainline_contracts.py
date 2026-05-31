@@ -35,6 +35,8 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
     def test_step1_public_dataset_adapters_export_and_fail_fast_on_missing_raw(self):
         from moat_ovha_torch.data.multimodal.adapters import (
             CMUMOSEIAdapter,
+            CMUMOSIAdapter,
+            IEMOCAPAdapter,
             Flickr30kEntitiesAdapter,
             MELDAdapter,
             MissingMultimodalDataError,
@@ -48,6 +50,8 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             VisualGenomeAdapter(),
             CMUMOSEIAdapter(),
             MELDAdapter(),
+            CMUMOSIAdapter(),
+            IEMOCAPAdapter(),
         )
         with tempfile.TemporaryDirectory() as tmp:
             raw_root = Path(tmp)
@@ -67,12 +71,17 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                 "flickr30k_entities",
                 "visual_genome",
                 "cmu_mosei",
+                "cmu_mosi",
                 "meld",
+                "iemocap",
             },
         )
         self.assertEqual(module._modalities_for("visual_genome"), ["text", "region"])
         self.assertEqual(module._tasks_for("visual_genome"), ["phrase_region_grounding"])
+        self.assertEqual(module._modalities_for("cmu_mosi"), ["text", "audio", "vision"])
+        self.assertEqual(module._tasks_for("cmu_mosi"), ["sentiment_regression", "emotion_classification"])
         self.assertEqual(module._modalities_for("meld"), ["text", "audio", "vision"])
+        self.assertEqual(module._tasks_for("iemocap"), ["sentiment_regression", "emotion_classification"])
         self.assertEqual(module._tasks_for("meld"), ["sentiment_regression", "emotion_classification"])
 
     def test_build_cache_cli_reports_missing_raw_as_json_fail_fast(self):
