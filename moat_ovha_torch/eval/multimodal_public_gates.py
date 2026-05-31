@@ -519,6 +519,8 @@ def _required_robustness_ablation_reasons(value: Any) -> list[str]:
 
 def _robustness_metric_reasons(summary: dict[str, Any], full_model: str, baseline_model: str) -> list[str]:
     reasons: list[str] = []
+    clean_scores = _robustness_score_map(summary.get("clean_score"), "clean_score", full_model, baseline_model, reasons)
+    corrupted_scores = _robustness_score_map(summary.get("corrupted_score"), "corrupted_score", full_model, baseline_model, reasons)
     relative_drop = summary.get("relative_drop")
     if not isinstance(relative_drop, dict) or not relative_drop:
         reasons.append("robustness relative_drop missing")
@@ -535,6 +537,16 @@ def _robustness_metric_reasons(summary: dict[str, Any], full_model: str, baselin
             if _is_empty_reporting_value(model) or _finite_float(drop) is None:
                 reasons.append("robustness relative_drop values must be keyed by model and finite")
                 break
+        if clean_scores is not None and corrupted_scores is not None:
+            for model in (full_model, baseline_model):
+                clean = clean_scores.get(model)
+                corrupted = corrupted_scores.get(model)
+                reported = _finite_float(relative_drop.get(model))
+                if clean is None or corrupted is None or reported is None:
+                    continue
+                expected = (clean - corrupted) / max(abs(clean), 1e-12)
+                if not math.isclose(reported, expected, rel_tol=1e-9, abs_tol=1e-9):
+                    reasons.append(f"robustness relative_drop disagrees with clean/corrupted scores for model: {model}")
     auc = summary.get("auc_over_corruption_strength")
     if not isinstance(auc, dict) or not auc:
         reasons.append("robustness AUC over corruption strength missing")
@@ -548,6 +560,30 @@ def _robustness_metric_reasons(summary: dict[str, Any], full_model: str, baselin
                 reasons.append("robustness AUC over corruption strength values must be keyed by model and finite")
                 break
     return reasons
+
+
+def _robustness_score_map(
+    value: Any,
+    key: str,
+    full_model: str,
+    baseline_model: str,
+    reasons: list[str],
+) -> dict[str, float] | None:
+    if not isinstance(value, dict) or not value:
+        reasons.append(f"robustness {key} missing")
+        return None
+    parsed: dict[str, float] = {}
+    for model in (full_model, baseline_model):
+        score = _finite_float(value.get(model))
+        if score is None:
+            reasons.append(f"robustness {key} missing finite score for model: {model}")
+        else:
+            parsed[model] = score
+    for model, score in value.items():
+        if _is_empty_reporting_value(model) or _finite_float(score) is None:
+            reasons.append(f"robustness {key} values must be keyed by model and finite")
+            break
+    return parsed
 
 
 def _rceo_reliability_shift_reasons(value: Any, *, minimum_drop: float = 0.05) -> list[str]:

@@ -78,6 +78,8 @@ class MultimodalPublicGateTests(unittest.TestCase):
             robustness_summary={
                 "full_model": "ovha_full",
                 "baseline_model": "cross_attention_transformer",
+                "clean_score": {"ovha_full": 0.75, "cross_attention_transformer": 0.75},
+                "corrupted_score": {"ovha_full": 0.69, "cross_attention_transformer": 0.63},
                 "relative_drop": {"ovha_full": 0.08, "cross_attention_transformer": 0.16},
                 "auc_over_corruption_strength": {"ovha_full": 0.74, "cross_attention_transformer": 0.68},
                 "full_drop_less_than_baseline": True,
@@ -133,6 +135,8 @@ class MultimodalPublicGateTests(unittest.TestCase):
             robustness_summary={
                 "full_model": "ovha_full",
                 "baseline_model": "cross_attention_transformer",
+                "clean_score": {"ovha_full": 0.75, "cross_attention_transformer": 0.75},
+                "corrupted_score": {"ovha_full": 0.69, "cross_attention_transformer": 0.63},
                 "relative_drop": {"ovha_full": 0.08, "cross_attention_transformer": 0.16},
                 "auc_over_corruption_strength": {"ovha_full": 0.74, "cross_attention_transformer": 0.68},
                 "full_drop_less_than_baseline": True,
@@ -1337,6 +1341,8 @@ def _passing_sentiment_robustness() -> dict[str, object]:
     return {
         "full_model": "ovha_full",
         "baseline_model": "cross_attention_transformer",
+        "clean_score": {"ovha_full": 0.75, "cross_attention_transformer": 0.75},
+        "corrupted_score": {"ovha_full": 0.69, "cross_attention_transformer": 0.63},
         "relative_drop": {"ovha_full": 0.08, "cross_attention_transformer": 0.16},
         "auc_over_corruption_strength": {"ovha_full": 0.74, "cross_attention_transformer": 0.68},
         "full_drop_less_than_baseline": True,

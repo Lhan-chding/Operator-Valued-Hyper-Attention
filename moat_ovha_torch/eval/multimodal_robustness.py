@@ -35,6 +35,8 @@ def summarize_robustness_rows(
     by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         by_model[str(row["model"])].append(row)
+    clean_score = {model: _endpoint_score(model_rows, first=True) for model, model_rows in by_model.items()}
+    corrupted_score = {model: _endpoint_score(model_rows, first=False) for model, model_rows in by_model.items()}
     relative_drop = {model: _relative_drop(model_rows) for model, model_rows in by_model.items()}
     auc = {model: _auc_over_corruption(model_rows) for model, model_rows in by_model.items()}
     full_rows = sorted(by_model.get(full_model, []), key=lambda row: float(row["corruption_strength"]))
@@ -56,6 +58,8 @@ def summarize_robustness_rows(
     return {
         "full_model": full_model,
         "baseline_model": baseline_model,
+        "clean_score": clean_score,
+        "corrupted_score": corrupted_score,
         "relative_drop": relative_drop,
         "auc_over_corruption_strength": auc,
         "rceo_reliability_monotonic": reliability_monotonic,
@@ -72,10 +76,20 @@ def summarize_robustness_rows(
 def _relative_drop(rows: list[dict[str, Any]]) -> float:
     if not rows:
         return float("inf")
-    ordered = sorted(rows, key=lambda row: float(row["corruption_strength"]))
-    clean = float(ordered[0]["score"])
-    corrupted = float(ordered[-1]["score"])
+    clean = _endpoint_score(rows, first=True)
+    corrupted = _endpoint_score(rows, first=False)
     return (clean - corrupted) / max(abs(clean), 1e-12)
+
+
+def _endpoint_score(rows: list[dict[str, Any]], *, first: bool) -> float:
+    if not rows:
+        return float("inf")
+    by_strength: dict[float, list[float]] = defaultdict(list)
+    for row in rows:
+        by_strength[float(row["corruption_strength"])].append(float(row["score"]))
+    strength = min(by_strength) if first else max(by_strength)
+    values = by_strength[strength]
+    return sum(values) / len(values)
 
 
 def _auc_over_corruption(rows: list[dict[str, Any]]) -> float:
