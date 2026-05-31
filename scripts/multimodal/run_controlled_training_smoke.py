@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -535,13 +536,22 @@ def _controlled_rows(
                 learned_candidate_values=output.candidate_values,
                 learned_router_weights=output.router_weights,
             )
+            gate_diagnostics = _controlled_gate_diagnostics(model, batch, output)
             row = controlled_row_from_oracle_report(
                 family,
                 CONTROLLED_FAMILY_ACTIVE_OPERATOR[family],
                 oracle_report,
                 router_accuracy=_router_accuracy(output, batch),
                 stackability_passed=bool(output.diagnostics.get("stackability_passed")),
-                diagnostics=_row_diagnostics(output, batch),
+                no_operator_memory_delta=gate_diagnostics["no_operator_memory_delta"],
+                no_hyper_adapter_delta=gate_diagnostics["no_hyper_adapter_delta"],
+                no_evidence_router_delta=gate_diagnostics["no_evidence_router_delta"],
+                no_reliability_prior_delta=gate_diagnostics["no_reliability_prior_delta"],
+                memory_only_router_delta=gate_diagnostics["memory_only_router_delta"],
+                evidence_only_router_delta=gate_diagnostics["evidence_only_router_delta"],
+                no_lrio_delta=gate_diagnostics.get("no_lrio_delta"),
+                no_rceo_delta=gate_diagnostics.get("no_rceo_delta"),
+                diagnostics={**_row_diagnostics(output, batch), **gate_diagnostics},
             )
             row["training_mode"] = "trained_smoke"
             row["training_steps"] = int(training_steps)
@@ -550,6 +560,224 @@ def _controlled_rows(
             row["learned_task_loss"] = _as_float(_task_loss(output.y_hat, batch))
             rows.append(row)
     return rows
+
+
+def _controlled_gate_diagnostics(
+    model: MultimodalOVHA,
+    batch: Any,
+    output: MultimodalOVHAOutput,
+) -> dict[str, object]:
+    full_loss = _as_float(_task_loss(output.y_hat, batch))
+    diagnostics: dict[str, object] = {}
+    diagnostics.update(_router_decomposition_ablation_deltas(output, batch, full_loss))
+    diagnostics.update(_structural_ablation_deltas(model, batch, full_loss))
+    diagnostics.update(_operator_training_diagnostics(output, batch))
+    if batch.task_type in {"lrio_low_rank_interaction", "mixed_relation_operator"}:
+        diagnostics["no_lrio_delta"] = _drop_candidate_delta(output, batch, "LRIO", full_loss)
+    if batch.task_type in {"rceo_reliability_corruption", "mixed_relation_operator"}:
+        diagnostics["no_rceo_delta"] = diagnostics["no_reliability_prior_delta"]
+    if batch.task_type == "rceo_reliability_corruption":
+        diagnostics.update(_rceo_training_diagnostics(model, batch, output))
+    return diagnostics
+
+
+def _router_decomposition_ablation_deltas(
+    output: MultimodalOVHAOutput,
+    batch: Any,
+    full_loss: float,
+) -> dict[str, float]:
+    return {
+        "no_evidence_router_delta": _router_parts_delta(output, batch, ("memory", "reliability"), full_loss),
+        "no_reliability_prior_delta": _router_parts_delta(output, batch, ("memory", "evidence"), full_loss),
+        "memory_only_router_delta": _router_parts_delta(output, batch, ("memory",), full_loss),
+        "evidence_only_router_delta": _router_parts_delta(output, batch, ("evidence",), full_loss),
+    }
+
+
+def _router_parts_delta(
+    output: MultimodalOVHAOutput,
+    batch: Any,
+    parts: tuple[str, ...],
+    full_loss: float,
+) -> float:
+    logits = _router_logits_from_parts(output, parts)
+    weights = torch.softmax(logits, dim=-1)
+    return _candidate_mixture_delta(output.candidate_values, weights, batch, full_loss)
+
+
+def _router_logits_from_parts(output: MultimodalOVHAOutput, parts: tuple[str, ...]) -> torch.Tensor:
+    selected = [output.router_logit_parts[name] for name in parts]
+    logits = selected[0]
+    for value in selected[1:]:
+        logits = logits + value
+    return logits
+
+
+def _structural_ablation_deltas(
+    model: MultimodalOVHA,
+    batch: Any,
+    full_loss: float,
+) -> dict[str, float]:
+    no_memory = _manual_prediction(model, batch, zero_memory=True, neutral_adapter=False)
+    no_adapter = _manual_prediction(model, batch, zero_memory=False, neutral_adapter=True)
+    return {
+        "no_operator_memory_delta": _as_float(_task_loss(no_memory, batch)) - full_loss,
+        "no_hyper_adapter_delta": _as_float(_task_loss(no_adapter, batch)) - full_loss,
+    }
+
+
+def _manual_prediction(
+    model: MultimodalOVHA,
+    batch: Any,
+    *,
+    zero_memory: bool,
+    neutral_adapter: bool,
+) -> torch.Tensor:
+    evidence = model.evidence_encoder(batch)
+    memory_bank = model.memory_encoder(evidence.global_features)
+    if zero_memory:
+        memory_bank = {name: torch.zeros_like(value) for name, value in memory_bank.items()}
+    reliability = model.reliability_prior(batch, evidence) if model.reliability_prior is not None else None
+    router_output, params = model.joint_router_adapter(memory_bank, evidence, reliability)
+    if neutral_adapter:
+        params = _neutral_adapter_params(params)
+    candidate_values = torch.stack(
+        [
+            model.candidate_primitives[name](
+                batch=batch,
+                memory_slot=memory_bank[name],
+                evidence=evidence,
+                params=params[name],
+                output_dim=model.output_dim,
+            ).value
+            for name in model.candidate_names
+        ],
+        dim=-2,
+    )
+    return (router_output.weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
+
+
+def _neutral_adapter_params(params: dict[str, dict[str, torch.Tensor]]) -> dict[str, dict[str, torch.Tensor]]:
+    neutral: dict[str, dict[str, torch.Tensor]] = {}
+    for name, values in params.items():
+        neutral[name] = {}
+        for key, value in values.items():
+            if key in {"bias", "prototype_logits_shift", "rank_logits"}:
+                neutral[name][key] = torch.zeros_like(value)
+            else:
+                neutral[name][key] = torch.ones_like(value)
+    return neutral
+
+
+def _operator_training_diagnostics(output: MultimodalOVHAOutput, batch: Any) -> dict[str, float]:
+    diagnostics: dict[str, float] = {}
+    if batch.task_type == "spo_global_prototype":
+        diagnostics["prototype_kl_delta"] = _adapter_param_mean_delta(
+            output,
+            batch,
+            "SPO",
+            "prototype_logits_shift",
+        )
+    if batch.task_type == "lrio_low_rank_interaction":
+        diagnostics["rank_logits_kl_delta"] = _adapter_param_mean_delta(output, batch, "LRIO", "rank_logits")
+    if batch.task_type == "cato_alignment_transport":
+        cato = output.diagnostics.get("candidate_diagnostics", {}).get("CATO", {})
+        entropy = _as_float(cato.get("alignment_entropy", 0.0))
+        region_count = max(int(batch.fields["region"].x.shape[1]), 1)
+        max_entropy = float(torch.log(torch.tensor(float(region_count), device=batch.target_y.device)).item())
+        diagnostics["alignment_entropy_delta"] = max_entropy - entropy
+        learned_top = _as_float(cato.get("top_k_alignment", 0.0))
+        true_top = _as_float(batch.hidden["true_alignment_pairs"][..., 1].to(dtype=torch.float32).mean())
+        diagnostics["alignment_topk_delta"] = abs(true_top) - abs(learned_top - true_top)
+    return diagnostics
+
+
+def _adapter_param_mean_delta(
+    output: MultimodalOVHAOutput,
+    batch: Any,
+    operator: str,
+    key: str,
+) -> float:
+    predicted = output.diagnostics.get("adapter_params_detail", {}).get(operator, {}).get(f"{key}_mean")
+    true_value = (batch.hidden or {}).get("true_adapter_params", {}).get("params_by_operator", {}).get(operator, {}).get(key)
+    if predicted is None or true_value is None:
+        return 0.0
+    true_mean = true_value.to(device=predicted.device, dtype=predicted.dtype).mean()
+    learned_error = (predicted - true_mean).square()
+    baseline_error = true_mean.square()
+    return _as_float(baseline_error - learned_error)
+
+
+def _drop_candidate_delta(
+    output: MultimodalOVHAOutput,
+    batch: Any,
+    candidate: str,
+    full_loss: float,
+) -> float:
+    candidate_index = CONTROLLED_CANDIDATE_NAMES.index(candidate)
+    weights = output.router_weights.clone()
+    weights[..., candidate_index] = 0.0
+    weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+    return _candidate_mixture_delta(output.candidate_values, weights, batch, full_loss)
+
+
+def _candidate_mixture_delta(
+    candidate_values: torch.Tensor,
+    router_weights: torch.Tensor,
+    batch: Any,
+    full_loss: float,
+) -> float:
+    prediction = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
+    return _as_float(_task_loss(prediction, batch)) - full_loss
+
+
+def _rceo_training_diagnostics(
+    model: MultimodalOVHA,
+    batch: Any,
+    output: MultimodalOVHAOutput,
+) -> dict[str, object]:
+    curve = []
+    for strength, quality in ((0.0, 1.0), (0.7, 0.3)):
+        curve_batch = _batch_with_audio_quality(batch, quality=quality, corruption_strength=strength)
+        curve_output = model(curve_batch)
+        reliability = curve_output.reliability_prior
+        mean_reliability = 0.0 if reliability is None else _as_float(reliability.modality_reliability.mean())
+        curve.append({"corruption_strength": strength, "mean_reliability": mean_reliability})
+    no_reliability_weights = torch.softmax(_router_logits_from_parts(output, ("memory", "evidence")), dim=-1)
+    load_shift = _as_float((output.router_weights - no_reliability_weights).abs().mean())
+    return {
+        "rceo_reliability_curve": curve,
+        "rceo_reliability_monotonic": all(
+            curve[index + 1]["mean_reliability"] <= curve[index]["mean_reliability"] + 1e-12
+            for index in range(len(curve) - 1)
+        ),
+        "rceo_router_load_shift": load_shift,
+    }
+
+
+def _batch_with_audio_quality(batch: Any, *, quality: float, corruption_strength: float) -> Any:
+    fields = dict(batch.fields)
+    audio = fields["audio"]
+    audio_quality = torch.full(
+        (audio.x.shape[0], audio.x.shape[1], 1),
+        float(quality),
+        dtype=audio.x.dtype,
+        device=audio.x.device,
+    )
+    fields["audio"] = replace(audio, quality=audio_quality)
+    hidden = dict(batch.hidden or {})
+    hidden["true_reliability"] = audio_quality.mean(dim=1)
+    hidden["true_corruption_level"] = torch.full(
+        (audio.x.shape[0], 1),
+        float(corruption_strength),
+        dtype=audio.x.dtype,
+        device=audio.x.device,
+    )
+    supervision = replace(
+        batch.supervision,
+        corruption_metadata={"synthetic_corruption": hidden["true_corruption_level"]},
+    )
+    return replace(batch, fields=fields, supervision=supervision, hidden=hidden)
 
 
 def _row_diagnostics(output: MultimodalOVHAOutput, batch: Any) -> dict[str, object]:
@@ -678,7 +906,22 @@ def _diagnostics_row(row: dict[str, object]) -> dict[str, object]:
         "candidate_oracle_mse",
         "learned_router_entropy",
         "learned_mean_reliability",
+        "no_evidence_router_delta",
+        "no_reliability_prior_delta",
+        "memory_only_router_delta",
+        "evidence_only_router_delta",
+        "no_operator_memory_delta",
+        "no_hyper_adapter_delta",
+        "prototype_kl_delta",
+        "rank_logits_kl_delta",
+        "alignment_entropy_delta",
+        "alignment_topk_delta",
         "rceo_prior_effect",
+        "rceo_reliability_monotonic",
+        "rceo_router_load_shift",
+        "rceo_reliability_curve",
+        "no_lrio_delta",
+        "no_rceo_delta",
         "router_accuracy",
     ):
         if key in row:
@@ -691,6 +934,9 @@ def _diagnostics_row(row: dict[str, object]) -> dict[str, object]:
 def _as_float(value: Any) -> float:
     if hasattr(value, "detach"):
         value = value.detach()
+    shape = getattr(value, "shape", ())
+    if shape not in ((), None) and hasattr(value, "mean"):
+        value = value.mean()
     if hasattr(value, "item"):
         return float(value.item())
     return float(value)
