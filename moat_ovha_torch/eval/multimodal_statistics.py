@@ -77,6 +77,7 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
                 for key in ("mean", "std", "ci95"):
                     if key not in values:
                         errors.append(f"{task}/{split}/{model} missing {key}")
+                _validate_main_table_model_row(summary, str(task), str(split), str(model), values, errors)
     if not summary.get("paired_tests"):
         errors.append("paired_tests missing; main deltas require paired permutation/bootstrap evidence")
     else:
@@ -381,6 +382,45 @@ def _validate_paired_delta_consistency(
         errors.append(f"{task}/{split} paired_tests bootstrap CI disagrees with metric_direction")
 
 
+def _validate_main_table_model_row(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    model: str,
+    values: Any,
+    errors: list[str],
+) -> None:
+    if not isinstance(values, dict):
+        errors.append(f"{task}/{split}/{model} main table row must be an object")
+        return
+    appendix_scores = _appendix_scores(summary, task, split, model)
+    observed_seed_count = _safe_int(values.get("seed_count"))
+    if observed_seed_count != len(appendix_scores):
+        errors.append(f"{task}/{split}/{model} seed_count disagrees with per_seed_appendix")
+    if not appendix_scores:
+        return
+    expected_scores = [score for _, score in appendix_scores]
+    observed_scores = _finite_float_list(values.get("per_seed_scores"))
+    if observed_scores is None or len(observed_scores) != len(expected_scores) or any(
+        not math.isclose(observed, expected, rel_tol=1e-9, abs_tol=1e-9)
+        for observed, expected in zip(observed_scores, expected_scores)
+    ):
+        errors.append(f"{task}/{split}/{model} per_seed_scores disagree with per_seed_appendix")
+    observed_mean = _finite_float(values.get("mean"))
+    if observed_mean is None or not math.isclose(observed_mean, _mean(expected_scores), rel_tol=1e-9, abs_tol=1e-9):
+        errors.append(f"{task}/{split}/{model} mean disagrees with per_seed_appendix")
+    observed_std = _finite_float(values.get("std"))
+    if observed_std is None or not math.isclose(observed_std, _std(expected_scores), rel_tol=1e-9, abs_tol=1e-9):
+        errors.append(f"{task}/{split}/{model} std disagrees with per_seed_appendix")
+    observed_ci = _finite_ci95(values.get("ci95"))
+    expected_ci = _ci95(expected_scores)
+    if observed_ci is None or any(
+        not math.isclose(observed, expected, rel_tol=1e-9, abs_tol=1e-9)
+        for observed, expected in zip(observed_ci, expected_ci)
+    ):
+        errors.append(f"{task}/{split}/{model} ci95 disagrees with per_seed_appendix")
+
+
 def _baseline_model_from_delta(model_delta: Any) -> str | None:
     if not model_delta:
         return None
@@ -474,6 +514,29 @@ def _expected_paired_deltas(
     ]
 
 
+def _appendix_scores(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    model: str,
+) -> list[tuple[int, float]]:
+    appendix = summary.get("per_seed_appendix", [])
+    if not isinstance(appendix, list):
+        return []
+    scores: dict[int, float] = {}
+    for row in appendix:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("task")) != task or str(row.get("split")) != split or str(row.get("model")) != model:
+            continue
+        seed = _safe_int(row.get("seed"))
+        score = _finite_float(row.get("score"))
+        if seed is None or score is None:
+            continue
+        scores[seed] = score
+    return sorted(scores.items())
+
+
 def _higher_is_better(
     main_table: dict[str, dict[str, dict[str, dict[str, Any]]]],
     task: str,
@@ -505,6 +568,18 @@ def _finite_ci95(value: Any) -> tuple[float, float] | None:
     if low is None or high is None:
         return None
     return (low, high)
+
+
+def _finite_float_list(value: Any) -> list[float] | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    values: list[float] = []
+    for item in value:
+        numeric = _finite_float(item)
+        if numeric is None:
+            return None
+        values.append(numeric)
+    return values
 
 
 def _safe_int(value: Any) -> int | None:
