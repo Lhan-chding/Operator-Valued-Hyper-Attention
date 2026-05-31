@@ -240,6 +240,64 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(data_card["metadata_availability"]["speaker_id"], True)
         self.assertEqual(train_records[0]["speaker_id"], "speaker-train")
 
+    def test_build_cache_cli_writes_valid_meld_cache_from_dialogue_manifest(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_root = tmp_path / "raw"
+            cache_root = tmp_path / "cache"
+            _write_meld_raw_fixture(raw_root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "meld",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            layout = MultimodalCacheLayout(cache_root, "meld", "v0.1")
+            validation = validate_cache_layout(layout, splits=("train", "val", "test"))
+            data_card = json.loads((layout.root / "data_card.json").read_text()) if (layout.root / "data_card.json").exists() else {}
+            train_records = (
+                [
+                    json.loads(line)
+                    for line in (layout.root / "provenance" / "sample_records_train.jsonl").read_text().splitlines()
+                    if line.strip()
+                ]
+                if (layout.root / "provenance" / "sample_records_train.jsonl").exists()
+                else []
+            )
+            import numpy as np
+
+            task_labels_train = (
+                np.load(layout.root / "supervision" / "task_labels_train.npy")
+                if (layout.root / "supervision" / "task_labels_train.npy").exists()
+                else None
+            )
+            missing_modality_mask_val = (
+                np.load(layout.root / "supervision" / "missing_modality_mask_val.npy")
+                if (layout.root / "supervision" / "missing_modality_mask_val.npy").exists()
+                else None
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["policy"], "cache built and validated")
+        self.assertTrue(validation.ok, validation.errors)
+        self.assertEqual(task_labels_train.shape, (1, 7))
+        self.assertEqual(missing_modality_mask_val.shape, (1, 3))
+        self.assertEqual(data_card["metadata_availability"]["speaker_id"], True)
+        self.assertEqual(train_records[0]["speaker_id"], "Monica")
+        self.assertEqual(train_records[0]["transcript_source"], "MELD train_sent_emo.csv")
+
     def test_controlled_true_adapter_param_contract_matches_v1_protocol(self):
         from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
             CONTROLLED_FAMILY_ACTIVE_OPERATOR,
@@ -1163,6 +1221,57 @@ def _write_cmu_mosei_raw_fixture(raw_root: Path) -> None:
     np.save(raw_root / "features" / "audio_features.npy", np.arange(3 * 6 * 3, dtype=np.float32).reshape(3, 6, 3))
     np.save(raw_root / "features" / "visual_features.npy", np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4))
     np.save(raw_root / "labels" / "sentiment.npy", np.array([[-1.0], [0.0], [1.0]], dtype=np.float32))
+    np.save(raw_root / "labels" / "emotion.npy", np.eye(7, dtype=np.float32)[:3])
+
+
+def _write_meld_raw_fixture(raw_root: Path) -> None:
+    import numpy as np
+
+    for folder in ("features", "labels", "metadata"):
+        (raw_root / folder).mkdir(parents=True, exist_ok=True)
+    split_source_ids = {
+        "train": ["meld-train-1"],
+        "val": ["meld-val-1"],
+        "test": ["meld-test-1"],
+    }
+    (raw_root / "splits.json").write_text(json.dumps(split_source_ids, sort_keys=True) + "\n")
+    speaker_by_split = {"train": "Monica", "val": "Chandler", "test": "Rachel"}
+    records = []
+    for split, source_ids in split_source_ids.items():
+        for source_id in source_ids:
+            records.append(
+                {
+                    "source_id": source_id,
+                    "split": split,
+                    "original_split": split,
+                    "raw_ref": f"meld://friends/{source_id}",
+                    "license_tag": "fixture-license",
+                    "preprocessing_version": "fixture-meld-preprocess-v1",
+                    "utterance_id": source_id,
+                    "dialogue_id": f"dialogue-{split}",
+                    "speaker_id": speaker_by_split[split],
+                    "transcript_source": f"MELD {split}_sent_emo.csv",
+                }
+            )
+    (raw_root / "metadata" / "dialogues.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
+    (raw_root / "metadata" / "feature_versions.json").write_text(
+        json.dumps(
+            {
+                "text": "fixture-meld-text-v1",
+                "audio": "fixture-meld-audio-v1",
+                "visual": "fixture-meld-visual-v1",
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    np.save(raw_root / "metadata" / "missing_modality_mask.npy", np.zeros((3, 3), dtype=bool))
+    (raw_root / "metadata" / "corruption_transforms.json").write_text(
+        json.dumps({"version": "fixture-meld-corruption-v1"}, sort_keys=True) + "\n"
+    )
+    np.save(raw_root / "features" / "text_features.npy", np.arange(3 * 5 * 6, dtype=np.float32).reshape(3, 5, 6))
+    np.save(raw_root / "features" / "audio_features.npy", np.arange(3 * 4 * 3, dtype=np.float32).reshape(3, 4, 3))
+    np.save(raw_root / "features" / "visual_features.npy", np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4))
     np.save(raw_root / "labels" / "emotion.npy", np.eye(7, dtype=np.float32)[:3])
 
 
