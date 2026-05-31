@@ -95,6 +95,46 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertTrue(report["checks"]["spo_top_prototype_differentiates"]["passed"])
         self.assertTrue(report["checks"]["rceo_reliability_calibrated"]["passed"])
 
+    def test_sentiment_gate_respects_lower_is_better_mae_metrics(self):
+        from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
+
+        report = evaluate_sentiment_gate(
+            statistics_summary=_summary(
+                "sentiment_emotion",
+                "test",
+                full=0.41,
+                baseline=0.48,
+                higher_is_better=False,
+            ),
+            diagnostics_rows=[
+                {
+                    "setting": "clean",
+                    "router_load_by_candidate": {"TLEO": 0.1, "SPO": 0.35, "LRIO": 0.40, "CATO": 0.15},
+                    "candidate_diagnostics": {
+                        "LRIO": {"rank_entropy": 0.6},
+                        "SPO": {
+                            "prototype_entropy": 0.5,
+                            "top_prototype_by_class": {"negative": 1, "positive": 4},
+                        },
+                    },
+                }
+            ],
+            ablation_scores={"ovha_no_lrio": 0.52, "ovha_no_spo": 0.50, "ovha_no_rceo": 0.54},
+            robustness_summary={
+                "full_drop_less_than_baseline": True,
+                "rceo_reliability_monotonic": True,
+                "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
+                "required_stress_coverage": {"passed": True, "reasons": []},
+                "required_ablation_degradation": {"passed": True, "reasons": []},
+            },
+            task="sentiment_emotion",
+            split="test",
+        )
+
+        self.assertTrue(report["checks"]["full_beats_same_feature_baseline"]["passed"], report["reasons"])
+        self.assertTrue(report["checks"]["no_lrio_drops"]["passed"], report["reasons"])
+        self.assertGreater(report["checks"]["full_beats_same_feature_baseline"]["value"], 0.0)
+
     def test_sentiment_gate_rejects_missing_plan_diagnostics_and_calibration(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
 
@@ -389,6 +429,7 @@ def _summary(
     *,
     full: float,
     baseline: float,
+    higher_is_better: bool = True,
     seed_count: int = 3,
     common_seed_count: int = 3,
     include_bootstrap: bool = True,
@@ -403,12 +444,17 @@ def _summary(
         for model in _required_baselines_for_task(task):
             if model not in models:
                 models.append(model)
+    non_full_score = (
+        lambda index: baseline - 0.01 * index
+        if higher_is_better
+        else baseline + 0.01 * index
+    )
     model_scores = {
-        model: (full if model == "ovha_full" else baseline - 0.01 * index)
+        model: (full if model == "ovha_full" else non_full_score(index))
         for index, model in enumerate(models)
     }
     model_rows = {
-        model: _model_summary_row(score, seed_count, include_reporting_metadata)
+        model: _model_summary_row(score, seed_count, include_reporting_metadata, higher_is_better)
         for model, score in model_scores.items()
     }
     summary: dict[str, object] = {
@@ -435,8 +481,13 @@ def _summary(
     return summary
 
 
-def _model_summary_row(score: float, seed_count: int, include_reporting_metadata: bool) -> dict[str, object]:
-    row: dict[str, object] = {"mean": score, "seed_count": seed_count, "higher_is_better": True}
+def _model_summary_row(
+    score: float,
+    seed_count: int,
+    include_reporting_metadata: bool,
+    higher_is_better: bool,
+) -> dict[str, object]:
+    row: dict[str, object] = {"mean": score, "seed_count": seed_count, "higher_is_better": higher_is_better}
     if include_reporting_metadata:
         row.update(
             {
