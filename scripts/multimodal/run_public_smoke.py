@@ -770,6 +770,7 @@ def _write_smoke_statistics_preview(
     except ValueError as exc:
         summary = {}
         validation_payload = {"ok": False, "errors": [str(exc)], "warnings": []}
+    baseline_limitations = _baseline_smoke_evidence_limitations(baseline_raw_rows)
     payload = {
         "artifact_type": "public_smoke_statistics_preview",
         "evidence_scope": "smoke_statistics_preview_only_not_topconf_main_table",
@@ -782,10 +783,22 @@ def _write_smoke_statistics_preview(
         "evidence_limitations": [
             "not valid top-conference main-table evidence",
             "public metric inventory uses smoke proxies",
-            "baseline rows are deterministic same-feature probes, not trained strong baselines",
+            *baseline_limitations,
         ],
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def _baseline_smoke_evidence_limitations(baseline_rows: list[dict[str, object]]) -> list[str]:
+    protocols = {str(row.get("baseline_protocol", "")) for row in baseline_rows}
+    limitations: list[str] = []
+    if "deterministic_same_feature_probe_smoke" in protocols:
+        limitations.append("baseline rows are deterministic same-feature probes, not trained strong baselines")
+    if "trainable_same_feature_linear_probe_smoke" in protocols:
+        limitations.append("baseline rows are trainable same-feature linear probe smoke, not trained strong baselines")
+    if not limitations:
+        limitations.append("baseline rows are smoke proxies, not trained strong baselines")
+    return limitations
 
 
 def _preview_baseline_model(rows: list[dict[str, object]]) -> str:
@@ -1281,12 +1294,18 @@ def _public_smoke_baseline_raw_metric_rows(
             "evidence_limitations": [
                 "not a trained strong baseline",
                 "not a top-conference same-feature baseline comparison",
-                "deterministic probe only verifies baseline artifact plumbing and same-feature provenance",
+                _baseline_protocol_limitation(str(row["baseline_protocol"])),
                 "public metric inventory uses smoke proxies",
             ],
         }
         for row in eval_baseline_history
     ]
+
+
+def _baseline_protocol_limitation(baseline_protocol: str) -> str:
+    if baseline_protocol == "trainable_same_feature_linear_probe_smoke":
+        return "trainable same-feature linear probe smoke"
+    return "deterministic probe only verifies baseline artifact plumbing and same-feature provenance"
 
 
 def _hardware_metadata(device: torch.device, elapsed_seconds: float) -> dict[str, object]:
