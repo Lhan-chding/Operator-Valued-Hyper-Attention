@@ -1379,6 +1379,42 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
         self.assertNotIn("hidden", batch.model_inputs())
         self.assertNotIn("true_active_operator", str(batch.model_inputs()))
 
+    def test_router_memory_logits_have_candidate_specific_query_path(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceBank
+        from moat_ovha_torch.models.multimodal.router import MultimodalRelationRouter
+
+        router = MultimodalRelationRouter(d_model=4)
+        self.assertTrue(hasattr(router, "query_candidate_head"))
+        with torch.no_grad():
+            router.query_candidate_head.weight.copy_(torch.eye(4))
+            router.query_candidate_head.bias.zero_()
+            router.memory_head.weight.zero_()
+            router.memory_head.bias.zero_()
+        query_features = torch.eye(4).view(1, 4, 4)
+        evidence = MultimodalEvidenceBank(
+            query_features=query_features,
+            global_features=torch.zeros(1, 4),
+            local_features=query_features,
+            prototype_features=query_features,
+            low_rank_features=query_features,
+            alignment_features=query_features,
+            candidate_evidence_logits=torch.zeros(1, 4, 4),
+            local_entropy=torch.zeros(()),
+            alignment_entropy=torch.zeros(()),
+            field_features={"text": torch.zeros(1, 4, 4)},
+            diagnostics={},
+        )
+        memory_bank = {
+            name: torch.zeros(1, 2, 4)
+            for name in ("TLEO", "SPO", "LRIO", "CATO")
+        }
+
+        output = router(memory_bank, evidence, reliability=None)
+
+        self.assertTrue(torch.equal(output.logit_parts["memory"].argmax(dim=-1), torch.arange(4).view(1, 4)))
+
     def test_oracle_matrix_true_true_reconstructs_controlled_targets(self):
         import torch
 
