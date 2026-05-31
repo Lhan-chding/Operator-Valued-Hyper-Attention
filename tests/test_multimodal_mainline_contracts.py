@@ -72,6 +72,34 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(module._modalities_for("meld"), ["text", "audio", "vision"])
         self.assertEqual(module._tasks_for("meld"), ["sentiment_regression", "emotion_classification"])
 
+    def test_public_dataset_adapters_expose_cache_required_supervision_shards(self):
+        from moat_ovha_torch.data.multimodal.adapters import (
+            CMUMOSEIAdapter,
+            Flickr30kEntitiesAdapter,
+            MELDAdapter,
+            RefCOCOAdapter,
+            VisualGenomeAdapter,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_root = Path(tmp)
+            for adapter in (RefCOCOAdapter(), Flickr30kEntitiesAdapter(), VisualGenomeAdapter()):
+                with self.subTest(adapter=adapter.name):
+                    supervision = adapter.extract_supervision({"cache_root": cache_root}, "train")
+                    self.assertEqual(supervision.alignment_pairs_path, cache_root / "alignment_pairs_train.parquet")
+                    self.assertEqual(supervision.bbox_targets_path, cache_root / "bbox_targets_train.npy")
+                    self.assertEqual(supervision.region_targets_path, cache_root / "region_targets_train.npy")
+
+            for adapter in (CMUMOSEIAdapter(), MELDAdapter()):
+                with self.subTest(adapter=adapter.name):
+                    supervision = adapter.extract_supervision({"cache_root": cache_root}, "train")
+                    self.assertEqual(supervision.task_label_path, cache_root / "sentiment_train.npy")
+                    self.assertEqual(
+                        supervision.modality_missing_mask_path,
+                        cache_root / "missing_modality_mask_train.npy",
+                    )
+                    self.assertEqual(supervision.corruption_metadata_path, cache_root / "corruption_train.parquet")
+
     def test_pde_feasibility_note_uses_non_main_claim_framing(self):
         note = (ROOT / "reports" / "pdebench_architecture_feasibility_note.md").read_text()
 
