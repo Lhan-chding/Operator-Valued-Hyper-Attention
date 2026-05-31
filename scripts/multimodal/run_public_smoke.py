@@ -24,7 +24,11 @@ from moat_ovha_torch.data.multimodal.typed_batch import (
     SupervisionBank,
     TokenField,
 )
-from moat_ovha_torch.eval.multimodal_statistics import REGION_TEXT_REQUIRED_PUBLIC_METRICS
+from moat_ovha_torch.eval.multimodal_statistics import (
+    REGION_TEXT_REQUIRED_PUBLIC_METRICS,
+    summarize_public_results,
+    validate_public_summary,
+)
 from moat_ovha_torch.models.multimodal.baselines import assert_same_feature_baseline_policy
 from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
 from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA, MultimodalOVHAOutput
@@ -542,6 +546,10 @@ def _write_training_artifacts(
             "sha256": file_sha256(diagnostics),
         },
     }
+    smoke_raw_rows: list[dict[str, object]] = []
+    baseline_raw_rows: list[dict[str, object]] = []
+    smoke_raw_metrics: Path | None = None
+    smoke_baseline_metrics: Path | None = None
     if eval_history:
         eval_metrics = artifact_root / "public_eval_metrics.jsonl"
         eval_diagnostics = artifact_root / "public_eval_diagnostics.jsonl"
@@ -566,7 +574,68 @@ def _write_training_artifacts(
             "path": str(smoke_baseline_metrics),
             "sha256": file_sha256(smoke_baseline_metrics),
         }
+    if smoke_raw_rows and baseline_raw_rows and smoke_raw_metrics is not None and smoke_baseline_metrics is not None:
+        smoke_statistics_preview = artifact_root / "public_smoke_statistics_preview.json"
+        _write_smoke_statistics_preview(
+            smoke_statistics_preview,
+            smoke_raw_rows=smoke_raw_rows,
+            baseline_raw_rows=baseline_raw_rows,
+            source_paths=(smoke_raw_metrics, smoke_baseline_metrics),
+        )
+        artifacts["smoke_statistics_preview"] = {
+            "path": str(smoke_statistics_preview),
+            "sha256": file_sha256(smoke_statistics_preview),
+        }
     return artifacts
+
+
+def _write_smoke_statistics_preview(
+    path: Path,
+    *,
+    smoke_raw_rows: list[dict[str, object]],
+    baseline_raw_rows: list[dict[str, object]],
+    source_paths: tuple[Path, Path],
+) -> None:
+    rows = [*smoke_raw_rows, *baseline_raw_rows]
+    full_model = "ovha_full"
+    baseline_model = _preview_baseline_model(rows)
+    try:
+        summary = summarize_public_results(rows, full_model=full_model, baseline_model=baseline_model)
+        validation = validate_public_summary(summary)
+        validation_payload = {
+            "ok": validation.ok,
+            "errors": validation.errors,
+            "warnings": validation.warnings,
+        }
+    except ValueError as exc:
+        summary = {}
+        validation_payload = {"ok": False, "errors": [str(exc)], "warnings": []}
+    payload = {
+        "artifact_type": "public_smoke_statistics_preview",
+        "evidence_scope": "smoke_statistics_preview_only_not_topconf_main_table",
+        "not_topconf_main_table": True,
+        "full_model": full_model,
+        "baseline_model": baseline_model,
+        "source_raw_metric_paths": [str(path) for path in source_paths],
+        "summary": summary,
+        "validation": validation_payload,
+        "evidence_limitations": [
+            "not valid top-conference main-table evidence",
+            "public metric inventory uses smoke proxies",
+            "baseline rows are deterministic same-feature probes, not trained strong baselines",
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def _preview_baseline_model(rows: list[dict[str, object]]) -> str:
+    models = {str(row.get("model")) for row in rows}
+    if "cross_attention_transformer" in models:
+        return "cross_attention_transformer"
+    for model in sorted(models):
+        if model != "ovha_full":
+            return model
+    return "cross_attention_transformer"
 
 
 def _public_smoke_baseline_history_rows(
