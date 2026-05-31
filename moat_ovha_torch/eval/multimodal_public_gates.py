@@ -322,9 +322,10 @@ def _model_mean(summary: dict[str, Any], task: str, split: str, model: str) -> f
 
 def _higher_is_better(summary: dict[str, Any], task: str, split: str, model: str) -> bool:
     try:
-        return bool(summary["main_table"][task][split][model].get("higher_is_better", True))
+        value = summary["main_table"][task][split][model].get("higher_is_better", True)
     except KeyError:
         return True
+    return value if isinstance(value, bool) else True
 
 
 def _directional_improvement(full: float, comparison: float, higher_is_better: bool) -> float:
@@ -342,6 +343,8 @@ def _statistical_evidence_reasons(
 ) -> list[str]:
     reasons: list[str] = []
     main_models = (((summary.get("main_table", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
+    direction_reasons, main_metric_direction = _metric_direction_reasons(main_models)
+    reasons.extend(direction_reasons)
     full_seed_count = _seed_count(main_models.get(full_model, {}))
     baseline_seed_count = _seed_count(main_models.get(baseline_model, {}))
     if full_seed_count < 3 or baseline_seed_count < 3:
@@ -362,10 +365,43 @@ def _statistical_evidence_reasons(
         return reasons
     if int(paired.get("common_seed_count", 0)) < 3:
         reasons.append("paired comparison requires at least 3 common seeds")
-    for key in ("paired_permutation_p", "paired_bootstrap_ci95"):
+    for key in ("metric_direction", "mean_delta", "paired_permutation_p", "paired_bootstrap_ci95"):
         if key not in paired:
             reasons.append(f"paired comparison missing {key}")
+    if "metric_direction" in paired:
+        paired_direction = paired.get("metric_direction")
+        if paired_direction not in {"higher_is_better", "lower_is_better"}:
+            reasons.append("paired comparison metric_direction must be higher_is_better or lower_is_better")
+        elif main_metric_direction is not None and paired_direction != main_metric_direction:
+            reasons.append("paired comparison metric_direction disagrees with main_table higher_is_better")
+    if "mean_delta" in paired and _finite_float(paired.get("mean_delta")) is None:
+        reasons.append("paired comparison mean_delta must be a finite number")
     return reasons
+
+
+def _metric_direction_reasons(main_models: Any) -> tuple[list[str], str | None]:
+    if not isinstance(main_models, dict):
+        return ["statistics summary main_table must be keyed by model"], None
+    reasons: list[str] = []
+    directions: set[bool] = set()
+    for model, row in main_models.items():
+        if not isinstance(row, dict):
+            continue
+        if "higher_is_better" not in row:
+            reasons.append(f"{model} main table missing higher_is_better")
+            continue
+        higher_is_better = row["higher_is_better"]
+        if not isinstance(higher_is_better, bool):
+            reasons.append(f"{model} higher_is_better must be boolean")
+            continue
+        directions.add(higher_is_better)
+    if len(directions) > 1:
+        reasons.append("statistics summary higher_is_better must be consistent across models")
+        return reasons, None
+    if len(directions) == 1:
+        higher_is_better = next(iter(directions))
+        return reasons, "higher_is_better" if higher_is_better else "lower_is_better"
+    return reasons, None
 
 
 def _main_table_reporting_reasons(main_models: dict[str, Any], model: str, seed_count: int) -> list[str]:
