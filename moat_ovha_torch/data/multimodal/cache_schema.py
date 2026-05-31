@@ -307,6 +307,9 @@ def _validate_data_card_string_list(data_card: dict[str, Any], key: str, errors:
     if not isinstance(values, list) or not values or any(not _is_non_empty_string(value) for value in values):
         errors.append(f"data_card.json {key} must be a non-empty list of strings")
         return
+    if any(value != value.strip() for value in values):
+        errors.append(f"data_card.json {key} entries must be non-empty normalized strings")
+        return
     if len(values) != len(set(values)):
         errors.append(f"data_card.json {key} must not contain duplicate entries")
 
