@@ -1288,6 +1288,38 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
         self.assertIn("stackability_passed", output.diagnostics)
         self.assertTrue(output.diagnostics["stackability_passed"])
 
+    def test_multimodal_ovha_training_only_router_weight_override_controls_effective_weights(self):
+        import torch
+
+        from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
+            ControlledSyntheticMultimodalAdapter,
+        )
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        batch = ControlledSyntheticMultimodalAdapter(seed=321, output_dim=3).sample_batch(
+            family="mixed_relation_operator",
+            batch_size=2,
+            query_count=5,
+            device="cpu",
+        )
+        model = MultimodalOVHA(
+            field_dims={"text": 4, "region": 4, "audio": 4},
+            query_dim=4,
+            output_dim=3,
+            d_model=8,
+        )
+        override = batch.hidden["true_router_weights"]
+
+        output = model(batch, router_weight_override=override)
+
+        expected = (override.unsqueeze(-1) * output.candidate_values).sum(dim=-2)
+        self.assertTrue(torch.allclose(output.router_weights, override, atol=1e-6))
+        self.assertTrue(torch.allclose(output.y_hat, expected, atol=1e-6))
+        self.assertEqual(
+            output.diagnostics["router_override"],
+            {"applied": True, "source": "training_only_supplied_weights"},
+        )
+
     def test_stackability_guard_rejects_non_candidate_and_bad_shape(self):
         import torch
 
