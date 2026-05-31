@@ -19,7 +19,15 @@ PUBLIC_TRAINING_STAGES = ("T0", "T5")
 ROBUSTNESS_EVAL_STAGES = ("T0", "T6")
 CONTROLLED_TASK_TYPES = ("controlled_multimodal", "controlled_relation_operator")
 REGION_TEXT_TASK_TYPES = ("phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities")
-SENTIMENT_EMOTION_TASK_TYPES = ("sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "meld")
+SENTIMENT_EMOTION_TASK_TYPES = (
+    "sentiment_emotion",
+    "sentiment_regression",
+    "emotion_classification",
+    "cmu_mosei",
+    "cmu_mosi",
+    "meld",
+    "iemocap",
+)
 
 
 @dataclass(frozen=True)

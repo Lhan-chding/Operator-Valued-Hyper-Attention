@@ -27,6 +27,12 @@ class CMUMOSEIAdapter:
                 "features/audio_features.npy",
                 "features/visual_features.npy",
                 "labels/sentiment.npy",
+                "labels/emotion.npy",
+                "metadata/utterances.json",
+                "metadata/dialogues.json",
+                "metadata/feature_versions.json",
+                "metadata/missing_modality_mask.npy",
+                "metadata/corruption_transforms.json",
                 "splits.json",
             ),
         )

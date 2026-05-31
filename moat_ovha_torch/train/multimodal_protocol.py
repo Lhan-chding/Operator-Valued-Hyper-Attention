@@ -8,6 +8,10 @@ EXPECTED_STAGE_SEQUENCES = {
     "controlled_multimodal": ("T0", "T1", "T2", "T3", "T4"),
     "phrase_region_grounding": ("T0", "T5"),
     "sentiment_emotion": ("T0", "T5"),
+    "cmu_mosei": ("T0", "T5"),
+    "cmu_mosi": ("T0", "T5"),
+    "meld": ("T0", "T5"),
+    "iemocap": ("T0", "T5"),
     "robustness_eval": ("T0", "T6"),
 }
 

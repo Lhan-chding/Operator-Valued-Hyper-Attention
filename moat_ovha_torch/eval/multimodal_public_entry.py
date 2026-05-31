@@ -13,7 +13,15 @@ from moat_ovha_torch.eval.multimodal_controlled_report import (
 
 
 REGION_TEXT_TASK_TYPES = {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities"}
-SENTIMENT_EMOTION_TASK_TYPES = {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "meld"}
+SENTIMENT_EMOTION_TASK_TYPES = {
+    "sentiment_emotion",
+    "sentiment_regression",
+    "emotion_classification",
+    "cmu_mosei",
+    "cmu_mosi",
+    "meld",
+    "iemocap",
+}
 
 
 @dataclass(frozen=True)

@@ -13,8 +13,10 @@ if str(ROOT) not in sys.path:
 
 from moat_ovha_torch.data.multimodal.adapters import (
     CMUMOSEIAdapter,
+    CMUMOSIAdapter,
     ControlledSyntheticMultimodalAdapter,
     Flickr30kEntitiesAdapter,
+    IEMOCAPAdapter,
     MELDAdapter,
     MissingMultimodalDataError,
     RefCOCOAdapter,
@@ -29,10 +31,12 @@ ADAPTERS = {
     "flickr30k_entities": Flickr30kEntitiesAdapter,
     "visual_genome": VisualGenomeAdapter,
     "cmu_mosei": CMUMOSEIAdapter,
+    "cmu_mosi": CMUMOSIAdapter,
     "meld": MELDAdapter,
+    "iemocap": IEMOCAPAdapter,
 }
 REGION_TEXT_DATASETS = {"refcoco", "flickr30k_entities", "visual_genome"}
-SENTIMENT_DATASETS = {"cmu_mosei", "meld"}
+SENTIMENT_DATASETS = {"cmu_mosei", "cmu_mosi", "meld", "iemocap"}
 
 
 def main() -> int:
