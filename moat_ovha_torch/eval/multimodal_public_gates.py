@@ -74,7 +74,11 @@ def evaluate_sentiment_gate(
         "spo_prototype_entropy_present": _candidate_diag_positive(diagnostics_rows, "SPO", "prototype_entropy"),
         "spo_top_prototype_differentiates": _spo_top_prototype_differentiates(diagnostics_rows),
         "rceo_reliability_calibrated": _rceo_reliability_calibrated(robustness_summary),
-        "robustness_passes": _robustness_passes(robustness_summary),
+        "robustness_passes": _robustness_passes(
+            robustness_summary,
+            full_model=full_model,
+            baseline_model=baseline_model,
+        ),
     }
     return _gate_report("sentiment_emotion_public", checks)
 
@@ -369,17 +373,26 @@ def _entropy_improves(rows: list[dict[str, Any]], candidate: str, key: str) -> d
     }
 
 
-def _robustness_passes(summary: dict[str, Any]) -> dict[str, Any]:
+def _robustness_passes(
+    summary: dict[str, Any],
+    *,
+    full_model: str,
+    baseline_model: str,
+) -> dict[str, Any]:
     ablations = summary.get("required_ablation_degradation", {})
     ablations_pass = bool(ablations.get("passed"))
     coverage = summary.get("required_stress_coverage", {})
     coverage_pass = bool(coverage.get("passed"))
+    summary_full_model = str(summary.get("full_model") or full_model)
+    summary_baseline_model = str(summary.get("baseline_model") or baseline_model)
+    metric_reasons = _robustness_metric_reasons(summary, summary_full_model, summary_baseline_model)
     operator_load_shift_reasons = _operator_load_shift_reasons(summary.get("operator_load_shift"))
     passed = (
         bool(summary.get("full_drop_less_than_baseline"))
         and bool(summary.get("rceo_reliability_monotonic"))
         and ablations_pass
         and coverage_pass
+        and not metric_reasons
         and not operator_load_shift_reasons
     )
     ablation_reasons = "; ".join(str(reason) for reason in ablations.get("reasons", ()) if reason)
@@ -389,6 +402,7 @@ def _robustness_passes(summary: dict[str, Any]) -> dict[str, Any]:
     ]
     if not coverage_pass:
         reason_parts.append("robustness stress family coverage missing")
+    reason_parts.extend(metric_reasons)
     reason_parts.extend(operator_load_shift_reasons)
     if ablation_reasons:
         reason_parts.append(ablation_reasons)
@@ -398,6 +412,39 @@ def _robustness_passes(summary: dict[str, Any]) -> dict[str, Any]:
         "passed": passed,
         "reason": "; ".join(reason_parts) if not passed else "",
     }
+
+
+def _robustness_metric_reasons(summary: dict[str, Any], full_model: str, baseline_model: str) -> list[str]:
+    reasons: list[str] = []
+    relative_drop = summary.get("relative_drop")
+    if not isinstance(relative_drop, dict) or not relative_drop:
+        reasons.append("robustness relative_drop missing")
+    else:
+        full_drop = _finite_float(relative_drop.get(full_model))
+        baseline_drop = _finite_float(relative_drop.get(baseline_model))
+        if full_drop is None:
+            reasons.append(f"robustness relative_drop missing finite score for model: {full_model}")
+        if baseline_drop is None:
+            reasons.append(f"robustness relative_drop missing finite score for model: {baseline_model}")
+        if full_drop is not None and baseline_drop is not None and full_drop >= baseline_drop:
+            reasons.append("robustness relative_drop must show full drop smaller than baseline drop")
+        for model, drop in relative_drop.items():
+            if _is_empty_reporting_value(model) or _finite_float(drop) is None:
+                reasons.append("robustness relative_drop values must be keyed by model and finite")
+                break
+    auc = summary.get("auc_over_corruption_strength")
+    if not isinstance(auc, dict) or not auc:
+        reasons.append("robustness AUC over corruption strength missing")
+    else:
+        if _finite_float(auc.get(full_model)) is None:
+            reasons.append(f"robustness AUC over corruption strength missing finite score for model: {full_model}")
+        if _finite_float(auc.get(baseline_model)) is None:
+            reasons.append(f"robustness AUC over corruption strength missing finite score for model: {baseline_model}")
+        for model, score in auc.items():
+            if _is_empty_reporting_value(model) or _finite_float(score) is None:
+                reasons.append("robustness AUC over corruption strength values must be keyed by model and finite")
+                break
+    return reasons
 
 
 def _operator_load_shift_reasons(value: Any, *, minimum_abs_shift: float = 0.05) -> list[str]:

@@ -76,6 +76,10 @@ class MultimodalPublicGateTests(unittest.TestCase):
             ],
             ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
             robustness_summary={
+                "full_model": "ovha_full",
+                "baseline_model": "cross_attention_transformer",
+                "relative_drop": {"ovha_full": 0.08, "cross_attention_transformer": 0.16},
+                "auc_over_corruption_strength": {"ovha_full": 0.74, "cross_attention_transformer": 0.68},
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
@@ -121,6 +125,10 @@ class MultimodalPublicGateTests(unittest.TestCase):
             ],
             ablation_scores={"ovha_no_lrio": 0.52, "ovha_no_spo": 0.50, "ovha_no_rceo": 0.54},
             robustness_summary={
+                "full_model": "ovha_full",
+                "baseline_model": "cross_attention_transformer",
+                "relative_drop": {"ovha_full": 0.08, "cross_attention_transformer": 0.16},
+                "auc_over_corruption_strength": {"ovha_full": 0.74, "cross_attention_transformer": 0.68},
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
@@ -1105,6 +1113,10 @@ def _passing_sentiment_diagnostics() -> list[dict[str, object]]:
 
 def _passing_sentiment_robustness() -> dict[str, object]:
     return {
+        "full_model": "ovha_full",
+        "baseline_model": "cross_attention_transformer",
+        "relative_drop": {"ovha_full": 0.08, "cross_attention_transformer": 0.16},
+        "auc_over_corruption_strength": {"ovha_full": 0.74, "cross_attention_transformer": 0.68},
         "full_drop_less_than_baseline": True,
         "rceo_reliability_monotonic": True,
         "rceo_reliability_calibration": {"ece": 0.05, "bin_count": 5},
