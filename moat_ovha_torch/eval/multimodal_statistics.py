@@ -4,6 +4,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
+
 
 @dataclass(frozen=True)
 class PublicSummaryValidationReport:
@@ -31,6 +33,7 @@ def summarize_public_results(
             "std": _std(scores),
             "ci95": _ci95(scores),
             "seed_count": len({int(row["seed"]) for row in group_rows}),
+            "per_seed_scores": scores,
             "higher_is_better": bool(group_rows[0].get("higher_is_better", True)),
         }
 
@@ -54,6 +57,7 @@ def summarize_public_results(
         "paired_tests": paired_tests,
         "per_seed_appendix": sorted(rows, key=lambda row: (str(row["task"]), str(row["split"]), str(row["model"]), int(row["seed"]))),
         "metadata": _metadata(rows),
+        "reporting_metadata": _reporting_metadata(rows),
     }
 
 
@@ -63,6 +67,7 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
     main_table = summary.get("main_table", {})
     for task, splits in main_table.items():
         for split, models in splits.items():
+            _validate_required_same_feature_baselines(str(task), str(split), models, errors)
             for model, values in models.items():
                 if values.get("seed_count", 0) < 3:
                     errors.append(f"{task}/{split}/{model} must report at least 3 seeds, not best seed only")
@@ -89,6 +94,24 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
     if not summary.get("per_seed_appendix"):
         errors.append("per_seed_appendix missing")
     return PublicSummaryValidationReport(ok=not errors, errors=errors, warnings=warnings)
+
+
+def _validate_required_same_feature_baselines(
+    task: str,
+    split: str,
+    models: Any,
+    errors: list[str],
+) -> None:
+    if not isinstance(models, dict):
+        errors.append(f"{task}/{split} main_table must be keyed by model")
+        return
+    try:
+        required_baselines = baseline_names_for_task(task)
+    except ValueError:
+        return
+    for baseline in required_baselines:
+        if baseline not in models:
+            errors.append(f"statistics summary missing required same-feature baseline: {baseline}")
 
 
 def _metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -120,6 +143,48 @@ def _metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "hardware": hardware,
         "label_provenance": _label_provenance(rows),
         "raw_metric_paths": sorted(set(raw_metric_paths)),
+    }
+
+
+def _reporting_metadata(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    parameter_count: dict[str, int] = {}
+    training_steps: dict[str, int] = {}
+    feature_versions: dict[str, Any] = {}
+    hardware: dict[str, Any] = {}
+    wall_clock: dict[str, Any] = {}
+    per_seed_table: list[dict[str, Any]] = []
+    for row in rows:
+        model = str(row["model"])
+        if "parameter_count" in row:
+            parameter_count[model] = int(row["parameter_count"])
+        if "training_steps" in row:
+            training_steps[model] = int(row["training_steps"])
+        if "frozen_feature_extractor_version" in row:
+            feature_versions.update(dict(row["frozen_feature_extractor_version"]))
+        if "hardware" in row:
+            hardware.update(dict(row["hardware"]))
+            if row["hardware"].get("wall_clock_hours") is not None:
+                wall_clock["wall_clock_hours"] = row["hardware"]["wall_clock_hours"]
+        per_seed_table.append(
+            {
+                "task": str(row["task"]),
+                "split": str(row["split"]),
+                "model": model,
+                "seed": int(row["seed"]),
+                "score": float(row["score"]),
+                "raw_metric_path": str(row["raw_metric_path"]) if row.get("raw_metric_path") else "",
+            }
+        )
+    return {
+        "parameter_count": parameter_count,
+        "training_steps": training_steps,
+        "frozen_feature_versions": feature_versions,
+        "hardware": hardware,
+        "wall_clock_summary": wall_clock,
+        "per_seed_table": sorted(
+            per_seed_table,
+            key=lambda row: (row["task"], row["split"], row["model"], row["seed"]),
+        ),
     }
 
 
