@@ -27,6 +27,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             ROOT / "scripts" / "multimodal" / "run_public_smoke.py",
             ROOT / "scripts" / "multimodal" / "bootstrap_public_downloads.py",
             ROOT / "scripts" / "multimodal" / "build_public_main_runbook.py",
+            ROOT / "scripts" / "multimodal" / "validate_public_main_artifacts.py",
             ROOT / "scripts" / "multimodal" / "run_robustness_stress_smoke.py",
             ROOT / "scripts" / "multimodal" / "summarize_diagnostics.py",
         ]
@@ -627,6 +628,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "scripts/multimodal/validate_training_plan.py configs/multimodal_cmu_mosei_public_main.json",
             commands,
         )
+        self.assertIn("scripts/multimodal/validate_public_main_artifacts.py --config configs/multimodal_refcoco_public_main.json", commands)
+        self.assertIn("scripts/multimodal/validate_public_main_artifacts.py --config configs/multimodal_cmu_mosei_public_main.json", commands)
         self.assertIn("scripts/multimodal/validate_cache.py", commands)
         self.assertIn("scripts/multimodal/build_public_gate_report.py region_text", commands)
         self.assertIn("scripts/multimodal/build_public_gate_report.py sentiment", commands)
@@ -640,6 +643,108 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertNotIn("public_smoke_statistics_preview", commands)
         self.assertEqual(runbook["required_real_inputs"]["region_text"]["split"], "test")
         self.assertEqual(runbook["required_real_inputs"]["sentiment"]["split"], "test")
+
+    def test_public_main_artifact_validator_requires_config_seed_model_coverage_and_rejects_smoke(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = ROOT / "configs" / "multimodal_refcoco_public_main.json"
+            raw_metrics = tmp_path / "raw_metrics.jsonl"
+            diagnostics = tmp_path / "diagnostics.jsonl"
+            robustness_rows = tmp_path / "robustness_rows.jsonl"
+            rows = _public_main_metric_rows(config_path, raw_metrics)
+            diagnostics_rows = [
+                {
+                    "artifact_type": "public_main_diagnostics",
+                    "dataset": "refcoco",
+                    "task": "phrase_region_grounding",
+                    "split": "test",
+                    "seed": seed,
+                    "stage": "T5_eval",
+                    "router_load_by_candidate": {"TLEO": 0.2, "SPO": 0.1, "LRIO": 0.2, "CATO": 0.5},
+                    "stackability_passed": True,
+                }
+                for seed in [201, 202, 203, 204, 205]
+            ]
+            robustness = [
+                {
+                    "artifact_type": "public_main_robustness_row",
+                    "dataset": "refcoco",
+                    "task": "phrase_region_grounding",
+                    "split": "test",
+                    "seed": 201,
+                    "model": "ovha_full",
+                    "corruption_type": "image_blur",
+                    "corruption_strength": 0.4,
+                    "score": 0.74,
+                }
+            ]
+            raw_metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
+            diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in diagnostics_rows) + "\n")
+            robustness_rows.write_text("\n".join(json.dumps(row, sort_keys=True) for row in robustness) + "\n")
+
+            ok_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "validate_public_main_artifacts.py"),
+                    "--config",
+                    str(config_path),
+                    "--raw-metrics",
+                    str(raw_metrics),
+                    "--diagnostics",
+                    str(diagnostics),
+                    "--robustness-rows",
+                    str(robustness_rows),
+                    "--split",
+                    "test",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            rows[0] = {
+                **rows[0],
+                "artifact_type": "public_smoke_raw_metric",
+                "evidence_scope": "public_smoke_only_not_topconf_main_table",
+                "not_topconf_main_table": True,
+            }
+            rows = [row for row in rows if not (row["model"] == "ovha_full" and row["seed"] == 205)]
+            raw_metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
+            bad_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "validate_public_main_artifacts.py"),
+                    "--config",
+                    str(config_path),
+                    "--raw-metrics",
+                    str(raw_metrics),
+                    "--diagnostics",
+                    str(diagnostics),
+                    "--robustness-rows",
+                    str(robustness_rows),
+                    "--split",
+                    "test",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        ok_payload = json.loads(ok_result.stdout)
+        self.assertEqual(ok_result.returncode, 0, ok_result.stdout + ok_result.stderr)
+        self.assertTrue(ok_payload["ok"], ok_payload)
+        self.assertEqual(ok_payload["coverage"]["seed_count"], 5)
+        self.assertIn("cross_attention_transformer", ok_payload["coverage"]["models"])
+        self.assertEqual(ok_payload["mode"], "public_main_artifact_validation")
+
+        bad_payload = json.loads(bad_result.stdout)
+        self.assertEqual(bad_result.returncode, 2)
+        self.assertFalse(bad_payload["ok"])
+        joined = "\n".join(bad_payload["errors"])
+        self.assertIn("not_topconf_main_table rows cannot enter public main artifacts", joined)
+        self.assertIn("missing configured seed coverage for model ovha_full: 205", joined)
 
     def test_public_entry_requires_controlled_go_no_go_report(self):
         from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
@@ -3860,6 +3965,41 @@ def _gate_statistics_summary(task: str, raw_metrics: Path) -> dict[str, object]:
             "per_seed_table": per_seed_table,
         },
     }
+
+
+def _public_main_metric_rows(config_path: Path, raw_metrics: Path) -> list[dict[str, object]]:
+    from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+
+    config = MultimodalExperimentConfig.from_file(config_path)
+    models = ("ovha_full", *config.baseline_names)
+    rows = []
+    for model_index, model in enumerate(models):
+        for seed_index, seed in enumerate(config.seeds):
+            score = 0.80 - 0.01 * model_index + 0.001 * seed_index
+            rows.append(
+                {
+                    "artifact_type": "public_main_raw_metric",
+                    "evidence_scope": "public_main_table",
+                    "dataset": config.dataset_name,
+                    "task": config.task_type,
+                    "model": model,
+                    "stage": "T5_eval",
+                    "split": "test",
+                    "seed": seed,
+                    "metric_name": "main_task_score",
+                    "score": score,
+                    "higher_is_better": True,
+                    "parameter_count": 123456 + model_index,
+                    "training_steps": 1000,
+                    "frozen_feature_extractor_version": {"text": "frozen-text-v1", "region": "frozen-region-v1"},
+                    "hardware": {"accelerator": "A800", "wall_clock_hours": 1.5},
+                    "label_provenance": {"supervision_type": "ground_truth", "source": config.dataset_name},
+                    "public_metrics": _public_metrics_for_task(config.task_type),
+                    "public_metrics_scope": "public_main_metrics",
+                    "raw_metric_path": str(raw_metrics),
+                }
+            )
+    return rows
 
 
 def _public_metrics_for_task(task: str) -> dict[str, object]:
