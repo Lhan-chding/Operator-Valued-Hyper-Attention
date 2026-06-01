@@ -608,6 +608,31 @@ python scripts/multimodal/accept_public_data.py \
 
 这一步会跑配置里的 3 个开发种子，并为同特征 baseline 训练一轮 smoke probe，产出 raw metrics、diagnostics、statistics preview 和 robustness preview。它仍然只是 public smoke acceptance，不是顶会主表；主表必须继续补齐强 baseline、完整 multi-seed、统计检验和真实 robustness stress。
 
+生成真实 public 主实验的后处理 runbook。这个 runbook 不会把 smoke artifact 当主表；它假设你已经用完整训练流程产出了真正的 `raw_metrics.jsonl`、`diagnostics.jsonl` 和 `robustness_rows.jsonl`，然后把 RefCOCO / CMU-MOSEI 的 public gate bundle 与最终 topconf entry manifest 串起来：
+
+```bash
+python scripts/multimodal/build_public_main_runbook.py \
+  --output-dir outputs/multimodal/public_main_runbook \
+  --cache-root data/multimodal_cache \
+  --controlled-report outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json
+
+bash -n outputs/multimodal/public_main_runbook/public_main_commands.sh
+bash outputs/multimodal/public_main_runbook/public_main_commands.sh
+```
+
+默认真实主实验输入路径是：
+
+```text
+outputs/multimodal/refcoco_main/raw_metrics.jsonl
+outputs/multimodal/refcoco_main/diagnostics.jsonl
+outputs/multimodal/refcoco_main/robustness_rows.jsonl
+outputs/multimodal/cmu_mosei_main/raw_metrics.jsonl
+outputs/multimodal/cmu_mosei_main/diagnostics.jsonl
+outputs/multimodal/cmu_mosei_main/robustness_rows.jsonl
+```
+
+如果你的完整训练产物在别的目录，用 `--region-raw-metrics`、`--region-diagnostics`、`--region-robustness-rows`、`--sentiment-raw-metrics`、`--sentiment-diagnostics`、`--sentiment-robustness-rows` 覆盖。不要把 `public_smoke_raw_metrics.jsonl` 或 `public_smoke_statistics_preview.json` 传给这个 runbook。
+
 正式 public 训练得到 raw metrics / diagnostics / robustness rows 后，用同一个 bundle 入口生成 public gate report。RefCOCO / region-text 示例：
 
 ```bash
