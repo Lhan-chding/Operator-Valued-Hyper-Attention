@@ -827,7 +827,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             (inputs / "splits.json").write_text(
                 json.dumps(
                     {
-                        "train": ["mosei-train-1"],
+                        "train": ["-qXJuDtHPw[0]"],
                         "val": ["mosei-val-1"],
                         "test": ["mosei-test-1"],
                     },
@@ -911,7 +911,8 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(feature_versions["text"], "unit-text-v1")
         self.assertEqual(feature_versions["audio"], "unit-audio-v1")
         self.assertEqual(feature_versions["vision"], "unit-vision-v1")
-        self.assertEqual([row["source_id"] for row in utterances], ["mosei-train-1", "mosei-val-1", "mosei-test-1"])
+        self.assertEqual([row["source_id"] for row in utterances], ["-qXJuDtHPw[0]", "mosei-val-1", "mosei-test-1"])
+        self.assertEqual([row["dialogue_id"] for row in utterances], ["-qXJuDtHPw", "mosei-val", "mosei-test"])
         self.assertEqual(staged_missing.shape, (3, 3))
         self.assertTrue(task_labels_train_exists)
 

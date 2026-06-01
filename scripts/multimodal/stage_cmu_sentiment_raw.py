@@ -209,10 +209,18 @@ def _records(
 
 
 def _dialogue_id(source_id: str) -> str:
+    if "[" in source_id:
+        video_id = source_id.split("[", 1)[0].strip()
+        if video_id:
+            return video_id
     for separator in ("::", "/", "#"):
         if separator in source_id:
             return source_id.split(separator, 1)[0]
-    return source_id.rsplit("-", 1)[0] if "-" in source_id else source_id
+    if "-" in source_id:
+        candidate = source_id.rsplit("-", 1)[0]
+        if candidate.strip() and any(character.isalnum() for character in candidate):
+            return candidate
+    return source_id
 
 
 def _feature_versions(values: list[str]) -> dict[str, str]:
