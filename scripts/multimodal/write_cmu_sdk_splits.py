@@ -158,9 +158,48 @@ def _read_sequence_source_ids(path: Path) -> set[str]:
     except ImportError as exc:
         raise ImportError("sequence validation for .csd/.h5 files requires h5py") from exc
     with h5py.File(path, "r") as handle:
-        if "data" not in handle:
-            raise ValueError(f"{path} missing root data group")
-        return {str(source_id) for source_id in handle["data"].keys()}
+        group = _hdf5_sample_group(handle, path, h5py)
+        return {str(source_id) for source_id in group.keys()}
+
+
+def _hdf5_sample_group(handle: Any, path: Path, h5py: Any) -> Any:
+    candidates = []
+    if "data" in handle and isinstance(handle["data"], h5py.Group):
+        candidates.append(handle["data"])
+    for value in handle.values():
+        if isinstance(value, h5py.Group) and "data" in value and isinstance(value["data"], h5py.Group):
+            candidates.append(value["data"])
+
+    def collect(name: str, value: Any) -> None:
+        if isinstance(value, h5py.Group):
+            candidates.append(value)
+
+    handle.visititems(collect)
+    seen = set()
+    unique_candidates = []
+    for group in candidates:
+        group_name = group.name
+        if group_name not in seen:
+            seen.add(group_name)
+            unique_candidates.append(group)
+    for group in unique_candidates:
+        if _looks_like_cmu_sample_group(group, h5py):
+            return group
+    root_groups = ", ".join(str(key) for key in handle.keys())
+    raise ValueError(f"{path} missing HDF5 sample group with per-source features; root groups: {root_groups}")
+
+
+def _looks_like_cmu_sample_group(group: Any, h5py: Any) -> bool:
+    checked = 0
+    for key in group.keys():
+        child = group[key]
+        if isinstance(child, h5py.Group):
+            checked += 1
+            if "features" in child:
+                return True
+            if checked >= 20:
+                return False
+    return False
 
 
 if __name__ == "__main__":
