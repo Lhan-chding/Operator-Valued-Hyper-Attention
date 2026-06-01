@@ -10,6 +10,8 @@ from typing import Any
 
 
 DEFAULT_CONTROLLED_REPORT = Path("outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json")
+DEFAULT_REGION_CONFIG = Path("configs/multimodal_refcoco_public_main.json")
+DEFAULT_SENTIMENT_CONFIG = Path("configs/multimodal_cmu_mosei_public_main.json")
 DEFAULT_REGION_RAW_METRICS = Path("outputs/multimodal/refcoco_main/raw_metrics.jsonl")
 DEFAULT_REGION_DIAGNOSTICS = Path("outputs/multimodal/refcoco_main/diagnostics.jsonl")
 DEFAULT_REGION_ROBUSTNESS_ROWS = Path("outputs/multimodal/refcoco_main/robustness_rows.jsonl")
@@ -32,12 +34,14 @@ def main() -> int:
     parser.add_argument("--cache-root", type=Path, default=Path("data/multimodal_cache"))
     parser.add_argument("--cache-version", default="v0.1")
     parser.add_argument("--controlled-report", type=Path, default=DEFAULT_CONTROLLED_REPORT)
+    parser.add_argument("--region-config", type=Path, default=DEFAULT_REGION_CONFIG)
     parser.add_argument("--region-task", default="phrase_region_grounding")
     parser.add_argument("--region-split", default="test")
     parser.add_argument("--region-raw-metrics", type=Path, default=DEFAULT_REGION_RAW_METRICS)
     parser.add_argument("--region-diagnostics", type=Path, default=DEFAULT_REGION_DIAGNOSTICS)
     parser.add_argument("--region-robustness-rows", type=Path, default=DEFAULT_REGION_ROBUSTNESS_ROWS)
     parser.add_argument("--region-gate-output-dir", type=Path, default=DEFAULT_REGION_GATE_DIR)
+    parser.add_argument("--sentiment-config", type=Path, default=DEFAULT_SENTIMENT_CONFIG)
     parser.add_argument("--sentiment-task", default="sentiment_emotion")
     parser.add_argument("--sentiment-split", default="test")
     parser.add_argument("--sentiment-raw-metrics", type=Path, default=DEFAULT_SENTIMENT_RAW_METRICS)
@@ -68,6 +72,10 @@ def build_public_main_runbook(args: argparse.Namespace) -> dict[str, Any]:
         "requires_real_main_metrics": True,
         "datasets": ["refcoco", "cmu_mosei"],
         "controlled_report": str(args.controlled_report),
+        "training_configs": {
+            "region_text": _training_config(args.region_config),
+            "sentiment": _training_config(args.sentiment_config),
+        },
         "cache_targets": [
             _cache_target("refcoco", args.cache_root, args.cache_version),
             _cache_target("cmu_mosei", args.cache_root, args.cache_version),
@@ -93,9 +101,11 @@ def build_public_main_runbook(args: argparse.Namespace) -> dict[str, Any]:
         "input_status": _input_status(
             [
                 args.controlled_report,
+                args.region_config,
                 args.region_raw_metrics,
                 args.region_diagnostics,
                 args.region_robustness_rows,
+                args.sentiment_config,
                 args.sentiment_raw_metrics,
                 args.sentiment_diagnostics,
                 args.sentiment_robustness_rows,
@@ -126,6 +136,8 @@ def build_public_main_runbook(args: argparse.Namespace) -> dict[str, Any]:
 
 def _commands(args: argparse.Namespace) -> list[str]:
     return [
+        _validate_training_plan_command(args.region_config),
+        _validate_training_plan_command(args.sentiment_config),
         _validate_cache_command("refcoco", args.cache_root, args.cache_version),
         _validate_cache_command("cmu_mosei", args.cache_root, args.cache_version),
         _build_gate_command(
@@ -152,6 +164,10 @@ def _commands(args: argparse.Namespace) -> list[str]:
         ),
         _topconf_manifest_command(args),
     ]
+
+
+def _validate_training_plan_command(config: Path) -> str:
+    return f"python scripts/multimodal/validate_training_plan.py {_q(config)}"
 
 
 def _validate_cache_command(dataset: str, cache_root: Path, version: str) -> str:
@@ -206,6 +222,22 @@ def _cache_target(name: str, cache_root: Path, version: str) -> dict[str, Any]:
         "dataset": name,
         "version": version,
         "splits": ["train", "val", "test"],
+    }
+
+
+def _training_config(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text())
+    seeds = [int(seed) for seed in payload.get("seeds", [])]
+    return {
+        "config": str(path),
+        "name": str(payload.get("name", "")),
+        "dataset_name": str(payload.get("dataset_name", "")),
+        "task_type": str(payload.get("task_type", "")),
+        "output_dir": str(payload.get("output_dir", "")),
+        "seed_count": len(seeds),
+        "seeds": seeds,
+        "main_table_seed_policy": str(payload.get("main_table_seed_policy", "")),
+        "training_stages": list(payload.get("training_stages", [])),
     }
 
 

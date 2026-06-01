@@ -608,6 +608,22 @@ python scripts/multimodal/accept_public_data.py \
 
 这一步会跑配置里的 3 个开发种子，并为同特征 baseline 训练一轮 smoke probe，产出 raw metrics、diagnostics、statistics preview 和 robustness preview。它仍然只是 public smoke acceptance，不是顶会主表；主表必须继续补齐强 baseline、完整 multi-seed、统计检验和真实 robustness stress。
 
+正式 public 主实验不要复用 `*_public_smoke.json` 作为主表配置。仓库里单独提供了 5-seed main 配置，先验证协议：
+
+```bash
+python scripts/multimodal/validate_training_plan.py configs/multimodal_refcoco_public_main.json
+python scripts/multimodal/validate_training_plan.py configs/multimodal_cmu_mosei_public_main.json
+```
+
+这两份 main 配置默认写入：
+
+```text
+outputs/multimodal/refcoco_main/
+outputs/multimodal/cmu_mosei_main/
+```
+
+真实长训练需要从这两个 main output 目录产出 `raw_metrics.jsonl`、`diagnostics.jsonl` 和 `robustness_rows.jsonl`。这些文件不能带 `public_smoke_*` / `not_topconf_main_table` 标记，否则后续 public gate bundle 会拒绝进入顶会主表证据链。
+
 生成真实 public 主实验的后处理 runbook。这个 runbook 不会把 smoke artifact 当主表；它假设你已经用完整训练流程产出了真正的 `raw_metrics.jsonl`、`diagnostics.jsonl` 和 `robustness_rows.jsonl`，然后把 RefCOCO / CMU-MOSEI 的 public gate bundle 与最终 topconf entry manifest 串起来：
 
 ```bash

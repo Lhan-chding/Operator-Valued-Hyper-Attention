@@ -16,6 +16,8 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         expected = [
             ROOT / "reports" / "pdebench_architecture_feasibility_note.md",
             ROOT / "docs" / "data_protocol_multimodal.md",
+            ROOT / "configs" / "multimodal_refcoco_public_main.json",
+            ROOT / "configs" / "multimodal_cmu_mosei_public_main.json",
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "typed_batch.py",
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "cache_schema.py",
             ROOT / "moat_ovha_torch" / "data" / "multimodal" / "adapters" / "base.py",
