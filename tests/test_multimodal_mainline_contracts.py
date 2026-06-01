@@ -52,6 +52,15 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertTrue((ROOT / "scripts" / "__init__.py").exists())
         self.assertTrue((ROOT / "scripts" / "multimodal" / "__init__.py").exists())
 
+    def test_public_main_runner_streams_progress_to_stderr(self):
+        source = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()
+
+        self.assertIn("--progress-interval", source)
+        self.assertIn("OVHA_PUBLIC_MAIN_PROGRESS_INTERVAL", source)
+        self.assertIn("_print_step_progress", source)
+        self.assertIn("file=sys.stderr", source)
+        self.assertIn("flush=True", source)
+
     def test_step1_public_dataset_adapters_export_and_fail_fast_on_missing_raw(self):
         from moat_ovha_torch.data.multimodal.adapters import (
             CMUMOSEIAdapter,

@@ -804,6 +804,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "1",
                     "--device",
                     "cpu",
+                    "--progress-interval",
+                    "1",
                 ],
                 cwd=ROOT,
                 text=True,
@@ -843,6 +845,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["mode"], "public_main_training")
+        self.assertIn("[public-main:start]", result.stderr)
+        self.assertIn("[public-main:train] seed=201 model=ovha_full step=1/1", result.stderr)
+        self.assertIn("[public-main:model:done] seed=201 model=ovha_full", result.stderr)
+        self.assertIn("[public-main:model:start] seed=201 model=text_only", result.stderr)
         self.assertEqual(payload["seed_count"], 5)
         self.assertEqual(payload["artifacts"]["raw_metrics"]["path"], str(raw_metrics))
         self.assertEqual(len(raw_rows), 5 * 11)

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -68,6 +69,15 @@ def main() -> int:
     parser.add_argument("--memory-tokens", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=None,
+        help=(
+            "Print public-main training progress every N optimizer steps to stderr. "
+            "Defaults to OVHA_PUBLIC_MAIN_PROGRESS_INTERVAL or 500; set 0 to disable periodic rows."
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -111,6 +121,7 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         return _failure_payload(config, entry_report.errors, entry_report.warnings), 2
 
     device = torch.device(args.device)
+    progress_interval = _progress_interval(args.progress_interval)
     artifact_root = args.artifact_root or config.output_dir
     artifact_root.mkdir(parents=True, exist_ok=True)
     raw_metrics_path = artifact_root / "raw_metrics.jsonl"
@@ -121,6 +132,17 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     diagnostics_rows: list[dict[str, Any]] = []
     robustness_rows: list[dict[str, Any]] = []
     seed_reports: list[dict[str, Any]] = []
+    _print_progress(
+        "start",
+        dataset=config.dataset_name,
+        task=config.task_type,
+        seeds=",".join(str(seed) for seed in config.seeds),
+        model_count=1 + len(config.baseline_names),
+        train_steps=int(args.train_steps),
+        baseline_train_steps=int(args.baseline_train_steps),
+        device=str(device),
+        progress_interval=progress_interval,
+    )
     for seed in config.seeds:
         seed_report = _run_seed(
             config,
@@ -129,6 +151,7 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             raw_metrics_path=raw_metrics_path,
             args=args,
             device=device,
+            progress_interval=progress_interval,
         )
         raw_rows.extend(seed_report["raw_rows"])
         diagnostics_rows.extend(seed_report["diagnostics_rows"])
@@ -176,9 +199,11 @@ def _run_seed(
     raw_metrics_path: Path,
     args: argparse.Namespace,
     device: torch.device,
+    progress_interval: int,
 ) -> dict[str, Any]:
     seed_started_at = time.perf_counter()
     torch.manual_seed(seed)
+    _print_progress("seed:start", seed=seed)
     train_batch = _load_public_batch(layout, config, args.train_split, device)
     eval_batch = _load_public_batch(layout, config, args.eval_split, device)
     field_dims = {name: int(field.x.shape[-1]) for name, field in train_batch.fields.items()}
@@ -192,8 +217,17 @@ def _run_seed(
     initial_parameters = _parameter_vector(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.learning_rate))
     max_grad_norm = 0.0
+    final_loss = 0.0
     model.train()
-    for _ in range(int(args.train_steps)):
+    train_started_at = time.perf_counter()
+    _print_progress(
+        "model:start",
+        seed=seed,
+        model="ovha_full",
+        steps=int(args.train_steps),
+        learning_rate=float(args.learning_rate),
+    )
+    for step in range(1, int(args.train_steps) + 1):
         optimizer.zero_grad(set_to_none=True)
         output = model(train_batch)
         components = _public_loss_components(output, train_batch, config)
@@ -201,6 +235,24 @@ def _run_seed(
         total_loss.backward()
         max_grad_norm = max(max_grad_norm, _grad_l2_norm(model))
         optimizer.step()
+        final_loss = _as_float(total_loss)
+        if _should_log_progress(step, int(args.train_steps), progress_interval):
+            _print_step_progress(
+                seed=seed,
+                model="ovha_full",
+                step=step,
+                total_steps=int(args.train_steps),
+                loss=final_loss,
+                started_at=train_started_at,
+            )
+    _print_progress(
+        "model:done",
+        seed=seed,
+        model="ovha_full",
+        steps=int(args.train_steps),
+        loss=f"{final_loss:.6g}",
+        elapsed=f"{time.perf_counter() - train_started_at:.1f}s",
+    )
 
     model.eval()
     with torch.no_grad():
@@ -247,9 +299,17 @@ def _run_seed(
         learning_rate=float(args.learning_rate),
         hardware=hardware,
         raw_metrics_path=raw_metrics_path,
+        progress_interval=progress_interval,
     )
     raw_rows.extend(baseline_rows)
     robustness_rows.extend(baseline_robustness_rows)
+    _print_progress(
+        "seed:done",
+        seed=seed,
+        elapsed=f"{time.perf_counter() - seed_started_at:.1f}s",
+        raw_rows=len(raw_rows),
+        robustness_rows=len(robustness_rows),
+    )
     return {
         "raw_rows": raw_rows,
         "diagnostics_rows": diagnostics_rows,
@@ -304,6 +364,7 @@ def _baseline_rows(
     learning_rate: float,
     hardware: dict[str, Any],
     raw_metrics_path: Path,
+    progress_interval: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     robustness_rows: list[dict[str, Any]] = []
@@ -315,6 +376,7 @@ def _baseline_rows(
             seed=seed,
             train_steps=baseline_train_steps,
             learning_rate=learning_rate,
+            progress_interval=progress_interval,
         )
         with torch.no_grad():
             eval_prediction = _baseline_prediction(str(baseline_name), model, eval_batch)
@@ -359,6 +421,7 @@ def _train_linear_baseline(
     seed: int,
     train_steps: int,
     learning_rate: float,
+    progress_interval: int,
 ) -> tuple[torch.nn.Linear, dict[str, Any]]:
     train_inputs = _same_feature_probe_inputs(baseline_name, train_batch)
     target_dim = int(train_batch.target_y.shape[-1])
@@ -373,7 +436,15 @@ def _train_linear_baseline(
     max_grad_norm = 0.0
     final_loss = 0.0
     model.train()
-    for _ in range(train_steps):
+    started_at = time.perf_counter()
+    _print_progress(
+        "model:start",
+        seed=seed,
+        model=baseline_name,
+        steps=train_steps,
+        learning_rate=learning_rate,
+    )
+    for step in range(1, train_steps + 1):
         optimizer.zero_grad(set_to_none=True)
         prediction = _baseline_prediction(baseline_name, model, train_batch)
         loss = _task_loss(prediction, train_batch)
@@ -381,6 +452,23 @@ def _train_linear_baseline(
         max_grad_norm = max(max_grad_norm, _linear_grad_l2_norm(model))
         optimizer.step()
         final_loss = _as_float(loss)
+        if _should_log_progress(step, train_steps, progress_interval):
+            _print_step_progress(
+                seed=seed,
+                model=baseline_name,
+                step=step,
+                total_steps=train_steps,
+                loss=final_loss,
+                started_at=started_at,
+            )
+    _print_progress(
+        "model:done",
+        seed=seed,
+        model=baseline_name,
+        steps=train_steps,
+        loss=f"{final_loss:.6g}",
+        elapsed=f"{time.perf_counter() - started_at:.1f}s",
+    )
     return model, {
         "baseline_optimizer_steps": train_steps,
         "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_linear_parameter_vector(model) - initial).item()),
@@ -786,6 +874,53 @@ def _validate_main_config_scope(path: Path, config: MultimodalExperimentConfig) 
         raise ValueError("run_public_main.py requires non-smoke public main config/output paths")
     if len(config.seeds) < 5:
         raise ValueError("public main training requires at least 5 configured seeds")
+
+
+def _progress_interval(cli_value: int | None) -> int:
+    if cli_value is not None:
+        return max(0, int(cli_value))
+    value = os.environ.get("OVHA_PUBLIC_MAIN_PROGRESS_INTERVAL")
+    if value is None or value.strip() == "":
+        return 500
+    return max(0, int(value))
+
+
+def _should_log_progress(current: int, total: int, interval: int) -> bool:
+    if interval <= 0:
+        return False
+    return current == 1 or current == total or current % interval == 0
+
+
+def _print_step_progress(
+    *,
+    seed: int,
+    model: str,
+    step: int,
+    total_steps: int,
+    loss: float,
+    started_at: float,
+) -> None:
+    elapsed = time.perf_counter() - started_at
+    steps_per_second = float(step) / max(elapsed, 1e-6)
+    remaining = float(total_steps - step) / max(steps_per_second, 1e-6)
+    percent = 100.0 * float(step) / max(float(total_steps), 1.0)
+    _print_progress(
+        "train",
+        seed=seed,
+        model=model,
+        step=f"{step}/{total_steps}",
+        percent=f"{percent:.1f}",
+        loss=f"{loss:.6g}",
+        elapsed=f"{elapsed:.1f}s",
+        eta=f"{remaining:.1f}s",
+        speed=f"{steps_per_second:.2f}step/s",
+    )
+
+
+def _print_progress(event: str, **fields: Any) -> None:
+    parts = [f"[public-main:{event}]"]
+    parts.extend(f"{key}={value}" for key, value in fields.items())
+    print(" ".join(parts), file=sys.stderr, flush=True)
 
 
 def _failure_payload(config: MultimodalExperimentConfig, errors: list[str], warnings: list[str]) -> dict[str, Any]:
