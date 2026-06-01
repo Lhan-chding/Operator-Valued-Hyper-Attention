@@ -188,7 +188,7 @@ python scripts/multimodal/check_public_data_readiness.py \
   --controlled-report outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json
 ```
 
-当 formal cache 已经有效时，它会直接给出对应 `accept_public_data.py` 命令；如果 RefCOCO / CMU-MOSEI 还停在下载或 feature freeze 阶段，它会指向 `build_refcoco_stage_records.py`、`align_refcoco_stage_features.py`、`write_cmu_sdk_splits.py`、`inspect_cmu_sdk_sequences.py` 或 `extract_cmu_sdk_stage_inputs.py` 中下一条应执行的命令。
+当 formal cache 已经有效时，它会直接给出对应 `accept_public_data.py` 命令；如果 RefCOCO / CMU-MOSEI 还停在下载或 feature freeze 阶段，它会指向 `build_refcoco_stage_records.py`、`extract_refcoco_clip_features.py`、`align_refcoco_stage_features.py`、`write_cmu_sdk_splits.py`、`inspect_cmu_sdk_sequences.py` 或 `extract_cmu_sdk_stage_inputs.py` 中下一条应执行的命令。
 
 当缺失项全部补齐后，同一命令会写入正式 cache，再执行：
 
@@ -341,7 +341,25 @@ python scripts/multimodal/build_refcoco_stage_records.py \
   --candidate-region-source coco_gt_box
 ```
 
-这个步骤只生成 `refcoco_phrase_region_records.json` 和 `refcoco_splits.json`；正式训练前仍需要用冻结的 text / region feature extractor 产出与这些 records 顺序完全一致的 `refcoco_text_features.npy` 和 `refcoco_region_features.npy`。
+这个步骤只生成 `refcoco_phrase_region_records.json` 和 `refcoco_splits.json`；正式训练前仍需要用冻结的 text / region feature extractor 产出与这些 records 顺序完全一致的 `refcoco_text_features.npy` 和 `refcoco_region_features.npy`。仓库内正式路径使用 CLIP ViT-B/32：text branch 编码 referring expression，image branch 编码 COCO GT box crop，输出按 `refcoco_splits.json` 排好的 projected embeddings。
+
+```bash
+REFS=$(find data/raw_multimodal/_downloads/refcoco/extracted -type f \( -name 'refs*.p' -o -name 'refs*.json' \) | head -n 1)
+
+python scripts/multimodal/extract_refcoco_clip_features.py \
+  refcoco \
+  data/raw_multimodal/_downloads/refcoco_stage_inputs \
+  --splits data/raw_multimodal/_downloads/refcoco_stage_inputs/refcoco_splits.json \
+  --records data/raw_multimodal/_downloads/refcoco_stage_inputs/refcoco_phrase_region_records.json \
+  --refs "$REFS" \
+  --image-root data/raw_multimodal/_downloads/refcoco/extracted/train2014 \
+  --image-root data/raw_multimodal/_downloads/refcoco/extracted/val2014 \
+  --device cuda \
+  --model openai/clip-vit-base-patch32 \
+  --revision main
+```
+
+该命令会写出 `refcoco_text_features.npy`、`refcoco_region_features.npy` 和 `refcoco_clip_feature_manifest.json`，然后再执行前面的 `stage_refcoco_raw.py`。如果 GPU 显存紧张，先把 `--region-batch-size` 调到 `16` 或 `8`；如果只想检查路径和 refs 对齐，先加 `--dry-run --min-image-coverage 0`。
 
 如果外部 frozen feature extractor 输出的是 feature bank，而不是已经按 `refcoco_splits.json` 排好序的数组，必须先用 source_id 列表严格重排：
 

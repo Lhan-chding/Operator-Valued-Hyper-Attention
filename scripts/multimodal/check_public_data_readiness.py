@@ -337,15 +337,14 @@ def _append_refcoco_commands(
         )
     if phases["stage_records"]["ok"] and not phases["aligned_features"]["ok"]:
         commands.append(
-            "python scripts/multimodal/align_refcoco_stage_features.py refcoco "
+            "python scripts/multimodal/extract_refcoco_clip_features.py refcoco "
             f"{stage_dir} "
             f"--splits {stage_dir / 'refcoco_splits.json'} "
             f"--records {stage_dir / 'refcoco_phrase_region_records.json'} "
-            "--text-features data/raw_multimodal/_downloads/refcoco_text_feature_bank.npy "
-            "--text-source-ids data/raw_multimodal/_downloads/refcoco_text_feature_source_ids.txt "
-            "--region-features data/raw_multimodal/_downloads/refcoco_region_feature_bank.npy "
-            "--region-source-ids data/raw_multimodal/_downloads/refcoco_region_feature_source_ids.txt "
-            "--feature-version refcoco-frozen-features-v0.1"
+            "--refs data/raw_multimodal/_downloads/refcoco/extracted/replace_with_refcoco_refs.p "
+            "--image-root data/raw_multimodal/_downloads/refcoco/extracted/train2014 "
+            "--image-root data/raw_multimodal/_downloads/refcoco/extracted/val2014 "
+            "--device cuda --model openai/clip-vit-base-patch32 --revision main"
         )
     if phases["stage_records"]["ok"] and phases["aligned_features"]["ok"] and not phases["raw_manifest"]["ok"]:
         commands.append(

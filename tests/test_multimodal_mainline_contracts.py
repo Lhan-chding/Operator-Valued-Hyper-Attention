@@ -33,6 +33,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "scripts" / "multimodal" / "validate_cache.py",
             ROOT / "scripts" / "multimodal" / "build_refcoco_stage_records.py",
             ROOT / "scripts" / "multimodal" / "align_refcoco_stage_features.py",
+            ROOT / "scripts" / "multimodal" / "extract_refcoco_clip_features.py",
             ROOT / "scripts" / "multimodal" / "extract_cmu_sdk_stage_inputs.py",
             ROOT / "scripts" / "multimodal" / "extract_meld_ffmpeg_features.py",
             ROOT / "scripts" / "multimodal" / "extract_meld_transformer_features.py",
@@ -498,6 +499,91 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(records[0]["target_region_index"], 0)
         self.assertEqual(records[0]["box_coordinate_convention"], "xyxy_normalized")
         self.assertTrue(validation.ok, validation.errors)
+
+    def test_extract_refcoco_clip_features_cli_dry_run_reports_formal_clip_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            stage_inputs = tmp_path / "stage_inputs"
+            image_root = tmp_path / "train2014"
+            stage_inputs.mkdir()
+            image_root.mkdir()
+            splits = {
+                "train": ["refcoco::image10::ann501::sent1001"],
+                "val": ["refcoco::image20::ann502::sent1002"],
+                "test": ["refcoco::image30::ann503::sent1003"],
+            }
+            records = {
+                "records": [
+                    {
+                        "source_id": source_id,
+                        "image_id": image_id,
+                        "caption_id": caption_id,
+                        "phrase_span": {"start": 0, "end": 2},
+                        "region_box": [0.1, 0.1, 0.4, 0.3],
+                        "target_region_index": 0,
+                    }
+                    for source_id, image_id, caption_id in (
+                        (splits["train"][0], "image10", "sent1001"),
+                        (splits["val"][0], "image20", "sent1002"),
+                        (splits["test"][0], "image30", "sent1003"),
+                    )
+                ]
+            }
+            refs = [
+                {
+                    "ann_id": 501,
+                    "image_id": 10,
+                    "sentences": [{"sent_id": 1001, "raw": "red ball"}],
+                },
+                {
+                    "ann_id": 502,
+                    "image_id": 20,
+                    "sentences": [{"sent_id": 1002, "sent": "blue box"}],
+                },
+                {
+                    "ann_id": 503,
+                    "image_id": 30,
+                    "sentences": [{"sent_id": 1003, "tokens": ["green", "thing"]}],
+                },
+            ]
+            (stage_inputs / "refcoco_splits.json").write_text(json.dumps(splits, sort_keys=True) + "\n")
+            (stage_inputs / "refcoco_phrase_region_records.json").write_text(json.dumps(records, sort_keys=True) + "\n")
+            (stage_inputs / "refs.json").write_text(json.dumps(refs, sort_keys=True) + "\n")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "extract_refcoco_clip_features.py"),
+                    "refcoco",
+                    str(stage_inputs),
+                    "--splits",
+                    str(stage_inputs / "refcoco_splits.json"),
+                    "--records",
+                    str(stage_inputs / "refcoco_phrase_region_records.json"),
+                    "--refs",
+                    str(stage_inputs / "refs.json"),
+                    "--image-root",
+                    str(image_root),
+                    "--dry-run",
+                    "--min-image-coverage",
+                    "0",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "dry_run")
+        self.assertEqual(payload["sample_count"], 3)
+        self.assertEqual(payload["missing_image_count"], 3)
+        self.assertEqual(payload["feature_shapes"]["text"], [3, 1, "clip_projection_dim"])
+        self.assertEqual(payload["feature_shapes"]["region"], [3, 1, "clip_projection_dim"])
+        self.assertEqual(payload["feature_extractor_versions"]["text"], "openai/clip-vit-base-patch32@main:text_projection")
+        self.assertEqual(payload["candidate_region_source"], "coco_gt_box_crop")
 
     def test_align_refcoco_stage_features_cli_reorders_feature_banks_by_stage_splits(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
