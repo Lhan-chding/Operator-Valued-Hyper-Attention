@@ -21,6 +21,9 @@ DEFAULT_SENTIMENT_DIAGNOSTICS = Path("outputs/multimodal/cmu_mosei_main/diagnost
 DEFAULT_SENTIMENT_ROBUSTNESS_ROWS = Path("outputs/multimodal/cmu_mosei_main/robustness_rows.jsonl")
 DEFAULT_SENTIMENT_GATE_DIR = Path("outputs/multimodal/cmu_mosei_main/gate_bundle")
 DEFAULT_TOPCONF_MANIFEST = Path("outputs/multimodal/topconf_main_entry/topconf_entry_manifest.json")
+MAIN_TRAIN_STEPS_ENV = "${OVHA_PUBLIC_MAIN_TRAIN_STEPS:?set OVHA_PUBLIC_MAIN_TRAIN_STEPS to the real long-run step count}"
+BASELINE_TRAIN_STEPS_ENV = "${OVHA_PUBLIC_MAIN_BASELINE_TRAIN_STEPS:?set OVHA_PUBLIC_MAIN_BASELINE_TRAIN_STEPS to the real baseline step count}"
+MAIN_DEVICE_ENV = "${OVHA_PUBLIC_MAIN_DEVICE:-cuda}"
 
 
 def main() -> int:
@@ -98,6 +101,22 @@ def build_public_main_runbook(args: argparse.Namespace) -> dict[str, Any]:
                 "gate_output_dir": str(args.sentiment_gate_output_dir),
             },
         },
+        "training_launches": {
+            "region_text": _public_main_training_launch(
+                config=args.region_config,
+                cache_root=args.cache_root,
+                controlled_report=args.controlled_report,
+                artifact_root=args.region_raw_metrics.parent,
+                eval_split=args.region_split,
+            ),
+            "sentiment": _public_main_training_launch(
+                config=args.sentiment_config,
+                cache_root=args.cache_root,
+                controlled_report=args.controlled_report,
+                artifact_root=args.sentiment_raw_metrics.parent,
+                eval_split=args.sentiment_split,
+            ),
+        },
         "input_status": _input_status(
             [
                 args.controlled_report,
@@ -140,6 +159,20 @@ def _commands(args: argparse.Namespace) -> list[str]:
         _validate_training_plan_command(args.sentiment_config),
         _validate_cache_command("refcoco", args.cache_root, args.cache_version),
         _validate_cache_command("cmu_mosei", args.cache_root, args.cache_version),
+        _run_public_main_command(
+            config=args.region_config,
+            cache_root=args.cache_root,
+            controlled_report=args.controlled_report,
+            artifact_root=args.region_raw_metrics.parent,
+            eval_split=args.region_split,
+        ),
+        _run_public_main_command(
+            config=args.sentiment_config,
+            cache_root=args.cache_root,
+            controlled_report=args.controlled_report,
+            artifact_root=args.sentiment_raw_metrics.parent,
+            eval_split=args.sentiment_split,
+        ),
         _validate_public_main_artifacts_command(
             config=args.region_config,
             raw_metrics=args.region_raw_metrics,
@@ -188,6 +221,27 @@ def _validate_cache_command(dataset: str, cache_root: Path, version: str) -> str
     return (
         "python scripts/multimodal/validate_cache.py "
         f"{_q(cache_root)} {_q(dataset)} {_q(version)} --splits train val test"
+    )
+
+
+def _run_public_main_command(
+    *,
+    config: Path,
+    cache_root: Path,
+    controlled_report: Path,
+    artifact_root: Path,
+    eval_split: str,
+) -> str:
+    return (
+        f"python scripts/multimodal/run_public_main.py {_q(config)} "
+        f"--cache-root {_q(cache_root)} "
+        f"--controlled-report {_q(controlled_report)} "
+        f"--artifact-root {_q(artifact_root)} "
+        f"--train-steps {MAIN_TRAIN_STEPS_ENV} "
+        f"--baseline-train-steps {BASELINE_TRAIN_STEPS_ENV} "
+        "--train-split train "
+        f"--eval-split {_q(eval_split)} "
+        f"--device {MAIN_DEVICE_ENV}"
     )
 
 
@@ -273,6 +327,30 @@ def _training_config(path: Path) -> dict[str, Any]:
     }
 
 
+def _public_main_training_launch(
+    *,
+    config: Path,
+    cache_root: Path,
+    controlled_report: Path,
+    artifact_root: Path,
+    eval_split: str,
+) -> dict[str, Any]:
+    return {
+        "command": _run_public_main_command(
+            config=config,
+            cache_root=cache_root,
+            controlled_report=controlled_report,
+            artifact_root=artifact_root,
+            eval_split=eval_split,
+        ),
+        "train_steps_env": "OVHA_PUBLIC_MAIN_TRAIN_STEPS",
+        "baseline_train_steps_env": "OVHA_PUBLIC_MAIN_BASELINE_TRAIN_STEPS",
+        "device_env": "OVHA_PUBLIC_MAIN_DEVICE",
+        "artifact_root": str(artifact_root),
+        "eval_split": eval_split,
+    }
+
+
 def _input_status(paths: list[Path]) -> dict[str, bool]:
     return {str(path): path.exists() for path in paths}
 
@@ -283,7 +361,7 @@ def _shell_script(commands: list[str]) -> str:
         "set -euo pipefail",
         "",
         "# Generated public main runbook.",
-        "# This script expects real main raw metrics, diagnostics, and robustness rows.",
+        "# Set OVHA_PUBLIC_MAIN_TRAIN_STEPS and OVHA_PUBLIC_MAIN_BASELINE_TRAIN_STEPS before running.",
         "# Do not substitute public_smoke_* artifacts for top-conference main-table inputs.",
         "",
     ]

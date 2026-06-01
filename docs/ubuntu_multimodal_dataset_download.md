@@ -624,6 +624,40 @@ outputs/multimodal/cmu_mosei_main/
 
 真实长训练需要从这两个 main output 目录产出 `raw_metrics.jsonl`、`diagnostics.jsonl` 和 `robustness_rows.jsonl`。这些文件不能带 `public_smoke_*` / `not_topconf_main_table` 标记，否则后续 public gate bundle 会拒绝进入顶会主表证据链。
 
+先明确真实训练步数，不要用 1-step smoke 参数替代主实验。下面两个变量会被 runbook 和 `run_public_main.py` 强制读取：
+
+```bash
+export OVHA_PUBLIC_MAIN_TRAIN_STEPS=50000
+export OVHA_PUBLIC_MAIN_BASELINE_TRAIN_STEPS=50000
+export OVHA_PUBLIC_MAIN_DEVICE=cuda
+```
+
+用正式 main runner 生成非 smoke 主实验产物。该入口会读取 formal cache，按 config 的 5 个 seed 运行 `ovha_full` 与同特征 baseline，写出 gate bundle 需要的三个 JSONL 文件：
+
+```bash
+python scripts/multimodal/run_public_main.py \
+  configs/multimodal_refcoco_public_main.json \
+  --cache-root data/multimodal_cache \
+  --controlled-report outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json \
+  --artifact-root outputs/multimodal/refcoco_main \
+  --train-steps "$OVHA_PUBLIC_MAIN_TRAIN_STEPS" \
+  --baseline-train-steps "$OVHA_PUBLIC_MAIN_BASELINE_TRAIN_STEPS" \
+  --train-split train \
+  --eval-split test \
+  --device "$OVHA_PUBLIC_MAIN_DEVICE"
+
+python scripts/multimodal/run_public_main.py \
+  configs/multimodal_cmu_mosei_public_main.json \
+  --cache-root data/multimodal_cache \
+  --controlled-report outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json \
+  --artifact-root outputs/multimodal/cmu_mosei_main \
+  --train-steps "$OVHA_PUBLIC_MAIN_TRAIN_STEPS" \
+  --baseline-train-steps "$OVHA_PUBLIC_MAIN_BASELINE_TRAIN_STEPS" \
+  --train-split train \
+  --eval-split test \
+  --device "$OVHA_PUBLIC_MAIN_DEVICE"
+```
+
 在 build gate 前先做 main artifact preflight，确认产物覆盖 main config 的 5 个 seed、`ovha_full` 和所有同特征 baseline。这里先只挡住 seed/model/split/task/dataset 不一致以及 smoke / not-topconf 误入主表；更细的统计、硬件和训练元数据仍由后续 gate validation 检查：
 
 ```bash
@@ -642,7 +676,7 @@ python scripts/multimodal/validate_public_main_artifacts.py \
   --split test
 ```
 
-生成真实 public 主实验的后处理 runbook。这个 runbook 不会把 smoke artifact 当主表；它假设你已经用完整训练流程产出了真正的 `raw_metrics.jsonl`、`diagnostics.jsonl` 和 `robustness_rows.jsonl`，然后把 RefCOCO / CMU-MOSEI 的 public gate bundle 与最终 topconf entry manifest 串起来：
+生成真实 public 主实验 runbook。这个 runbook 不会把 smoke artifact 当主表；它会先调用 `run_public_main.py` 生成真正的 `raw_metrics.jsonl`、`diagnostics.jsonl` 和 `robustness_rows.jsonl`，再把 RefCOCO / CMU-MOSEI 的 public gate bundle 与最终 topconf entry manifest 串起来：
 
 ```bash
 python scripts/multimodal/build_public_main_runbook.py \
