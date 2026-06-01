@@ -976,6 +976,32 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("controlled report missing controlled family: mixed_relation_operator", joined)
         self.assertIn("controlled report missing required gate: Router gate", joined)
 
+    def test_public_entry_accepts_trained_controlled_diagnostics_artifact_type(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import file_sha256
+        from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact_root = Path(tmp) / "controlled_artifacts"
+            report_payload = _complete_controlled_public_entry_report(artifact_root)
+            diagnostics_path = Path(report_payload["evidence_artifacts"]["diagnostics_report"]["path"])
+            diagnostics_rows = [
+                {**json.loads(line), "artifact_type": "controlled_training_diagnostics"}
+                for line in diagnostics_path.read_text().splitlines()
+                if line.strip()
+            ]
+            diagnostics_path.write_text(
+                "\n".join(json.dumps(row, sort_keys=True) for row in diagnostics_rows) + "\n"
+            )
+            report_payload["evidence_artifacts"]["diagnostics_report"]["sha256"] = file_sha256(diagnostics_path)
+
+            report = validate_public_entry_requirements(
+                "phrase_region_grounding",
+                report_payload,
+                require_artifact_files=True,
+            )
+
+        self.assertTrue(report.ok, report.errors)
+
     def test_public_entry_rejects_controlled_report_with_unknown_family(self):
         from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
 

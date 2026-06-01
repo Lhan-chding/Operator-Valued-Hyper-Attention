@@ -32,6 +32,7 @@ from moat_ovha_torch.eval.multimodal_statistics import validate_public_summary
 
 
 CONTROLLED_TOPCONF_EVIDENCE_ARTIFACTS = ("controlled_rows", "diagnostics_report")
+CONTROLLED_DIAGNOSTIC_ARTIFACT_TYPES = frozenset({"controlled_diagnostics", "controlled_training_diagnostics"})
 REGION_TEXT_TOPCONF_CHECKS = (
     "full_beats_same_feature_baseline",
     "full_beats_required_strong_baselines",
@@ -267,9 +268,10 @@ def _validate_controlled_diagnostics_report_content(
         if family in rows_by_family:
             errors.append(f"controlled report diagnostics_report duplicate controlled family: {family}")
             continue
-        if row.get("artifact_type") != "controlled_diagnostics":
+        if row.get("artifact_type") not in CONTROLLED_DIAGNOSTIC_ARTIFACT_TYPES:
             errors.append(
-                f"controlled report diagnostics_report {family} artifact_type must be controlled_diagnostics"
+                f"controlled report diagnostics_report {family} artifact_type must be controlled_diagnostics "
+                "or controlled_training_diagnostics"
             )
         if "active_operator" in row:
             errors.append(
