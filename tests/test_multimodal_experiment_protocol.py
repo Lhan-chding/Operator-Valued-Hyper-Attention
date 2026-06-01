@@ -20,6 +20,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             ROOT / "configs" / "multimodal_cmu_mosei_public_smoke.json",
             ROOT / "configs" / "multimodal_refcoco_public_main.json",
             ROOT / "configs" / "multimodal_cmu_mosei_public_main.json",
+            ROOT / "configs" / "multimodal_external_sota_references.json",
             ROOT / "configs" / "multimodal_robustness_smoke.json",
             ROOT / "moat_ovha_torch" / "config_multimodal.py",
             ROOT / "moat_ovha_torch" / "models" / "multimodal" / "baselines.py",
@@ -27,6 +28,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             ROOT / "scripts" / "multimodal" / "run_public_smoke.py",
             ROOT / "scripts" / "multimodal" / "bootstrap_public_downloads.py",
             ROOT / "scripts" / "multimodal" / "build_public_main_runbook.py",
+            ROOT / "scripts" / "multimodal" / "build_external_sota_runbook.py",
             ROOT / "scripts" / "multimodal" / "validate_public_main_artifacts.py",
             ROOT / "scripts" / "multimodal" / "run_robustness_stress_smoke.py",
             ROOT / "scripts" / "multimodal" / "summarize_diagnostics.py",
@@ -81,9 +83,6 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "text_only",
                 "region_only",
                 "concat_fusion",
-                "cross_attention_transformer",
-                "modality_expert_moe",
-                "clip_style_region_text_retrieval",
                 "cato_only",
                 "ovha_no_cato",
                 "ovha_no_rceo",
@@ -176,43 +175,34 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("public_contrastive_retrieval", config.losses_by_stage["T5"])
 
     def test_same_feature_baseline_registry_matches_plan(self):
-        from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task, external_reference_names_for_task
+        from moat_ovha_torch.models.multimodal.baselines import (
+            baseline_names_for_task,
+            baseline_protocol_for_name,
+            external_reference_names_for_task,
+            ovha_ablation_names_for_task,
+            same_feature_probe_names_for_task,
+        )
 
         region = set(baseline_names_for_task("phrase_region_grounding"))
-        self.assertTrue(
-            {
-                "text_only",
-                "region_only",
-                "concat_fusion",
-                "cross_attention_transformer",
-                "modality_expert_moe",
-                "clip_style_region_text_retrieval",
-                "cato_only",
-                "ovha_no_cato",
-                "ovha_no_rceo",
-                "ovha_no_evidence_router",
-            }.issubset(region)
-        )
+        self.assertEqual(region, {"text_only", "region_only", "concat_fusion", "cato_only", "ovha_no_cato", "ovha_no_rceo", "ovha_no_evidence_router"})
 
         sentiment = set(baseline_names_for_task("sentiment_emotion"))
-        self.assertTrue(
-            {
-                "concat_fusion",
-                "tfn_lmf",
-                "mult_style_crossmodal_transformer",
-                "misa_shared_private",
-                "modality_expert_moe",
-                "quality_aware_fusion",
-                "ovha_no_lrio",
-                "ovha_no_spo",
-                "ovha_no_rceo",
-                "ovha_no_evidence_router",
-            }.issubset(sentiment)
+        self.assertEqual(sentiment, {"text_only", "audio_only", "vision_only", "concat_fusion", "ovha_no_lrio", "ovha_no_spo", "ovha_no_rceo", "ovha_no_evidence_router"})
+        self.assertNotIn("GroundingDINO", region)
+        self.assertNotIn("MISA", sentiment)
+        self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "concat_fusion"), "same_feature_sanity_probe")
+        self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "ovha_no_cato"), "internal_ovha_ablation")
+        self.assertEqual(baseline_protocol_for_name("sentiment_emotion", "Self-MM"), "external_sota_reference_or_reproduction")
+        self.assertEqual(
+            set(same_feature_probe_names_for_task("sentiment_emotion")),
+            {"text_only", "audio_only", "vision_only", "concat_fusion"},
         )
         self.assertEqual(
-            set(external_reference_names_for_task("phrase_region_grounding")),
-            {"MDETR", "GLIP", "GroundingDINO"},
+            set(ovha_ablation_names_for_task("sentiment_emotion")),
+            {"ovha_no_lrio", "ovha_no_spo", "ovha_no_rceo", "ovha_no_evidence_router"},
         )
+        self.assertTrue({"MDETR", "GLIP", "GroundingDINO", "GroundingDINO-1.5"}.issubset(set(external_reference_names_for_task("phrase_region_grounding"))))
+        self.assertTrue({"TFN", "LMF", "MulT", "MISA", "MAG-BERT", "Self-MM"}.issubset(set(external_reference_names_for_task("sentiment_emotion"))))
 
     def test_visual_genome_uses_region_text_public_protocol_contracts(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
@@ -261,6 +251,36 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
 
         self.assertEqual(config.training_stages, ("T0", "T5"))
 
+    def test_external_sota_runbook_keeps_references_separate_from_same_feature_baselines(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "multimodal" / "build_external_sota_runbook.py"),
+                "--references",
+                str(ROOT / "configs" / "multimodal_external_sota_references.json"),
+                "--output-dir",
+                str(Path(tempfile.mkdtemp()) / "external_sota"),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "external_sota_runbook")
+        self.assertIn("refcoco", payload["references_by_dataset"])
+        self.assertIn("cmu_mosei", payload["references_by_dataset"])
+        evidence_types = {
+            row["evidence_type"]
+            for rows in payload["references_by_dataset"].values()
+            for row in rows
+        }
+        self.assertTrue({"external_reference", "external_reproduction"}.issubset(evidence_types))
+        self.assertIn("same-feature", payload["policy"])
+
     def test_controlled_baselines_include_router_decomposition_ablations(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
         from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
@@ -293,10 +313,11 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "training_stages": ["T0", "T6"],
             "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
             "baseline_names": [
+                "text_only",
+                "region_only",
                 "concat_fusion",
-                "cross_attention_transformer",
-                "modality_expert_moe",
-                "quality_aware_fusion",
+                "cato_only",
+                "ovha_no_cato",
                 "ovha_no_rceo",
                 "ovha_no_evidence_router",
             ],
@@ -312,7 +333,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
 
         valid = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_refcoco_public_smoke.json")
-        self.assertIn("cross_attention_transformer", valid.baseline_names)
+        self.assertIn("concat_fusion", valid.baseline_names)
         self.assertIn("ovha_no_cato", valid.baseline_names)
 
         invalid = {
@@ -322,7 +343,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "seeds": [1, 2, 3],
             "training_stages": ["T0", "T5"],
             "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
-            "baseline_names": ["text_only", "cross_attention_transformer"],
+            "baseline_names": ["text_only", "concat_fusion"],
             "eval_episode_count": 16,
             "require_public_alignment_labels": True,
             "losses_by_stage": {
@@ -507,10 +528,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(public_smoke["seeds"], [201, 202, 203])
         self.assertEqual(public_smoke["optimizer_steps"], 3)
         self.assertEqual(public_smoke["eval_smoke_rows"], 3)
-        self.assertEqual(public_smoke["eval_smoke_baseline_rows"], 30)
+        self.assertEqual(public_smoke["eval_smoke_baseline_rows"], 21)
         self.assertEqual(public_smoke["baseline_training_status"], "trained_smoke")
         self.assertEqual(public_smoke["baseline_smoke_training_steps"], 1)
-        self.assertEqual(public_smoke["baseline_optimizer_steps"], 30)
+        self.assertEqual(public_smoke["baseline_optimizer_steps"], 21)
         self.assertIn("smoke_raw_metrics", public_smoke["artifacts"])
         self.assertIn("smoke_baseline_raw_metrics", public_smoke["artifacts"])
         self.assertIn("smoke_statistics_preview", public_smoke["artifacts"])
@@ -691,7 +712,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "task": "phrase_region_grounding",
                     "split": "test",
                     "seed": 201,
-                    "model": "cross_attention_transformer",
+                    "model": "concat_fusion",
                     "corruption_type": "image_blur",
                     "corruption_strength": 0.4,
                     "score": 0.70,
@@ -713,6 +734,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     str(diagnostics),
                     "--robustness-rows",
                     str(robustness_rows),
+                    "--external-sota-references",
+                    str(ROOT / "configs" / "multimodal_external_sota_references.json"),
                     "--split",
                     "test",
                 ],
@@ -755,7 +778,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(ok_result.returncode, 0, ok_result.stdout + ok_result.stderr)
         self.assertTrue(ok_payload["ok"], ok_payload)
         self.assertEqual(ok_payload["coverage"]["seed_count"], 5)
-        self.assertIn("cross_attention_transformer", ok_payload["coverage"]["models"])
+        self.assertIn("concat_fusion", ok_payload["coverage"]["models"])
+        self.assertNotIn("GroundingDINO", ok_payload["coverage"]["models"])
+        self.assertTrue(ok_payload["external_sota_references"]["provided"])
+        self.assertGreaterEqual(ok_payload["external_sota_references"]["reference_count"], 10)
         self.assertEqual(ok_payload["mode"], "public_main_artifact_validation")
 
         bad_payload = json.loads(bad_result.stdout)
@@ -851,7 +877,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("[public-main:model:start] seed=201 model=text_only", result.stderr)
         self.assertEqual(payload["seed_count"], 5)
         self.assertEqual(payload["artifacts"]["raw_metrics"]["path"], str(raw_metrics))
-        self.assertEqual(len(raw_rows), 5 * 11)
+        self.assertEqual(len(raw_rows), 5 * 8)
         self.assertEqual({row["artifact_type"] for row in raw_rows}, {"public_main_raw_metric"})
         self.assertEqual({row["evidence_scope"] for row in raw_rows}, {"public_main_table"})
         self.assertEqual({row["public_metrics_scope"] for row in raw_rows}, {"public_main_metrics"})
@@ -1294,7 +1320,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertTrue(smoke_robustness_summary["not_topconf_main_table"])
         self.assertEqual(smoke_robustness_summary["source_rows_path"], str(smoke_robustness_rows_path))
         self.assertEqual(smoke_robustness_summary["full_model"], "ovha_full")
-        self.assertEqual(smoke_robustness_summary["baseline_model"], "cross_attention_transformer")
+        self.assertEqual(smoke_robustness_summary["baseline_model"], "concat_fusion")
         self.assertFalse(smoke_robustness_summary["required_stress_coverage"]["passed"])
         self.assertIn("missing_audio", smoke_robustness_summary["required_stress_coverage"]["observed"])
         self.assertGreaterEqual(smoke_robustness_summary["rceo_reliability_calibration"]["bin_count"], 1)
@@ -1541,7 +1567,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(len(smoke_baseline_rows), len(payload["baselines"]))
         baseline_models = {row["model"] for row in smoke_baseline_rows}
         self.assertEqual(baseline_models, set(payload["baselines"]))
-        self.assertIn("cross_attention_transformer", baseline_models)
+        self.assertIn("concat_fusion", baseline_models)
         self.assertIn("ovha_no_cato", baseline_models)
         for row in smoke_baseline_rows:
             self.assertEqual(row["artifact_type"], "public_smoke_baseline_raw_metric")
@@ -1580,7 +1606,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             [str(smoke_raw_metrics_path), str(smoke_baseline_metrics_path)],
         )
         self.assertEqual(smoke_statistics_preview["full_model"], "ovha_full")
-        self.assertEqual(smoke_statistics_preview["baseline_model"], "cross_attention_transformer")
+        self.assertEqual(smoke_statistics_preview["baseline_model"], "concat_fusion")
         self.assertFalse(smoke_statistics_preview["validation"]["ok"])
         self.assertIn("at least 3 seeds", "\n".join(smoke_statistics_preview["validation"]["errors"]))
         self.assertIn(
@@ -1588,7 +1614,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             smoke_statistics_preview["summary"]["main_table"]["phrase_region_grounding"]["val"],
         )
         self.assertIn(
-            "cross_attention_transformer",
+            "concat_fusion",
             smoke_statistics_preview["summary"]["main_table"]["phrase_region_grounding"]["val"],
         )
         self.assertIn("not valid top-conference main-table evidence", smoke_statistics_preview["evidence_limitations"])
@@ -2779,7 +2805,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 json.dumps(
                     {
                         "full_model": "ovha_full",
-                        "baseline_model": "cross_attention_transformer",
+                        "baseline_model": "concat_fusion",
                         "full_drop_less_than_baseline": False,
                         "rceo_reliability_monotonic": True,
                     },
@@ -3955,7 +3981,7 @@ def _passing_sentiment_public_gate_report(artifact_root: Path | None = None) -> 
             "passed": True,
             "checks": {
                 "full_beats_same_feature_baseline": {"passed": True},
-                "full_beats_lmf_or_mult_baseline": {"passed": True},
+                "full_beats_sanity_probe_or_robustness_advantage": {"passed": True},
                 "no_lrio_drops": {"passed": True},
                 "no_spo_drops": {"passed": True},
                 "no_rceo_drops": {"passed": True},
@@ -4046,7 +4072,7 @@ def _gate_statistics_summary(task: str, raw_metrics: Path) -> dict[str, object]:
     full_delta = full_score - baseline_score
     paired = {
         "common_seed_count": 3,
-        "model_delta": "ovha_full_minus_cross_attention_transformer",
+        "model_delta": "ovha_full_minus_concat_fusion",
         "mean_delta": full_delta,
         "metric_direction": "higher_is_better",
         "paired_permutation_p": 0.25,
@@ -4060,7 +4086,7 @@ def _gate_statistics_summary(task: str, raw_metrics: Path) -> dict[str, object]:
                 "paired_bootstrap_ci95": [full_score - score, full_score - score],
             }
             for model, score in model_scores.items()
-            if model not in {"ovha_full", "cross_attention_transformer"}
+            if model not in {"ovha_full", "concat_fusion"}
         },
     }
     per_seed_table = [
@@ -4180,13 +4206,10 @@ def _gate_models_for_task(task: str) -> tuple[str, ...]:
     if task == "sentiment_emotion":
         return (
             "ovha_full",
-            "cross_attention_transformer",
+            "text_only",
+            "audio_only",
+            "vision_only",
             "concat_fusion",
-            "tfn_lmf",
-            "mult_style_crossmodal_transformer",
-            "misa_shared_private",
-            "modality_expert_moe",
-            "quality_aware_fusion",
             "ovha_no_lrio",
             "ovha_no_spo",
             "ovha_no_rceo",
@@ -4194,12 +4217,9 @@ def _gate_models_for_task(task: str) -> tuple[str, ...]:
         )
     return (
         "ovha_full",
-        "cross_attention_transformer",
         "text_only",
         "region_only",
         "concat_fusion",
-        "modality_expert_moe",
-        "clip_style_region_text_retrieval",
         "cato_only",
         "ovha_no_cato",
         "ovha_no_rceo",
@@ -4210,19 +4230,20 @@ def _gate_models_for_task(task: str) -> tuple[str, ...]:
 def _gate_score_for_model(task: str, model: str, *, full_score: float, baseline_score: float) -> float:
     if model == "ovha_full":
         return full_score
-    if model == "cross_attention_transformer":
+    if model == "concat_fusion":
         return baseline_score
     if task == "sentiment_emotion":
         return {
-            "tfn_lmf": 0.73,
-            "mult_style_crossmodal_transformer": 0.72,
+            "text_only": 0.73,
+            "audio_only": 0.72,
+            "vision_only": 0.71,
             "ovha_no_lrio": 0.70,
             "ovha_no_spo": 0.71,
             "ovha_no_rceo": 0.68,
             "ovha_no_evidence_router": 0.69,
         }.get(model, 0.71)
     return {
-        "modality_expert_moe": 0.71,
+        "cato_only": 0.71,
         "ovha_no_cato": 0.70,
         "ovha_no_rceo": 0.69,
         "ovha_no_evidence_router": 0.68,
@@ -4326,7 +4347,7 @@ def _gate_robustness_summary(task: str) -> dict[str, object]:
     summary = summarize_robustness_rows(
         _gate_robustness_rows(),
         full_model="ovha_full",
-        baseline_model="cross_attention_transformer",
+        baseline_model="concat_fusion",
     )
     summary["task"] = task
     return summary
@@ -4371,13 +4392,13 @@ def _gate_robustness_rows() -> list[dict[str, object]]:
     rows.extend(
         [
             {
-                "model": "cross_attention_transformer",
+                "model": "concat_fusion",
                 "corruption_type": "image_blur",
                 "corruption_strength": 0.0,
                 "score": 0.75,
             },
             {
-                "model": "cross_attention_transformer",
+                "model": "concat_fusion",
                 "corruption_type": "image_blur",
                 "corruption_strength": 0.5,
                 "score": 0.63,
@@ -4429,7 +4450,7 @@ def _robustness_stress_raw_metric_rows() -> list[dict[str, object]]:
     ]
     model_drops = {
         "ovha_full": 0.06,
-        "cross_attention_transformer": 0.18,
+        "concat_fusion": 0.18,
         "ovha_no_rceo": 0.20,
         "ovha_no_evidence_router": 0.22,
     }

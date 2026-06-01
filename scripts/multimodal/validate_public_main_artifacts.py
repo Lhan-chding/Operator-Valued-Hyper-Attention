@@ -31,6 +31,7 @@ def main() -> int:
     parser.add_argument("--raw-metrics", type=Path, action="append", required=True)
     parser.add_argument("--diagnostics", type=Path, required=True)
     parser.add_argument("--robustness-rows", type=Path, required=True)
+    parser.add_argument("--external-sota-references", type=Path, action="append", default=[])
     parser.add_argument("--split", default="test")
     args = parser.parse_args()
 
@@ -54,6 +55,7 @@ def validate_public_main_artifacts(args: argparse.Namespace) -> tuple[dict[str, 
     raw_rows = _read_jsonl_many(args.raw_metrics)
     diagnostics_rows = _read_jsonl(args.diagnostics)
     robustness_rows = _read_jsonl(args.robustness_rows)
+    external_reference_summary = _external_reference_summary(args.external_sota_references)
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -82,10 +84,41 @@ def validate_public_main_artifacts(args: argparse.Namespace) -> tuple[dict[str, 
             "diagnostics": _artifact_descriptor(args.diagnostics),
             "robustness_rows": _artifact_descriptor(args.robustness_rows),
         },
+        "external_sota_references": external_reference_summary,
         "errors": errors,
         "warnings": warnings,
     }
     return payload, 0 if payload["ok"] else 2
+
+
+def _external_reference_summary(paths: list[Path]) -> dict[str, Any]:
+    if not paths:
+        return {
+            "provided": False,
+            "policy": "external SOTA references are not part of same-feature model coverage",
+            "paths": [],
+            "reference_count": 0,
+        }
+    references: list[dict[str, Any]] = []
+    for path in paths:
+        payload = json.loads(path.read_text())
+        for row in payload.get("references", []):
+            if not isinstance(row, dict):
+                continue
+            references.append(
+                {
+                    "name": str(row.get("name", "")),
+                    "dataset": str(row.get("dataset", "")),
+                    "evidence_type": str(row.get("evidence_type", "")),
+                }
+            )
+    return {
+        "provided": True,
+        "policy": "external SOTA references are not part of same-feature model coverage",
+        "paths": [str(path) for path in paths],
+        "reference_count": len(references),
+        "references": references,
+    }
 
 
 def _validate_non_smoke_config(path: Path, config: MultimodalExperimentConfig, errors: list[str]) -> None:

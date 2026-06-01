@@ -26,7 +26,7 @@ from moat_ovha_torch.eval.multimodal_statistics import (
     REGION_TEXT_REQUIRED_PUBLIC_METRICS,
     SENTIMENT_REQUIRED_PUBLIC_METRICS,
 )
-from moat_ovha_torch.models.multimodal.baselines import assert_same_feature_baseline_policy
+from moat_ovha_torch.models.multimodal.baselines import assert_same_feature_baseline_policy, baseline_protocol_for_name
 from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA, MultimodalOVHAOutput
 from scripts.multimodal.run_public_smoke import (
     _as_float,
@@ -382,6 +382,7 @@ def _baseline_rows(
             eval_prediction = _baseline_prediction(str(baseline_name), model, eval_batch)
             loss = _task_loss(eval_prediction, eval_batch)
         router_load = _probe_router_load_by_candidate(str(baseline_name))
+        baseline_protocol = baseline_protocol_for_name(config.task_type, str(baseline_name))
         rows.append(
             _raw_metric_row(
                 config,
@@ -397,7 +398,7 @@ def _baseline_rows(
                 router_load_by_candidate=router_load,
                 router_entropy=torch.zeros((), dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device),
                 candidate_loss={candidate: loss for candidate in ("TLEO", "SPO", "LRIO", "CATO")},
-                model_protocol="same_feature_trainable_public_main_baseline_v1",
+                model_protocol=f"{baseline_protocol}_public_main_v1",
             )
         )
         robustness_rows.extend(

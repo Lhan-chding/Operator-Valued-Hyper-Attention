@@ -1,0 +1,149 @@
+{
+  "schema_version": "external-sota-references-v0.1",
+  "policy": "External SOTA entries are reported in a separate reference/reproduction table and must not be listed as same-feature public-main baselines.",
+  "references": [
+    {
+      "name": "MDETR",
+      "dataset": "refcoco",
+      "task_type": "phrase_region_grounding",
+      "evidence_type": "external_reference",
+      "source_url": "https://arxiv.org/abs/2104.12763",
+      "official_repo": "https://github.com/ashkamath/mdetr",
+      "reproduction_status": "official_repo_available",
+      "integration_role": "published_reference_or_optional_reproduction",
+      "notes": "Use the paper/repo RefCOCO-family numbers as external reference unless the full official training/eval stack is rerun."
+    },
+    {
+      "name": "GLIP",
+      "dataset": "refcoco",
+      "task_type": "phrase_region_grounding",
+      "evidence_type": "external_reproduction",
+      "source_url": "https://arxiv.org/abs/2112.03857",
+      "official_repo": "https://github.com/microsoft/GLIP",
+      "reproduction_status": "official_repo_available_manual_weights",
+      "integration_role": "optional_external_reproduction",
+      "notes": "Grounded detection method; keep separate from same-feature OVHA probes and record exact checkpoint/eval adapter if reproduced."
+    },
+    {
+      "name": "GroundingDINO",
+      "dataset": "refcoco",
+      "task_type": "phrase_region_grounding",
+      "evidence_type": "external_reproduction",
+      "source_url": "https://arxiv.org/abs/2303.05499",
+      "official_repo": "https://github.com/IDEA-Research/GroundingDINO",
+      "reproduction_status": "official_repo_available_manual_weights",
+      "integration_role": "optional_external_reproduction",
+      "notes": "Strong open-set grounding detector; reproduce in its own environment and import metrics as external_reproduction rows."
+    },
+    {
+      "name": "GroundingDINO-1.5",
+      "dataset": "refcoco",
+      "task_type": "phrase_region_grounding",
+      "evidence_type": "external_reproduction",
+      "source_url": "https://arxiv.org/abs/2405.10300",
+      "official_repo": "https://github.com/IDEA-Research/Grounding-DINO-1.5-API",
+      "reproduction_status": "api_or_official_checkpoint_required",
+      "integration_role": "optional_external_reproduction",
+      "notes": "Use only if licensing/API/checkpoint access is documented in the final artifact."
+    },
+    {
+      "name": "TransVG",
+      "dataset": "refcoco",
+      "task_type": "phrase_region_grounding",
+      "evidence_type": "external_reference",
+      "source_url": "https://arxiv.org/abs/2104.08541",
+      "official_repo": "https://github.com/djiajunustc/TransVG",
+      "reproduction_status": "official_repo_available",
+      "integration_role": "published_reference_or_optional_reproduction",
+      "notes": "Task-native referring expression comprehension baseline."
+    },
+    {
+      "name": "LAVT",
+      "dataset": "refcoco",
+      "task_type": "phrase_region_grounding",
+      "evidence_type": "external_reference",
+      "source_url": "https://arxiv.org/abs/2112.02244",
+      "official_repo": "https://github.com/yz93/LAVT-RIS",
+      "reproduction_status": "related_task_reference",
+      "integration_role": "related_referring_segmentation_reference",
+      "notes": "Segmentation-oriented RefCOCO-family result; do not compare as exact same metric unless converted and documented."
+    },
+    {
+      "name": "SeqTR",
+      "dataset": "refcoco",
+      "task_type": "phrase_region_grounding",
+      "evidence_type": "external_reference",
+      "source_url": "https://arxiv.org/abs/2203.16265",
+      "official_repo": "https://github.com/sean-zhuh/SeqTR",
+      "reproduction_status": "official_repo_available",
+      "integration_role": "published_reference_or_optional_reproduction",
+      "notes": "Task-native sequence-to-sequence referring expression baseline."
+    },
+    {
+      "name": "TFN",
+      "dataset": "cmu_mosei",
+      "task_type": "sentiment_emotion",
+      "evidence_type": "external_reference",
+      "source_url": "https://arxiv.org/abs/1707.07250",
+      "official_repo": "https://github.com/Justin1904/TensorFusionNetworks",
+      "reproduction_status": "legacy_repo_available",
+      "integration_role": "published_reference_or_optional_reproduction",
+      "notes": "Classical tensor fusion reference; use published numbers or rerun with documented SDK feature compatibility."
+    },
+    {
+      "name": "LMF",
+      "dataset": "cmu_mosei",
+      "task_type": "sentiment_emotion",
+      "evidence_type": "external_reference",
+      "source_url": "https://arxiv.org/abs/1806.00064",
+      "official_repo": "https://github.com/Justin1904/Low-rank-Multimodal-Fusion",
+      "reproduction_status": "legacy_repo_available",
+      "integration_role": "published_reference_or_optional_reproduction",
+      "notes": "Low-rank tensor fusion reference; keep separate from OVHA same-feature probes."
+    },
+    {
+      "name": "MulT",
+      "dataset": "cmu_mosei",
+      "task_type": "sentiment_emotion",
+      "evidence_type": "external_reproduction",
+      "source_url": "https://arxiv.org/abs/1906.00295",
+      "official_repo": "https://github.com/yaohungt/Multimodal-Transformer",
+      "reproduction_status": "official_repo_available",
+      "integration_role": "priority_external_reproduction",
+      "notes": "Priority CMU-MOSEI reproduction candidate for cross-modal transformer comparison."
+    },
+    {
+      "name": "MISA",
+      "dataset": "cmu_mosei",
+      "task_type": "sentiment_emotion",
+      "evidence_type": "external_reproduction",
+      "source_url": "https://arxiv.org/abs/2005.03545",
+      "official_repo": "https://github.com/declare-lab/MISA",
+      "reproduction_status": "official_repo_available",
+      "integration_role": "priority_external_reproduction",
+      "notes": "Priority CMU-MOSEI reproduction candidate for shared/private representation comparison."
+    },
+    {
+      "name": "MAG-BERT",
+      "dataset": "cmu_mosei",
+      "task_type": "sentiment_emotion",
+      "evidence_type": "external_reference",
+      "source_url": "https://arxiv.org/abs/1908.05787",
+      "official_repo": "https://github.com/WasifurRahman/BERT_multimodal_transformer",
+      "reproduction_status": "manual_dependency_audit_required",
+      "integration_role": "published_reference_or_optional_reproduction",
+      "notes": "BERT/MAG reference; record text backbone, feature alignment, and split compatibility before reproduction claims."
+    },
+    {
+      "name": "Self-MM",
+      "dataset": "cmu_mosei",
+      "task_type": "sentiment_emotion",
+      "evidence_type": "external_reproduction",
+      "source_url": "https://arxiv.org/abs/2102.04830",
+      "official_repo": "https://github.com/thuiar/Self-MM",
+      "reproduction_status": "official_repo_available",
+      "integration_role": "priority_external_reproduction",
+      "notes": "Self-supervised multitask sentiment reference; good candidate for a separate external reproduction table."
+    }
+  ]
+}

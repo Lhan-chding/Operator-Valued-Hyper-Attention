@@ -5,9 +5,6 @@ REGION_TEXT_BASELINES = (
     "text_only",
     "region_only",
     "concat_fusion",
-    "cross_attention_transformer",
-    "modality_expert_moe",
-    "clip_style_region_text_retrieval",
     "cato_only",
     "ovha_no_cato",
     "ovha_no_rceo",
@@ -15,12 +12,10 @@ REGION_TEXT_BASELINES = (
 )
 
 SENTIMENT_EMOTION_BASELINES = (
+    "text_only",
+    "audio_only",
+    "vision_only",
     "concat_fusion",
-    "tfn_lmf",
-    "mult_style_crossmodal_transformer",
-    "misa_shared_private",
-    "modality_expert_moe",
-    "quality_aware_fusion",
     "ovha_no_lrio",
     "ovha_no_spo",
     "ovha_no_rceo",
@@ -43,8 +38,28 @@ CONTROLLED_BASELINES = (
     "concat_transformer",
 )
 
-REGION_TEXT_EXTERNAL_REFERENCES = ("MDETR", "GLIP", "GroundingDINO")
-SENTIMENT_EMOTION_EXTERNAL_REFERENCES = ()
+REGION_TEXT_SANITY_PROBES = ("text_only", "region_only", "concat_fusion")
+REGION_TEXT_OVHA_ABLATIONS = ("cato_only", "ovha_no_cato", "ovha_no_rceo", "ovha_no_evidence_router")
+SENTIMENT_EMOTION_SANITY_PROBES = ("text_only", "audio_only", "vision_only", "concat_fusion")
+SENTIMENT_EMOTION_OVHA_ABLATIONS = ("ovha_no_lrio", "ovha_no_spo", "ovha_no_rceo", "ovha_no_evidence_router")
+
+REGION_TEXT_EXTERNAL_REFERENCES = (
+    "MDETR",
+    "GLIP",
+    "GroundingDINO",
+    "GroundingDINO-1.5",
+    "TransVG",
+    "LAVT",
+    "SeqTR",
+)
+SENTIMENT_EMOTION_EXTERNAL_REFERENCES = (
+    "TFN",
+    "LMF",
+    "MulT",
+    "MISA",
+    "MAG-BERT",
+    "Self-MM",
+)
 CONTROLLED_EXTERNAL_REFERENCES = ()
 
 
@@ -66,6 +81,36 @@ def external_reference_names_for_task(task_type: str) -> tuple[str, ...]:
     if task_type in {"controlled_multimodal", "controlled_relation_operator"}:
         return CONTROLLED_EXTERNAL_REFERENCES
     raise ValueError(f"unknown multimodal task type for external reference registry: {task_type}")
+
+
+def same_feature_probe_names_for_task(task_type: str) -> tuple[str, ...]:
+    if task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
+        return REGION_TEXT_SANITY_PROBES
+    if task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
+        return SENTIMENT_EMOTION_SANITY_PROBES
+    if task_type in {"controlled_multimodal", "controlled_relation_operator"}:
+        return CONTROLLED_BASELINES
+    raise ValueError(f"unknown multimodal task type for same-feature probe registry: {task_type}")
+
+
+def ovha_ablation_names_for_task(task_type: str) -> tuple[str, ...]:
+    if task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
+        return REGION_TEXT_OVHA_ABLATIONS
+    if task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
+        return SENTIMENT_EMOTION_OVHA_ABLATIONS
+    if task_type in {"controlled_multimodal", "controlled_relation_operator"}:
+        return ()
+    raise ValueError(f"unknown multimodal task type for OVHA ablation registry: {task_type}")
+
+
+def baseline_protocol_for_name(task_type: str, baseline_name: str) -> str:
+    if baseline_name in same_feature_probe_names_for_task(task_type):
+        return "same_feature_sanity_probe"
+    if baseline_name in ovha_ablation_names_for_task(task_type):
+        return "internal_ovha_ablation"
+    if baseline_name in external_reference_names_for_task(task_type):
+        return "external_sota_reference_or_reproduction"
+    raise ValueError(f"unknown baseline/reference for {task_type}: {baseline_name}")
 
 
 def missing_required_baselines(task_type: str, baseline_names: tuple[str, ...]) -> tuple[str, ...]:

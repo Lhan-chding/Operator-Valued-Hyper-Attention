@@ -38,7 +38,7 @@ def main() -> int:
     parser.add_argument("--split", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--full-model", default="ovha_full")
-    parser.add_argument("--baseline-model", default="cross_attention_transformer")
+    parser.add_argument("--baseline-model", default="concat_fusion")
     parser.add_argument("--no-cato-score", type=float)
     parser.add_argument("--no-lrio-score", type=float)
     parser.add_argument("--no-spo-score", type=float)

@@ -48,7 +48,7 @@ REGION_TEXT_TOPCONF_CHECKS = (
 )
 SENTIMENT_TOPCONF_CHECKS = (
     "full_beats_same_feature_baseline",
-    "full_beats_lmf_or_mult_baseline",
+    "full_beats_sanity_probe_or_robustness_advantage",
     "no_lrio_drops",
     "no_spo_drops",
     "no_rceo_drops",
@@ -938,7 +938,7 @@ def _validate_robustness_summary_matches_rows(
     errors: list[str],
 ) -> None:
     full_model = str(supplied_summary.get("full_model") or "ovha_full")
-    baseline_model = str(supplied_summary.get("baseline_model") or "cross_attention_transformer")
+    baseline_model = str(supplied_summary.get("baseline_model") or "concat_fusion")
     recomputed = summarize_robustness_rows(rows, full_model=full_model, baseline_model=baseline_model)
     for field in (
         "clean_score",

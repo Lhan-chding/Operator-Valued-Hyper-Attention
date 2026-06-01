@@ -176,7 +176,7 @@ def _robustness_rows_consistency_errors(
     if not robustness_rows:
         return ["top-conference gate evidence robustness_rows must contain JSONL rows"]
     full_model = str(supplied_summary.get("full_model") or "ovha_full")
-    baseline_model = str(supplied_summary.get("baseline_model") or "cross_attention_transformer")
+    baseline_model = str(supplied_summary.get("baseline_model") or "concat_fusion")
     recomputed = summarize_robustness_rows(
         robustness_rows,
         full_model=full_model,

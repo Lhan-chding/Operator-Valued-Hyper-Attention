@@ -35,7 +35,7 @@ def main() -> int:
     parser.add_argument("--output-rows", type=Path, required=True)
     parser.add_argument("--output-summary", type=Path, required=True)
     parser.add_argument("--full-model", default="ovha_full")
-    parser.add_argument("--baseline-model", default="cross_attention_transformer")
+    parser.add_argument("--baseline-model", default="concat_fusion")
     args = parser.parse_args()
 
     try:
@@ -333,7 +333,7 @@ def _candidate_probability_map(value: Any) -> dict[str, float]:
 def _probe_router_load_by_candidate(model_name: str) -> dict[str, float]:
     if model_name == "ovha_no_cato":
         return {"TLEO": 1.0 / 3.0, "SPO": 1.0 / 3.0, "LRIO": 1.0 / 3.0, "CATO": 0.0}
-    if model_name in {"cato_only", "clip_style_region_text_retrieval"}:
+    if model_name == "cato_only":
         return {"TLEO": 0.0, "SPO": 0.0, "LRIO": 0.0, "CATO": 1.0}
     return {candidate: 1.0 / len(V1_CANDIDATES) for candidate in V1_CANDIDATES}
 

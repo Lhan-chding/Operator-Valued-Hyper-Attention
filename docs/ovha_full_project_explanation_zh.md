@@ -1,13 +1,8 @@
 # OVHA 项目完整通俗说明：原理、代码实现、数据流程与当前进展
 
-更新时间：2026-06-01  
-面向读者：第一次接手这个项目，或者知道一点深度学习但不了解 OVHA、神经算子、多模态缓存和当前实验流水线的人。
-
 ---
 
 ## 1. 一句话说明这个项目
-
-这个项目想做的不是“又一个普通 Transformer”，而是一个能根据上下文自动判断“当前任务需要哪类关系/算子”的模型。
 
 普通模型通常是：
 
@@ -20,8 +15,6 @@ OVHA 想做的是：
 ```text
 输入上下文 + 当前查询 -> 选择/组合一组可解释的 operator primitive -> 输出预测
 ```
-
-换成白话：
 
 > 模型不是死记一种模式，而是先准备几种“做事方式”，再根据当前样本判断该用哪几种、每种用多少、参数怎么调。
 
@@ -43,10 +36,6 @@ OVHA 想做的是：
 ---
 
 ## 2. 项目的长期边界
-
-项目长期目标不是 PDEBench-only、FNO-only、DeepONet-only、PINN-only、CV-only 或电磁仿真专用模型。
-
-这些都只是阶段性验证场景：
 
 - PDEBench：早期验证 operator learning 能不能跑通。
 - controlled synthetic / controlled-v2：验证 router、adapter、memory 这些机制是否真的有效。
@@ -141,7 +130,7 @@ moat_ovha_torch/
 - `models/ovha.py` 是单域 operator 版本的 OVHA。
 - `data/component_stress_zoo.py` 生成 controlled stress 数据。
 
-这一阶段还有 PDEBench、FNO、DeepONet 等对接尝试。但文档明确要求：这些只是 evidence surface，不是项目边界。
+这一阶段还有 PDEBench、FNO、DeepONet 等对接尝试。
 
 ### 4.3 Phase 1.6 / 1.7：机制诊断和 controlled gate
 
@@ -330,8 +319,6 @@ FORBIDDEN_MULTIMODAL_INPUT_KEYS
 - `oracle`
 - `corruption_strength`
 - `mismatch_source_id`
-
-通俗解释：模型不能直接看到答案来源、真实路由、真实算子、隐藏标注。否则结果会变成作弊。
 
 ---
 
@@ -1001,37 +988,32 @@ controlled 数据有更多阶段，比如 T1/T2/T3/T4，用于机制诊断。
 
 ### 11.2 `baseline_names`
 
-RefCOCO 的 baseline：
+RefCOCO 的内部对照分两类：最简单的 same-feature sanity probe，以及 OVHA 自身消融。这里不再把 MDETR、GLIP、GroundingDINO、TransVG、LAVT、SeqTR 这类外部论文模型写进 `baseline_names`，因为它们不是当前 runner 训练出的同特征线性头。
 
 | 名称 | 通俗解释 |
 |---|---|
-| `text_only` | 只看文本。 |
-| `region_only` | 只看图像区域。 |
-| `concat_fusion` | 简单拼接融合。 |
-| `cross_attention_transformer` | 跨注意力融合。 |
-| `modality_expert_moe` | 每个模态一个专家。 |
-| `clip_style_region_text_retrieval` | CLIP 风格文本-区域检索。 |
+| `text_only` | 只看文本特征的 sanity probe。 |
+| `region_only` | 只看图像区域特征的 sanity probe。 |
+| `concat_fusion` | 文本和区域特征简单拼接的 sanity probe。 |
 | `cato_only` | 只保留 CATO。 |
 | `ovha_no_cato` | 去掉 CATO 的 OVHA 消融。 |
 | `ovha_no_rceo` | 去掉可靠性先验。 |
 | `ovha_no_evidence_router` | 去掉 evidence router。 |
 
-CMU-MOSEI 的 baseline：
+CMU-MOSEI 的内部对照同样只保留 sanity probe 和 OVHA 消融。TFN/LMF、MulT、MISA、MAG-BERT、Self-MM 属于外部 SOTA/reference/reproduction 表，不放进 `baseline_names`。
 
 | 名称 | 通俗解释 |
 |---|---|
-| `concat_fusion` | 简单拼接。 |
-| `tfn_lmf` | 张量融合/低秩多模态融合风格 baseline。 |
-| `mult_style_crossmodal_transformer` | MULT 风格跨模态 Transformer。 |
-| `misa_shared_private` | MISA 风格共享/私有表示。 |
-| `modality_expert_moe` | 模态专家混合。 |
-| `quality_aware_fusion` | 质量感知融合。 |
+| `text_only` | 只看文本特征的 sanity probe。 |
+| `audio_only` | 只看音频特征的 sanity probe。 |
+| `vision_only` | 只看视觉特征的 sanity probe。 |
+| `concat_fusion` | 文本、音频、视觉简单拼接的 sanity probe。 |
 | `ovha_no_lrio` | 去掉 LRIO。 |
 | `ovha_no_spo` | 去掉 SPO。 |
 | `ovha_no_rceo` | 去掉 RCEO。 |
 | `ovha_no_evidence_router` | 去掉 evidence router。 |
 
-当前代码里的 baseline 训练在 `run_public_main.py` 里是同特征线性探针式训练，用来保证公平：所有方法吃同一套 frozen features。
+当前代码里的内部 baseline 训练在 `run_public_main.py` 里仍然是同特征线性探针式训练，用来回答“OVHA 结构是否比冻结特征的简单读出更有用”。外部 SOTA 对照由 `configs/multimodal_external_sota_references.json` 和 `scripts/multimodal/build_external_sota_runbook.py` 单独管理，不能混进同特征 baseline policy。
 
 ---
 
@@ -1495,4 +1477,3 @@ validate_public_main_artifacts.py
 14. `scripts/multimodal/validate_public_main_artifacts.py`
 
 这条线读下来，就能理解当前 public multimodal OVHA 主线。
-

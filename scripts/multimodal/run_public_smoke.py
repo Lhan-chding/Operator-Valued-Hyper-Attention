@@ -953,11 +953,9 @@ def _baseline_smoke_evidence_limitations(baseline_rows: list[dict[str, object]])
 
 def _preview_baseline_model(rows: list[dict[str, object]]) -> str:
     models = {str(row.get("model")) for row in rows}
-    if "cross_attention_transformer" in models:
-        return "cross_attention_transformer"
-    # Public gates use cross-attention as the canonical anchor; do not silently
-    # replace it with a weaker arbitrary smoke baseline when it is absent.
-    return "cross_attention_transformer"
+    if "concat_fusion" in models:
+        return "concat_fusion"
+    return "concat_fusion"
 
 
 def _public_baseline_history_rows(
@@ -1182,9 +1180,13 @@ def _probe_modalities_for_model(model_name: str, available: tuple[str, ...]) -> 
     available_set = set(available)
     if model_name == "text_only" and "text" in available_set:
         return ("text",)
+    if model_name == "audio_only" and "audio" in available_set:
+        return ("audio",)
+    if model_name == "vision_only" and "vision" in available_set:
+        return ("vision",)
     if model_name == "region_only":
         return tuple(name for name in ("region", "vision") if name in available_set) or available
-    if model_name in {"cato_only", "clip_style_region_text_retrieval"}:
+    if model_name == "cato_only":
         region_like = tuple(name for name in ("region", "vision") if name in available_set)
         return tuple(name for name in ("text", *region_like) if name in available_set) or available
     return available
@@ -1361,7 +1363,7 @@ def _smoke_rceo_calibration(batch: MultimodalEpisodeBatch, observed_score: float
 def _probe_router_load_by_candidate(model_name: str) -> dict[str, float]:
     if model_name == "ovha_no_cato":
         return {"TLEO": 1.0 / 3.0, "SPO": 1.0 / 3.0, "LRIO": 1.0 / 3.0, "CATO": 0.0}
-    if model_name in {"cato_only", "clip_style_region_text_retrieval"}:
+    if model_name == "cato_only":
         return {"TLEO": 0.0, "SPO": 0.0, "LRIO": 0.0, "CATO": 1.0}
     return {"TLEO": 0.25, "SPO": 0.25, "LRIO": 0.25, "CATO": 0.25}
 

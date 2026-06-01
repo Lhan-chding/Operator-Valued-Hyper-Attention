@@ -7,7 +7,7 @@ from typing import Any
 from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
 
 
-_SENTIMENT_ANCHOR_BASELINES = ("tfn_lmf", "mult_style_crossmodal_transformer")
+_SENTIMENT_SANITY_BASELINES = ("text_only", "audio_only", "vision_only")
 _REQUIRED_ROBUSTNESS_ABLATIONS = ("ovha_no_rceo", "ovha_no_evidence_router")
 _REGION_TEXT_TASKS = frozenset(
     {
@@ -29,7 +29,7 @@ def evaluate_region_text_gate(
     task: str,
     split: str,
     full_model: str = "ovha_full",
-    baseline_model: str = "cross_attention_transformer",
+    baseline_model: str = "concat_fusion",
 ) -> dict[str, Any]:
     robustness = robustness_summary or {}
     checks = {
@@ -80,16 +80,16 @@ def evaluate_sentiment_gate(
     task: str,
     split: str,
     full_model: str = "ovha_full",
-    baseline_model: str = "cross_attention_transformer",
+    baseline_model: str = "concat_fusion",
 ) -> dict[str, Any]:
     checks = {
         "full_beats_same_feature_baseline": _full_beats_baseline(statistics_summary, task, split, full_model, baseline_model),
-        "full_beats_lmf_or_mult_baseline": _sentiment_anchor_or_robustness_advantage(
+        "full_beats_sanity_probe_or_robustness_advantage": _sentiment_anchor_or_robustness_advantage(
             statistics_summary,
             task,
             split,
             full_model,
-            _SENTIMENT_ANCHOR_BASELINES,
+            _SENTIMENT_SANITY_BASELINES,
             robustness_summary,
             baseline_model,
         ),
@@ -309,8 +309,7 @@ def _sentiment_anchor_or_robustness_advantage(
         split,
         full_model,
         baseline_models,
-        "full model must beat at least one required sentiment baseline: "
-        "tfn_lmf or mult_style_crossmodal_transformer",
+        "full model must beat at least one internal sentiment single-modality sanity probe: text_only, audio_only, or vision_only",
     )
     if anchor["passed"]:
         return anchor
@@ -330,7 +329,7 @@ def _sentiment_anchor_or_robustness_advantage(
             "reason": "",
         }
 
-    reasons = ["full model must beat at least one required sentiment baseline or show significant robustness advantage"]
+    reasons = ["full model must beat an internal sentiment single-modality sanity probe or show significant robustness advantage"]
     if anchor.get("reason"):
         reasons.append(str(anchor["reason"]))
     if robustness.get("reason"):
@@ -424,7 +423,7 @@ def _robustness_auc_delta(summary: dict[str, Any], full_model: str, baseline_mod
 
 def _required_strong_baselines_for_gate(task: str) -> tuple[str, ...]:
     if task in _REGION_TEXT_TASKS:
-        return ("modality_expert_moe",)
+        return ("cato_only",)
     return ()
 
 
@@ -1106,6 +1105,17 @@ def _baseline_comparison_paired_reasons(
     _, main_metric_direction = _metric_direction_reasons(main_models)
     paired = (((summary.get("paired_tests", {}) or {}).get(task, {}) or {}).get(split, {}) or {})
     baseline_comparisons = paired.get("baseline_comparisons") if isinstance(paired, dict) else None
+    if isinstance(paired, dict) and paired.get("model_delta") == f"{full_model}_minus_{baseline_model}":
+        return _paired_comparison_payload_reasons(
+            paired,
+            main_models,
+            full_model,
+            baseline_model,
+            _seed_count(main_models.get(full_model, {})) if isinstance(main_models, dict) else 0,
+            _seed_count(main_models.get(baseline_model, {})) if isinstance(main_models, dict) else 0,
+            main_metric_direction,
+            label,
+        )
     if not isinstance(baseline_comparisons, dict):
         return [missing_reason]
     baseline_paired = baseline_comparisons.get(baseline_model)

@@ -520,7 +520,7 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
 def _metric_rows():
     from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
 
-    return _metric_rows_for_models(("ovha_full", *baseline_names_for_task("phrase_region_grounding")))
+    return _metric_rows_for_models(("ovha_full", "cross_attention_transformer", *baseline_names_for_task("phrase_region_grounding")))
 
 
 def _metric_rows_for_models(models):
@@ -577,6 +577,9 @@ def _lower_is_better_sentiment_rows():
     scores_by_model = {
         "ovha_full": (0.41, 0.40, 0.42),
         "cross_attention_transformer": (0.48, 0.47, 0.49),
+        "text_only": (0.57, 0.56, 0.58),
+        "audio_only": (0.58, 0.57, 0.59),
+        "vision_only": (0.59, 0.58, 0.60),
         "concat_fusion": (0.52, 0.51, 0.53),
         "tfn_lmf": (0.50, 0.49, 0.51),
         "mult_style_crossmodal_transformer": (0.49, 0.48, 0.50),

@@ -124,11 +124,11 @@ class MultimodalPublicGateTests(unittest.TestCase):
             ablation_scores={"ovha_no_lrio": 0.70, "ovha_no_spo": 0.71, "ovha_no_rceo": 0.68},
             robustness_summary={
                 "full_model": "ovha_full",
-                "baseline_model": "cross_attention_transformer",
-                "clean_score": {"ovha_full": 0.75, "cross_attention_transformer": 0.75},
-                "corrupted_score": {"ovha_full": 0.69, "cross_attention_transformer": 0.63},
-                "relative_drop": {"ovha_full": 0.08, "cross_attention_transformer": 0.16},
-                "auc_over_corruption_strength": {"ovha_full": 0.74, "cross_attention_transformer": 0.68},
+                "baseline_model": "concat_fusion",
+                "clean_score": {"ovha_full": 0.75, "concat_fusion": 0.75},
+                "corrupted_score": {"ovha_full": 0.69, "concat_fusion": 0.63},
+                "relative_drop": {"ovha_full": 0.08, "concat_fusion": 0.16},
+                "auc_over_corruption_strength": {"ovha_full": 0.74, "concat_fusion": 0.68},
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_shift": -0.25,
@@ -182,11 +182,11 @@ class MultimodalPublicGateTests(unittest.TestCase):
             ablation_scores={"ovha_no_lrio": 0.52, "ovha_no_spo": 0.50, "ovha_no_rceo": 0.54},
             robustness_summary={
                 "full_model": "ovha_full",
-                "baseline_model": "cross_attention_transformer",
-                "clean_score": {"ovha_full": 0.75, "cross_attention_transformer": 0.75},
-                "corrupted_score": {"ovha_full": 0.69, "cross_attention_transformer": 0.63},
-                "relative_drop": {"ovha_full": 0.08, "cross_attention_transformer": 0.16},
-                "auc_over_corruption_strength": {"ovha_full": 0.74, "cross_attention_transformer": 0.68},
+                "baseline_model": "concat_fusion",
+                "clean_score": {"ovha_full": 0.75, "concat_fusion": 0.75},
+                "corrupted_score": {"ovha_full": 0.69, "concat_fusion": 0.63},
+                "relative_drop": {"ovha_full": 0.08, "concat_fusion": 0.16},
+                "auc_over_corruption_strength": {"ovha_full": 0.74, "concat_fusion": 0.68},
                 "full_drop_less_than_baseline": True,
                 "rceo_reliability_monotonic": True,
                 "rceo_reliability_shift": -0.25,
@@ -221,11 +221,9 @@ class MultimodalPublicGateTests(unittest.TestCase):
                     **base_summary["main_table"]["sentiment_emotion"],
                     "test": {
                         **models,
-                        "tfn_lmf": {**models["tfn_lmf"], "mean": 0.78},
-                        "mult_style_crossmodal_transformer": {
-                            **models["mult_style_crossmodal_transformer"],
-                            "mean": 0.79,
-                        },
+                        "text_only": {**models["text_only"], "mean": 0.78},
+                        "audio_only": {**models["audio_only"], "mean": 0.79},
+                        "vision_only": {**models["vision_only"], "mean": 0.77},
                     },
                 },
             },
@@ -241,7 +239,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
         )
 
         self.assertTrue(report["passed"], report["reasons"])
-        self.assertTrue(report["checks"]["full_beats_lmf_or_mult_baseline"]["passed"])
+        self.assertTrue(report["checks"]["full_beats_sanity_probe_or_robustness_advantage"]["passed"])
         self.assertTrue(report["checks"]["robustness_passes"]["passed"])
 
     def test_sentiment_gate_requires_anchor_win_or_significant_robustness(self):
@@ -257,11 +255,9 @@ class MultimodalPublicGateTests(unittest.TestCase):
                     **base_summary["main_table"]["sentiment_emotion"],
                     "test": {
                         **models,
-                        "tfn_lmf": {**models["tfn_lmf"], "mean": 0.78},
-                        "mult_style_crossmodal_transformer": {
-                            **models["mult_style_crossmodal_transformer"],
-                            "mean": 0.79,
-                        },
+                        "text_only": {**models["text_only"], "mean": 0.78},
+                        "audio_only": {**models["audio_only"], "mean": 0.79},
+                        "vision_only": {**models["vision_only"], "mean": 0.77},
                     },
                 },
             },
@@ -278,17 +274,18 @@ class MultimodalPublicGateTests(unittest.TestCase):
 
         self.assertFalse(report["passed"])
         self.assertIn(
-            "full model must beat at least one required sentiment baseline or show significant robustness advantage",
+            "full model must beat an internal sentiment single-modality sanity probe or show significant robustness advantage",
             "\n".join(report["reasons"]),
         )
 
-    def test_sentiment_gate_requires_paired_evidence_for_beaten_anchor_baseline(self):
+    def test_sentiment_gate_requires_paired_evidence_for_beaten_sanity_probe(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
 
         summary = _summary("sentiment_emotion", "test", full=0.76, baseline=0.74)
         baseline_comparisons = summary["paired_tests"]["sentiment_emotion"]["test"]["baseline_comparisons"]
-        baseline_comparisons.pop("tfn_lmf")
-        baseline_comparisons.pop("mult_style_crossmodal_transformer")
+        baseline_comparisons.pop("text_only")
+        baseline_comparisons.pop("audio_only")
+        baseline_comparisons.pop("vision_only")
 
         report = evaluate_sentiment_gate(
             statistics_summary=summary,
@@ -300,10 +297,11 @@ class MultimodalPublicGateTests(unittest.TestCase):
         )
 
         self.assertFalse(report["passed"])
-        self.assertFalse(report["checks"]["full_beats_lmf_or_mult_baseline"]["passed"])
+        self.assertFalse(report["checks"]["full_beats_sanity_probe_or_robustness_advantage"]["passed"])
         joined = "\n".join(report["reasons"])
-        self.assertIn("required sentiment anchor tfn_lmf paired comparison missing", joined)
-        self.assertIn("required sentiment anchor mult_style_crossmodal_transformer paired comparison missing", joined)
+        self.assertIn("required sentiment anchor text_only paired comparison missing", joined)
+        self.assertIn("required sentiment anchor audio_only paired comparison missing", joined)
+        self.assertIn("required sentiment anchor vision_only paired comparison missing", joined)
 
     def test_sentiment_gate_rejects_missing_plan_diagnostics_and_calibration(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_sentiment_gate
@@ -487,7 +485,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
         robustness = {
             **_passing_sentiment_robustness(),
             "full_drop_less_than_baseline": True,
-            "relative_drop": {"ovha_full": 0.30, "cross_attention_transformer": 0.20},
+            "relative_drop": {"ovha_full": 0.30, "concat_fusion": 0.20},
         }
 
         report = evaluate_sentiment_gate(
@@ -609,11 +607,11 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertIn("full model does not beat same-feature baseline", "\n".join(report["reasons"]))
         self.assertIn("no-CATO ablation score missing", "\n".join(report["reasons"]))
 
-    def test_region_text_gate_requires_full_to_beat_moe_baseline(self):
+    def test_region_text_gate_requires_full_to_beat_cato_only_internal_baseline(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
         summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
-        summary["main_table"]["phrase_region_grounding"]["test"]["modality_expert_moe"]["mean"] = 0.82
+        summary["main_table"]["phrase_region_grounding"]["test"]["cato_only"]["mean"] = 0.82
 
         report = evaluate_region_text_gate(
             statistics_summary=summary,
@@ -625,11 +623,11 @@ class MultimodalPublicGateTests(unittest.TestCase):
 
         self.assertFalse(report["passed"])
         self.assertIn(
-            "full model does not beat required same-feature baseline: modality_expert_moe",
+            "full model does not beat required same-feature baseline: cato_only",
             "\n".join(report["reasons"]),
         )
 
-    def test_region_text_gate_requires_paired_evidence_for_moe_strong_baseline(self):
+    def test_region_text_gate_requires_paired_evidence_for_cato_only_internal_baseline(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
         summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
@@ -647,7 +645,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertFalse(report["passed"])
         self.assertFalse(report["checks"]["full_beats_required_strong_baselines"]["passed"])
         self.assertIn(
-            "required same-feature baseline paired comparison missing: modality_expert_moe",
+            "required same-feature baseline paired comparison missing: cato_only",
             "\n".join(report["reasons"]),
         )
 
@@ -739,7 +737,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
         summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
-        summary["main_table"]["phrase_region_grounding"]["test"]["cross_attention_transformer"]["higher_is_better"] = False
+        summary["main_table"]["phrase_region_grounding"]["test"]["concat_fusion"]["higher_is_better"] = False
 
         report = evaluate_region_text_gate(
             statistics_summary=summary,
@@ -964,7 +962,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
         self.assertFalse(report["passed"])
         joined = "\n".join(report["reasons"])
         self.assertIn("ovha_full main table missing std", joined)
-        self.assertIn("cross_attention_transformer main table missing ci95", joined)
+        self.assertIn("concat_fusion main table missing ci95", joined)
         self.assertIn("reporting metadata missing parameter_count", joined)
         self.assertIn("reporting metadata missing per_seed_table", joined)
 
@@ -972,7 +970,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
 
         summary = _summary("phrase_region_grounding", "test", full=0.80, baseline=0.72)
-        baseline_row = summary["main_table"]["phrase_region_grounding"]["test"]["cross_attention_transformer"]
+        baseline_row = summary["main_table"]["phrase_region_grounding"]["test"]["concat_fusion"]
         summary = {
             **summary,
             "main_table": {
@@ -981,7 +979,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
                     **summary["main_table"]["phrase_region_grounding"],
                     "test": {
                         **summary["main_table"]["phrase_region_grounding"]["test"],
-                        "cross_attention_transformer": {
+                        "concat_fusion": {
                             **baseline_row,
                             "mean": "nan",
                             "std": "nan",
@@ -1002,9 +1000,9 @@ class MultimodalPublicGateTests(unittest.TestCase):
 
         self.assertFalse(report["passed"])
         joined = "\n".join(report["reasons"])
-        self.assertIn("cross_attention_transformer main table mean must be finite number", joined)
-        self.assertIn("cross_attention_transformer main table std must be finite non-negative number", joined)
-        self.assertIn("cross_attention_transformer main table ci95 lower bound must not exceed upper bound", joined)
+        self.assertIn("concat_fusion main table mean must be finite number", joined)
+        self.assertIn("concat_fusion main table std must be finite non-negative number", joined)
+        self.assertIn("concat_fusion main table ci95 lower bound must not exceed upper bound", joined)
 
     def test_public_gate_requires_reporting_per_seed_table_cover_main_seed_counts(self):
         from moat_ovha_torch.eval.multimodal_public_gates import evaluate_region_text_gate
@@ -1622,7 +1620,7 @@ def _summary(
     }
     if include_bootstrap:
         paired["paired_bootstrap_ci95"] = [0.01, 0.12]
-    models = ["ovha_full", "cross_attention_transformer"]
+    models = ["ovha_full", "concat_fusion"]
     if include_required_baselines:
         for model in _required_baselines_for_task(task):
             if model not in models:
@@ -1637,7 +1635,7 @@ def _summary(
             full
             if model == "ovha_full"
             else baseline
-            if model == "cross_attention_transformer"
+            if model == "concat_fusion"
             else non_full_score(index)
         )
         for index, model in enumerate(models)
@@ -1655,7 +1653,7 @@ def _summary(
             "paired_bootstrap_ci95": [0.01, 0.12],
         }
         for model, score in model_scores.items()
-        if model not in {"ovha_full", "cross_attention_transformer"}
+        if model not in {"ovha_full", "concat_fusion"}
     }
     summary: dict[str, object] = {
         "main_table": {
@@ -1786,11 +1784,11 @@ def _sentiment_public_diagnostics() -> dict[str, object]:
 def _passing_sentiment_robustness() -> dict[str, object]:
     return {
         "full_model": "ovha_full",
-        "baseline_model": "cross_attention_transformer",
-        "clean_score": {"ovha_full": 0.75, "cross_attention_transformer": 0.75},
-        "corrupted_score": {"ovha_full": 0.69, "cross_attention_transformer": 0.63},
-        "relative_drop": {"ovha_full": 0.08, "cross_attention_transformer": 0.16},
-        "auc_over_corruption_strength": {"ovha_full": 0.74, "cross_attention_transformer": 0.68},
+        "baseline_model": "concat_fusion",
+        "clean_score": {"ovha_full": 0.75, "concat_fusion": 0.75},
+        "corrupted_score": {"ovha_full": 0.69, "concat_fusion": 0.63},
+        "relative_drop": {"ovha_full": 0.08, "concat_fusion": 0.16},
+        "auc_over_corruption_strength": {"ovha_full": 0.74, "concat_fusion": 0.68},
         "full_drop_less_than_baseline": True,
         "rceo_reliability_monotonic": True,
         "rceo_reliability_shift": -0.25,
@@ -1845,7 +1843,7 @@ def _cli_robustness_summary(rows: list[dict[str, object]]) -> dict[str, object]:
     return summarize_robustness_rows(
         rows,
         full_model="ovha_full",
-        baseline_model="cross_attention_transformer",
+        baseline_model="concat_fusion",
     )
 
 
@@ -1887,8 +1885,8 @@ def _cli_robustness_rows() -> list[dict[str, object]]:
         )
     rows.extend(
         [
-            {"model": "cross_attention_transformer", "corruption_type": "image_blur", "corruption_strength": 0.0, "score": 0.75},
-            {"model": "cross_attention_transformer", "corruption_type": "image_blur", "corruption_strength": 0.5, "score": 0.63},
+            {"model": "concat_fusion", "corruption_type": "image_blur", "corruption_strength": 0.0, "score": 0.75},
+            {"model": "concat_fusion", "corruption_type": "image_blur", "corruption_strength": 0.5, "score": 0.63},
             {"model": "ovha_no_rceo", "corruption_type": "image_blur", "corruption_strength": 0.0, "score": 0.74},
             {"model": "ovha_no_rceo", "corruption_type": "image_blur", "corruption_strength": 0.5, "score": 0.58},
             {"model": "ovha_no_evidence_router", "corruption_type": "image_blur", "corruption_strength": 0.0, "score": 0.74},
@@ -1922,9 +1920,6 @@ def _required_baselines_for_task(task: str) -> tuple[str, ...]:
             "text_only",
             "region_only",
             "concat_fusion",
-            "cross_attention_transformer",
-            "modality_expert_moe",
-            "clip_style_region_text_retrieval",
             "cato_only",
             "ovha_no_cato",
             "ovha_no_rceo",
@@ -1932,12 +1927,10 @@ def _required_baselines_for_task(task: str) -> tuple[str, ...]:
         )
     if task == "sentiment_emotion":
         return (
+            "text_only",
+            "audio_only",
+            "vision_only",
             "concat_fusion",
-            "tfn_lmf",
-            "mult_style_crossmodal_transformer",
-            "misa_shared_private",
-            "modality_expert_moe",
-            "quality_aware_fusion",
             "ovha_no_lrio",
             "ovha_no_spo",
             "ovha_no_rceo",

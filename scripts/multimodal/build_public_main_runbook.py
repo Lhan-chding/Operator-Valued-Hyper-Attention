@@ -53,7 +53,7 @@ def main() -> int:
     parser.add_argument("--sentiment-gate-output-dir", type=Path, default=DEFAULT_SENTIMENT_GATE_DIR)
     parser.add_argument("--topconf-manifest", type=Path, default=DEFAULT_TOPCONF_MANIFEST)
     parser.add_argument("--full-model", default="ovha_full")
-    parser.add_argument("--baseline-model", default="cross_attention_transformer")
+    parser.add_argument("--baseline-model", default="concat_fusion")
     args = parser.parse_args()
 
     payload = build_public_main_runbook(args)
