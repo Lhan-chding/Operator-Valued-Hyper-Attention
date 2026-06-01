@@ -18,6 +18,14 @@ def main() -> int:
     parser.add_argument("dataset_name", choices=("cmu_mosei", "cmu_mosi"))
     parser.add_argument("output", type=Path)
     parser.add_argument("--folds-json", type=Path)
+    parser.add_argument(
+        "--expand-with-sequence",
+        type=Path,
+        help=(
+            "Expand video-level fold ids to utterance/segment source_ids observed in this "
+            "CMU SDK sequence before optional --sequence validation."
+        ),
+    )
     parser.add_argument("--sequence", action="append", default=[], type=Path)
     args = parser.parse_args()
 
@@ -45,6 +53,9 @@ def main() -> int:
 def write_cmu_sdk_splits(args: argparse.Namespace) -> dict[str, Any]:
     raw_folds, source = _load_raw_folds(args.dataset_name, args.folds_json)
     splits = _normalize_folds(raw_folds)
+    expansion = None
+    if args.expand_with_sequence is not None:
+        splits, expansion = _expand_splits_with_sequence(splits, args.expand_with_sequence)
     sequence_validation = _validate_sequences(splits, args.sequence)
     if not sequence_validation["ok"]:
         raise ValueError("; ".join(sequence_validation["errors"]))
@@ -57,6 +68,7 @@ def write_cmu_sdk_splits(args: argparse.Namespace) -> dict[str, Any]:
         "output": str(args.output),
         "source": source,
         "split_counts": {split: len(source_ids) for split, source_ids in sorted(splits.items())},
+        "expansion": expansion,
         "sequence_validation": sequence_validation,
     }
 
@@ -144,6 +156,42 @@ def _validate_sequences(splits: dict[str, list[str]], sequence_paths: list[Path]
         if missing:
             errors.append(f"{path} missing {len(missing)} split source_id values; first missing: {', '.join(missing[:10])}")
     return {"ok": not errors, "checked_sequences": len(sequence_paths), "sequences": sequence_reports, "errors": errors}
+
+
+def _expand_splits_with_sequence(splits: dict[str, list[str]], sequence_path: Path) -> tuple[dict[str, list[str]], dict[str, Any]]:
+    observed = sorted(_read_sequence_source_ids(sequence_path))
+    fold_by_parent = {}
+    for split, source_ids in splits.items():
+        for source_id in source_ids:
+            fold_by_parent[source_id] = split
+    expanded: dict[str, list[str]] = {split: [] for split in splits}
+    unmatched = []
+    for source_id in observed:
+        parent = _parent_source_id(source_id)
+        split = fold_by_parent.get(source_id) or fold_by_parent.get(parent)
+        if split is None:
+            unmatched.append(source_id)
+            continue
+        expanded[split].append(source_id)
+    expanded = {split: source_ids for split, source_ids in expanded.items() if source_ids}
+    if not expanded:
+        raise ValueError(f"--expand-with-sequence {sequence_path} produced no split source_ids")
+    _validate_no_overlap(expanded)
+    return expanded, {
+        "mode": "sequence_parent_id",
+        "sequence": str(sequence_path),
+        "observed_source_ids": len(observed),
+        "expanded_source_ids": sum(len(source_ids) for source_ids in expanded.values()),
+        "unmatched_source_ids": len(unmatched),
+        "unmatched_preview": unmatched[:10],
+    }
+
+
+def _parent_source_id(source_id: str) -> str:
+    for separator in ("[", "::", "_"):
+        if separator in source_id:
+            return source_id.split(separator, 1)[0]
+    return source_id
 
 
 def _read_sequence_source_ids(path: Path) -> set[str]:

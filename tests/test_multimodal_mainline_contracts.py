@@ -1205,6 +1205,66 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertTrue(payload["sequence_validation"]["ok"])
         self.assertEqual(splits, {"test": ["mosei-test-1"], "train": ["mosei-train-1"], "val": ["mosei-val-1"]})
 
+    def test_write_cmu_sdk_splits_cli_expands_video_folds_to_segment_source_ids(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            folds = tmp_path / "folds.json"
+            output = tmp_path / "cmu_mosei_splits.json"
+            labels = tmp_path / "labels.json"
+            audio = tmp_path / "audio.json"
+            folds.write_text(
+                json.dumps(
+                    {
+                        "standard_train_fold": ["video-train"],
+                        "standard_valid_fold": ["video-val"],
+                        "standard_test_fold": ["video-test"],
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            sequence_payload = {
+                "video-train[0]": np.ones((1, 8), dtype=np.float32),
+                "video-train[1]": np.ones((1, 8), dtype=np.float32),
+                "video-val[0]": np.ones((1, 8), dtype=np.float32),
+                "video-test[0]": np.ones((1, 8), dtype=np.float32),
+            }
+            _write_cmu_sequence_json(labels, sequence_payload)
+            _write_cmu_sequence_json(audio, sequence_payload)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "write_cmu_sdk_splits.py"),
+                    "cmu_mosei",
+                    str(output),
+                    "--folds-json",
+                    str(folds),
+                    "--expand-with-sequence",
+                    str(labels),
+                    "--sequence",
+                    str(audio),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(result.stdout) if result.stdout.strip() else {}
+            splits = json.loads(output.read_text()) if output.exists() else {}
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["split_counts"], {"test": 1, "train": 2, "val": 1})
+        self.assertEqual(payload["expansion"]["mode"], "sequence_parent_id")
+        self.assertEqual(payload["expansion"]["expanded_source_ids"], 4)
+        self.assertEqual(payload["expansion"]["unmatched_source_ids"], 0)
+        self.assertEqual(splits["train"], ["video-train[0]", "video-train[1]"])
+        self.assertEqual(splits["val"], ["video-val[0]"])
+        self.assertEqual(splits["test"], ["video-test[0]"])
+
     def test_public_data_readiness_cli_reports_missing_steps_without_blocking(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
