@@ -48,6 +48,10 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(path.exists(), path)
 
+    def test_scripts_package_markers_prevent_third_party_scripts_shadowing(self):
+        self.assertTrue((ROOT / "scripts" / "__init__.py").exists())
+        self.assertTrue((ROOT / "scripts" / "multimodal" / "__init__.py").exists())
+
     def test_step1_public_dataset_adapters_export_and_fail_fast_on_missing_raw(self):
         from moat_ovha_torch.data.multimodal.adapters import (
             CMUMOSEIAdapter,
