@@ -189,9 +189,7 @@ def _as_array(value: Any, *, source_id: str, source_name: str) -> np.ndarray:
         raise ValueError(f"{source_name} sample {source_id} features must have at least one axis")
     if array.ndim == 1:
         array = array.reshape(1, -1)
-    if not np.isfinite(array).all():
-        raise ValueError(f"{source_name} sample {source_id} features contain non-finite values")
-    return array
+    return np.nan_to_num(array, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
 
 
 def _role_scores(path: Path) -> dict[str, int]:

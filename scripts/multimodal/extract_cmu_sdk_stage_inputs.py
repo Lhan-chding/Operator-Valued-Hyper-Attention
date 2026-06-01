@@ -106,6 +106,11 @@ def extract_cmu_sdk_stage_inputs(args: argparse.Namespace) -> dict[str, Any]:
         "emotion_columns": emotion_columns,
         "license_tag": args.license_tag,
         "preprocessing_version": args.preprocessing_version,
+        "non_finite_policy": "nan_to_num_zero_before_temporal_reduction",
+        "non_finite_summary": {
+            name: _non_finite_summary(sequence)
+            for name, sequence in sequences.items()
+        },
         "outputs": {
             "splits": str(split_path),
             "text_features": str(text_path),
@@ -244,9 +249,19 @@ def _as_feature_array(value: Any, *, source_id: str, source_name: str) -> np.nda
         raise ValueError(f"{source_name} sample {source_id} features must have at least one axis")
     if array.ndim == 1:
         array = array.reshape(1, -1)
-    if not np.isfinite(array).all():
-        raise ValueError(f"{source_name} sample {source_id} features contain non-finite values")
-    return array
+    return array.astype(np.float32, copy=False)
+
+
+def _non_finite_summary(sequence: dict[str, np.ndarray]) -> dict[str, int]:
+    affected_samples = 0
+    value_count = 0
+    for array in sequence.values():
+        non_finite = ~np.isfinite(array)
+        count = int(np.sum(non_finite))
+        if count:
+            affected_samples += 1
+            value_count += count
+    return {"affected_samples": affected_samples, "value_count": value_count}
 
 
 def _feature_tensor(
@@ -256,7 +271,7 @@ def _feature_tensor(
     *,
     sequence_name: str,
 ) -> np.ndarray:
-    rows = [_sequence_row(sequence, source_id, sequence_name=sequence_name) for source_id in source_ids]
+    rows = [_finite_array(_sequence_row(sequence, source_id, sequence_name=sequence_name)) for source_id in source_ids]
     reduced = [_apply_temporal_policy(row, temporal_policy) for row in rows]
     shapes = {tuple(row.shape) for row in reduced}
     if len(shapes) != 1:
@@ -268,7 +283,7 @@ def _feature_tensor(
 
 
 def _label_matrix(sequence: dict[str, np.ndarray], source_ids: list[str], temporal_policy: str) -> np.ndarray:
-    rows = [_sequence_row(sequence, source_id, sequence_name="labels") for source_id in source_ids]
+    rows = [_finite_array(_sequence_row(sequence, source_id, sequence_name="labels")) for source_id in source_ids]
     reduced = [_apply_label_policy(row, temporal_policy) for row in rows]
     shapes = {tuple(row.shape) for row in reduced}
     if len(shapes) != 1:
@@ -280,6 +295,10 @@ def _sequence_row(sequence: dict[str, np.ndarray], source_id: str, *, sequence_n
     if source_id not in sequence:
         raise ValueError(f"{sequence_name} sequence missing source_id from splits: {source_id}")
     return sequence[source_id]
+
+
+def _finite_array(array: np.ndarray) -> np.ndarray:
+    return np.nan_to_num(array, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
 
 
 def _apply_temporal_policy(array: np.ndarray, temporal_policy: str) -> np.ndarray:
