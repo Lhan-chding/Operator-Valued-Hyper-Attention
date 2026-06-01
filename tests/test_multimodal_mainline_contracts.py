@@ -34,6 +34,8 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "scripts" / "multimodal" / "build_refcoco_stage_records.py",
             ROOT / "scripts" / "multimodal" / "align_refcoco_stage_features.py",
             ROOT / "scripts" / "multimodal" / "extract_cmu_sdk_stage_inputs.py",
+            ROOT / "scripts" / "multimodal" / "extract_meld_ffmpeg_features.py",
+            ROOT / "scripts" / "multimodal" / "extract_meld_transformer_features.py",
             ROOT / "scripts" / "multimodal" / "inspect_cmu_sdk_sequences.py",
             ROOT / "scripts" / "multimodal" / "write_cmu_sdk_splits.py",
             ROOT / "scripts" / "multimodal" / "check_public_data_readiness.py",
@@ -1296,6 +1298,95 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(data_card["metadata_availability"]["speaker_id"], True)
         self.assertEqual(train_records[0]["speaker_id"], "Monica")
         self.assertEqual(train_records[0]["transcript_source"], "MELD train_sent_emo.csv")
+
+    def test_extract_meld_ffmpeg_features_cli_writes_hash_and_missing_video_features(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            meld_root = tmp_path / "MELD.Raw"
+            raw_root = tmp_path / "raw"
+            _write_meld_raw_fixture(raw_root)
+            _write_meld_csv_fixture(meld_root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "extract_meld_ffmpeg_features.py"),
+                    str(meld_root),
+                    str(raw_root),
+                    "--workers",
+                    "1",
+                    "--text-dim",
+                    "16",
+                    "--audio-steps",
+                    "2",
+                    "--visual-frames",
+                    "2",
+                    "--visual-size",
+                    "2",
+                    "--min-video-coverage",
+                    "0",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(result.stdout) if result.stdout.strip() else {}
+            text_features = np.load(raw_root / "features" / "text_features.npy")
+            audio_features = np.load(raw_root / "features" / "audio_features.npy")
+            visual_features = np.load(raw_root / "features" / "visual_features.npy")
+            missing_mask = np.load(raw_root / "metadata" / "missing_modality_mask.npy")
+            feature_versions = json.loads((raw_root / "metadata" / "feature_versions.json").read_text())
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["feature_shapes"]["text"], [3, 1, 16])
+        self.assertEqual(payload["missing_video_count"], 3)
+        self.assertEqual(text_features.shape, (3, 1, 16))
+        self.assertEqual(audio_features.shape, (3, 2, 12))
+        self.assertEqual(visual_features.shape, (3, 2, 12))
+        self.assertTrue(np.any(text_features[0]))
+        self.assertTrue(np.all(audio_features == 0))
+        self.assertTrue(np.all(visual_features == 0))
+        self.assertEqual(missing_mask.shape, (3, 3))
+        self.assertFalse(bool(missing_mask[0, 0]))
+        self.assertTrue(bool(missing_mask[0, 1]))
+        self.assertTrue(bool(missing_mask[0, 2]))
+        self.assertIn("meld-hashed-text-v0.1", feature_versions["text"])
+
+    def test_extract_meld_transformer_features_cli_dry_run_reports_formal_encoder_versions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            meld_root = tmp_path / "MELD.Raw"
+            raw_root = tmp_path / "raw"
+            _write_meld_raw_fixture(raw_root)
+            _write_meld_csv_fixture(meld_root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "extract_meld_transformer_features.py"),
+                    str(meld_root),
+                    str(raw_root),
+                    "--dry-run",
+                    "--min-video-coverage",
+                    "0",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "dry_run")
+        self.assertEqual(payload["feature_extractor_versions"]["text"], "FacebookAI/roberta-base@main")
+        self.assertEqual(payload["feature_extractor_versions"]["audio"], "facebook/wav2vec2-base-960h@main")
+        self.assertEqual(payload["feature_extractor_versions"]["visual"], "openai/clip-vit-base-patch32@main")
 
     def test_controlled_true_adapter_param_contract_matches_v1_protocol(self):
         from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
@@ -2597,6 +2688,7 @@ def _write_meld_raw_fixture(raw_root: Path) -> None:
                     "dialogue_id": f"dialogue-{split}",
                     "speaker_id": speaker_by_split[split],
                     "transcript_source": f"MELD {split}_sent_emo.csv",
+                    "utterance_text": f"fixture utterance for {split}",
                 }
             )
     (raw_root / "metadata" / "dialogues.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
@@ -2619,6 +2711,25 @@ def _write_meld_raw_fixture(raw_root: Path) -> None:
     np.save(raw_root / "features" / "audio_features.npy", np.arange(3 * 4 * 3, dtype=np.float32).reshape(3, 4, 3))
     np.save(raw_root / "features" / "visual_features.npy", np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4))
     np.save(raw_root / "labels" / "emotion.npy", np.eye(7, dtype=np.float32)[:3])
+
+
+def _write_meld_csv_fixture(meld_root: Path) -> None:
+    meld_root.mkdir(parents=True, exist_ok=True)
+    rows_by_name = {
+        "train_sent_emo.csv": ("Monica", "neutral", "train fixture utterance"),
+        "dev_sent_emo.csv": ("Chandler", "joy", "validation fixture utterance"),
+        "test_sent_emo.csv": ("Rachel", "sadness", "test fixture utterance"),
+    }
+    for name, (speaker, emotion, utterance) in rows_by_name.items():
+        (meld_root / name).write_text(
+            "\n".join(
+                [
+                    "Sr No.,Utterance,Speaker,Emotion,Sentiment,Dialogue_ID,Utterance_ID,Season,Episode,StartTime,EndTime",
+                    f"1,{utterance},{speaker},{emotion},neutral,1,1,1,1,00:00:00,00:00:01",
+                ]
+            )
+            + "\n"
+        )
 
 
 class _Shape:

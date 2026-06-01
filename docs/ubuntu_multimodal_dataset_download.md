@@ -546,6 +546,29 @@ tar -xzf data/raw_multimodal/_downloads/meld/MELD.Raw.tar.gz \
   -C data/raw_multimodal/_downloads/meld/extracted
 ```
 
+正式 public-main 实验不要使用 hand-written hash 或 ffmpeg 统计量作为主特征。MELD 原始 CSV/mp4 需要先生成官方标签/metadata，再用冻结预训练编码器提取三路特征。推荐默认方案：
+
+- text: `FacebookAI/roberta-base`
+- audio: `facebook/wav2vec2-base-960h`
+- vision: `openai/clip-vit-base-patch32`
+
+这些 encoder 只做 frozen feature extraction，标签仍来自 MELD 官方 `*_sent_emo.csv`，并且 OVHA 与所有 same-feature baselines 必须共享同一份 `.npy` 特征。先把 `train.tar.gz` / `dev.tar.gz` / `test.tar.gz` 解出 mp4，再运行：
+
+```bash
+python scripts/multimodal/extract_meld_transformer_features.py \
+  data/raw_public/multimodal/MELD/MELD.Raw \
+  data/raw_multimodal/meld \
+  --device auto \
+  --text-model FacebookAI/roberta-base \
+  --audio-model facebook/wav2vec2-base-960h \
+  --vision-model openai/clip-vit-base-patch32 \
+  --text-revision main \
+  --audio-revision main \
+  --vision-revision main
+```
+
+`scripts/multimodal/extract_meld_ffmpeg_features.py` 只用于数据管线诊断和缺失视频定位，不用于正式主表。
+
 ## 5. 下载后校验与 cache 初始化
 
 下载只是第一步。正式进入 OVHA 训练前，必须生成本仓库 adapter 期望的 frozen features / labels / metadata / splits，然后运行 fail-fast 初始化与 cache 校验。
