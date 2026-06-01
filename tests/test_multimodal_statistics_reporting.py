@@ -38,6 +38,28 @@ class MultimodalStatisticsReportingTests(unittest.TestCase):
         )
         self.assertTrue(summary["reporting_metadata"]["per_seed_table"])
 
+    def test_public_summary_rejects_smoke_marked_rows_as_main_table_evidence(self):
+        from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
+
+        rows = _metric_rows()
+        rows[0] = {
+            **rows[0],
+            "artifact_type": "public_smoke_raw_metric",
+            "evidence_scope": "public_smoke_only_not_topconf_main_table",
+            "not_topconf_main_table": True,
+            "public_metrics_scope": "region_text_smoke_proxy_not_topconf_main_table",
+        }
+
+        summary = summarize_public_results(rows, full_model="ovha_full", baseline_model="cross_attention_transformer")
+        validation = validate_public_summary(summary)
+
+        self.assertFalse(validation.ok)
+        joined = "\n".join(validation.errors)
+        self.assertIn("not_topconf_main_table rows cannot enter top-conference main-table statistics", joined)
+        self.assertIn("evidence_scope is not top-conference main-table evidence", joined)
+        self.assertIn("artifact_type is smoke-only and cannot enter top-conference main-table statistics", joined)
+        self.assertIn("public_metrics_scope is smoke-only and cannot enter top-conference main-table statistics", joined)
+
     def test_public_summary_rejects_under_five_seed_main_table_without_rationale(self):
         from moat_ovha_torch.eval.multimodal_statistics import summarize_public_results, validate_public_summary
 

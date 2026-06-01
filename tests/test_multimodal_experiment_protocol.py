@@ -1923,6 +1923,64 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(payload["validation"]["statistics"]["ok"], True)
         self.assertEqual(payload["validation"]["evidence_errors"], [])
 
+    def test_public_gate_bundle_cli_rejects_smoke_raw_metrics_as_topconf_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_metrics_path = tmp_path / "region_public_smoke_raw_metrics.jsonl"
+            diagnostics_path = tmp_path / "region_diagnostics.jsonl"
+            robustness_rows_path = tmp_path / "region_robustness_rows.jsonl"
+            output_dir = tmp_path / "gate_bundle"
+            raw_rows = [
+                {
+                    **row,
+                    "higher_is_better": True,
+                    "artifact_type": "public_smoke_raw_metric",
+                    "evidence_scope": "public_smoke_only_not_topconf_main_table",
+                    "not_topconf_main_table": True,
+                    "public_metrics_scope": "region_text_smoke_proxy_not_topconf_main_table",
+                }
+                for row in _gate_statistics_summary("phrase_region_grounding", raw_metrics_path)["per_seed_appendix"]
+            ]
+            raw_metrics_path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in raw_rows) + "\n")
+            diagnostics_path.write_text(
+                "\n".join(json.dumps(row, sort_keys=True) for row in _gate_diagnostic_rows("phrase_region_grounding")) + "\n"
+            )
+            robustness_rows_path.write_text(
+                "\n".join(json.dumps(row, sort_keys=True) for row in _gate_robustness_rows()) + "\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_public_gate_report.py"),
+                    "region_text",
+                    "--raw-metrics",
+                    str(raw_metrics_path),
+                    "--diagnostics",
+                    str(diagnostics_path),
+                    "--robustness-rows",
+                    str(robustness_rows_path),
+                    "--task",
+                    "phrase_region_grounding",
+                    "--split",
+                    "test",
+                    "--output-dir",
+                    str(output_dir),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["validation"]["statistics"]["ok"])
+        joined = "\n".join(payload["validation"]["statistics"]["errors"])
+        self.assertIn("not_topconf_main_table rows cannot enter top-conference main-table statistics", joined)
+        self.assertIn("evidence_scope is not top-conference main-table evidence", joined)
+
     def test_topconf_main_entry_requires_region_and_sentiment_cache_coverage(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
         from moat_ovha_torch.eval.multimodal_main_experiment_entry import (
