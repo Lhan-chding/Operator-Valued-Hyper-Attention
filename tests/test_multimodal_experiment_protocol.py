@@ -676,7 +676,18 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "corruption_type": "image_blur",
                     "corruption_strength": 0.4,
                     "score": 0.74,
-                }
+                },
+                {
+                    "artifact_type": "public_main_robustness_row",
+                    "dataset": "refcoco",
+                    "task": "phrase_region_grounding",
+                    "split": "test",
+                    "seed": 201,
+                    "model": "cross_attention_transformer",
+                    "corruption_type": "image_blur",
+                    "corruption_strength": 0.4,
+                    "score": 0.70,
+                },
             ]
             raw_metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
             diagnostics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in diagnostics_rows) + "\n")

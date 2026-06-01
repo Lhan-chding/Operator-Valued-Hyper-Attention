@@ -140,6 +140,20 @@ def _commands(args: argparse.Namespace) -> list[str]:
         _validate_training_plan_command(args.sentiment_config),
         _validate_cache_command("refcoco", args.cache_root, args.cache_version),
         _validate_cache_command("cmu_mosei", args.cache_root, args.cache_version),
+        _validate_public_main_artifacts_command(
+            config=args.region_config,
+            raw_metrics=args.region_raw_metrics,
+            diagnostics=args.region_diagnostics,
+            robustness_rows=args.region_robustness_rows,
+            split=args.region_split,
+        ),
+        _validate_public_main_artifacts_command(
+            config=args.sentiment_config,
+            raw_metrics=args.sentiment_raw_metrics,
+            diagnostics=args.sentiment_diagnostics,
+            robustness_rows=args.sentiment_robustness_rows,
+            split=args.sentiment_split,
+        ),
         _build_gate_command(
             "region_text",
             raw_metrics=args.region_raw_metrics,
@@ -174,6 +188,24 @@ def _validate_cache_command(dataset: str, cache_root: Path, version: str) -> str
     return (
         "python scripts/multimodal/validate_cache.py "
         f"{_q(cache_root)} {_q(dataset)} {_q(version)} --splits train val test"
+    )
+
+
+def _validate_public_main_artifacts_command(
+    *,
+    config: Path,
+    raw_metrics: Path,
+    diagnostics: Path,
+    robustness_rows: Path,
+    split: str,
+) -> str:
+    return (
+        "python scripts/multimodal/validate_public_main_artifacts.py "
+        f"--config {_q(config)} "
+        f"--raw-metrics {_q(raw_metrics)} "
+        f"--diagnostics {_q(diagnostics)} "
+        f"--robustness-rows {_q(robustness_rows)} "
+        f"--split {_q(split)}"
     )
 
 
