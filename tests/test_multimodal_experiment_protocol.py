@@ -628,6 +628,14 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "scripts/multimodal/validate_training_plan.py configs/multimodal_cmu_mosei_public_main.json",
             commands,
         )
+        self.assertIn("scripts/multimodal/run_public_main.py configs/multimodal_refcoco_public_main.json", commands)
+        self.assertIn("scripts/multimodal/run_public_main.py configs/multimodal_cmu_mosei_public_main.json", commands)
+        self.assertIn("${OVHA_PUBLIC_MAIN_TRAIN_STEPS:?", commands)
+        self.assertIn("${OVHA_PUBLIC_MAIN_BASELINE_TRAIN_STEPS:?", commands)
+        self.assertLess(
+            commands.index("scripts/multimodal/run_public_main.py configs/multimodal_refcoco_public_main.json"),
+            commands.index("scripts/multimodal/validate_public_main_artifacts.py --config configs/multimodal_refcoco_public_main.json"),
+        )
         self.assertIn("scripts/multimodal/validate_public_main_artifacts.py --config configs/multimodal_refcoco_public_main.json", commands)
         self.assertIn("scripts/multimodal/validate_public_main_artifacts.py --config configs/multimodal_cmu_mosei_public_main.json", commands)
         self.assertIn("scripts/multimodal/validate_cache.py", commands)
@@ -756,6 +764,94 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         joined = "\n".join(bad_payload["errors"])
         self.assertIn("not_topconf_main_table rows cannot enter public main artifacts", joined)
         self.assertIn("missing configured seed coverage for model ovha_full: 205", joined)
+
+    def test_public_main_runner_writes_non_smoke_main_artifacts_and_passes_preflight(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for public main runner smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "refcoco_main"
+            controlled_report_path = tmp_path / "controlled_report.json"
+            _write_valid_refcoco_public_cache(cache_root)
+            controlled_report_path.write_text(
+                json.dumps(_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"), sort_keys=True) + "\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "run_public_main.py"),
+                    str(ROOT / "configs" / "multimodal_refcoco_public_main.json"),
+                    "--cache-root",
+                    str(cache_root),
+                    "--controlled-report",
+                    str(controlled_report_path),
+                    "--artifact-root",
+                    str(artifact_root),
+                    "--train-steps",
+                    "1",
+                    "--baseline-train-steps",
+                    "1",
+                    "--train-split",
+                    "train",
+                    "--eval-split",
+                    "test",
+                    "--d-model",
+                    "8",
+                    "--memory-tokens",
+                    "1",
+                    "--device",
+                    "cpu",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(result.stdout) if result.stdout.strip() else {}
+            raw_metrics = artifact_root / "raw_metrics.jsonl"
+            diagnostics = artifact_root / "diagnostics.jsonl"
+            robustness_rows = artifact_root / "robustness_rows.jsonl"
+            raw_rows = [
+                json.loads(line)
+                for line in raw_metrics.read_text().splitlines()
+                if line.strip()
+            ] if raw_metrics.exists() else []
+            preflight = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "validate_public_main_artifacts.py"),
+                    "--config",
+                    str(ROOT / "configs" / "multimodal_refcoco_public_main.json"),
+                    "--raw-metrics",
+                    str(raw_metrics),
+                    "--diagnostics",
+                    str(diagnostics),
+                    "--robustness-rows",
+                    str(robustness_rows),
+                    "--split",
+                    "test",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["mode"], "public_main_training")
+        self.assertEqual(payload["seed_count"], 5)
+        self.assertEqual(payload["artifacts"]["raw_metrics"]["path"], str(raw_metrics))
+        self.assertEqual(len(raw_rows), 5 * 11)
+        self.assertEqual({row["artifact_type"] for row in raw_rows}, {"public_main_raw_metric"})
+        self.assertEqual({row["evidence_scope"] for row in raw_rows}, {"public_main_table"})
+        self.assertEqual({row["public_metrics_scope"] for row in raw_rows}, {"public_main_metrics"})
+        self.assertNotIn("smoke", json.dumps(raw_rows, sort_keys=True).lower())
+        self.assertNotIn("not_topconf", json.dumps(raw_rows, sort_keys=True).lower())
+        self.assertEqual(preflight.returncode, 0, preflight.stdout + preflight.stderr)
 
     def test_public_entry_requires_controlled_go_no_go_report(self):
         from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements

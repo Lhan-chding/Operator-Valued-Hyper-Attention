@@ -38,6 +38,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             ROOT / "scripts" / "multimodal" / "write_cmu_sdk_splits.py",
             ROOT / "scripts" / "multimodal" / "check_public_data_readiness.py",
             ROOT / "scripts" / "multimodal" / "build_public_main_runbook.py",
+            ROOT / "scripts" / "multimodal" / "run_public_main.py",
             ROOT / "scripts" / "multimodal" / "validate_public_main_artifacts.py",
         ]
         for path in expected:
