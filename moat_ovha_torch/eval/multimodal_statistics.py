@@ -215,6 +215,7 @@ def validate_public_summary(summary: dict[str, Any]) -> PublicSummaryValidationR
     _validate_baseline_strength(summary.get("paired_tests", {}), metadata, errors)
     _validate_label_provenance(summary.get("per_seed_appendix", []), metadata, errors)
     _validate_public_metric_inventory(summary.get("per_seed_appendix", []), errors)
+    _validate_main_table_evidence_scope(summary.get("per_seed_appendix", []), errors)
     if not summary.get("per_seed_appendix"):
         errors.append("per_seed_appendix missing")
     return PublicSummaryValidationReport(ok=not errors, errors=errors, warnings=warnings)
@@ -423,6 +424,58 @@ def _validate_public_metric_inventory(appendix_rows: Any, errors: list[str]) -> 
                 errors.append(f"{row_name} missing required public metric: {metric}")
                 continue
             _validate_public_metric_value(row_name, metric, metrics.get(metric), errors)
+
+
+def _validate_main_table_evidence_scope(appendix_rows: Any, errors: list[str]) -> None:
+    if not isinstance(appendix_rows, list):
+        return
+    for row in appendix_rows:
+        if not isinstance(row, dict):
+            continue
+        row_name = f"{row.get('task', '?')}/{row.get('split', '?')}/{row.get('model', '?')}/seed={row.get('seed', '?')}"
+        if row.get("not_topconf_main_table") is True:
+            errors.append(
+                f"{row_name}: not_topconf_main_table rows cannot enter "
+                "top-conference main-table statistics"
+            )
+        artifact_type = row.get("artifact_type")
+        if _marks_smoke_or_preview(artifact_type):
+            errors.append(
+                f"{row_name}: artifact_type is smoke-only and cannot enter "
+                "top-conference main-table statistics: {artifact_type}"
+            )
+        evidence_scope = row.get("evidence_scope")
+        if _marks_smoke_or_preview(evidence_scope):
+            errors.append(
+                f"{row_name}: evidence_scope is not top-conference main-table evidence: "
+                f"{evidence_scope}"
+            )
+        public_metrics_scope = row.get("public_metrics_scope")
+        if _marks_smoke_or_preview(public_metrics_scope):
+            errors.append(
+                f"{row_name}: public_metrics_scope is smoke-only and cannot enter "
+                f"top-conference main-table statistics: {public_metrics_scope}"
+            )
+        raw_metric_path = row.get("raw_metric_path")
+        if _marks_smoke_or_preview(_basename_text(raw_metric_path)):
+            errors.append(
+                f"{row_name}: raw_metric_path appears to reference smoke evidence and "
+                "cannot enter top-conference main-table statistics: "
+                f"{raw_metric_path}"
+            )
+
+
+def _basename_text(value: Any) -> str:
+    return str(value).rsplit("/", 1)[-1] if value is not None else ""
+
+
+def _marks_smoke_or_preview(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip().lower().replace("-", "_")
+    if not text:
+        return False
+    return any(marker in text for marker in ("smoke", "not_topconf", "preview_only"))
 
 
 def _validate_public_metric_value(row_name: str, metric: str, value: Any, errors: list[str]) -> None:
