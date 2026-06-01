@@ -18,6 +18,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             ROOT / "configs" / "multimodal_controlled_v1_smoke.json",
             ROOT / "configs" / "multimodal_refcoco_public_smoke.json",
             ROOT / "configs" / "multimodal_cmu_mosei_public_smoke.json",
+            ROOT / "configs" / "multimodal_refcoco_public_main.json",
+            ROOT / "configs" / "multimodal_cmu_mosei_public_main.json",
             ROOT / "configs" / "multimodal_robustness_smoke.json",
             ROOT / "moat_ovha_torch" / "config_multimodal.py",
             ROOT / "moat_ovha_torch" / "models" / "multimodal" / "baselines.py",
@@ -95,6 +97,54 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "hidden loss is controlled-only"):
             MultimodalExperimentConfig.from_mapping(invalid)
+
+    def test_public_main_configs_are_non_smoke_five_seed_t5_plans(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
+
+        expectations = [
+            (
+                ROOT / "configs" / "multimodal_refcoco_public_main.json",
+                "refcoco",
+                "phrase_region_grounding",
+                "public_alignment_ce",
+                set(baseline_names_for_task("phrase_region_grounding")),
+            ),
+            (
+                ROOT / "configs" / "multimodal_cmu_mosei_public_main.json",
+                "cmu_mosei",
+                "sentiment_emotion",
+                None,
+                set(baseline_names_for_task("sentiment_emotion")),
+            ),
+        ]
+        for path, dataset, task_type, alignment_loss, required_baselines in expectations:
+            with self.subTest(path=path):
+                config = MultimodalExperimentConfig.from_file(path)
+                payload = json.loads(path.read_text())
+
+                self.assertEqual(config.dataset_name, dataset)
+                self.assertEqual(config.task_type, task_type)
+                self.assertEqual(config.training_stages, ("T0", "T5"))
+                self.assertEqual(config.candidate_names, ("TLEO", "SPO", "LRIO", "CATO"))
+                self.assertGreaterEqual(len(config.seeds), 5)
+                self.assertEqual(len(set(config.seeds)), len(config.seeds))
+                self.assertEqual(set(config.eval_splits), {"val", "test"})
+                self.assertTrue(config.enforce_same_features_for_baselines)
+                self.assertTrue(config.fail_on_missing_cache_artifact)
+                self.assertFalse(config.allow_hidden_losses)
+                self.assertTrue(required_baselines.issubset(set(config.baseline_names)))
+                self.assertNotIn("smoke", config.name)
+                self.assertNotIn("smoke", str(config.output_dir))
+                self.assertNotIn("smoke", path.name)
+                self.assertEqual(payload["main_table_seed_policy"], "five_seed_default")
+                self.assertIn("T0", config.losses_by_stage)
+                self.assertIn("T5", config.losses_by_stage)
+                self.assertIn("task_loss", config.losses_by_stage["T5"])
+                self.assertIn("candidate_individual_loss", config.losses_by_stage["T5"])
+                if alignment_loss is not None:
+                    self.assertIn(alignment_loss, config.losses_by_stage["T5"])
+                    self.assertTrue(config.require_public_alignment_labels)
 
     def test_region_text_public_alignment_ce_requires_declared_alignment_labels(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
@@ -559,6 +609,24 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertTrue(runbook["requires_real_main_metrics"])
         self.assertIn("smoke artifacts must not be used as top-conference main-table inputs", runbook["policy"])
         self.assertEqual(runbook["datasets"], ["refcoco", "cmu_mosei"])
+        self.assertEqual(
+            runbook["training_configs"]["region_text"]["config"],
+            "configs/multimodal_refcoco_public_main.json",
+        )
+        self.assertEqual(
+            runbook["training_configs"]["sentiment"]["config"],
+            "configs/multimodal_cmu_mosei_public_main.json",
+        )
+        self.assertEqual(runbook["training_configs"]["region_text"]["seed_count"], 5)
+        self.assertEqual(runbook["training_configs"]["sentiment"]["seed_count"], 5)
+        self.assertIn(
+            "scripts/multimodal/validate_training_plan.py configs/multimodal_refcoco_public_main.json",
+            commands,
+        )
+        self.assertIn(
+            "scripts/multimodal/validate_training_plan.py configs/multimodal_cmu_mosei_public_main.json",
+            commands,
+        )
         self.assertIn("scripts/multimodal/validate_cache.py", commands)
         self.assertIn("scripts/multimodal/build_public_gate_report.py region_text", commands)
         self.assertIn("scripts/multimodal/build_public_gate_report.py sentiment", commands)
