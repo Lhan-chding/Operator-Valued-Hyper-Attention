@@ -1329,6 +1329,83 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("scripts/multimodal/write_cmu_sdk_splits.py", joined_commands)
         self.assertNotIn("Traceback", result.stderr)
 
+    def test_public_data_readiness_rejects_cmu_mosei_mean_pooled_stage_inputs_as_public_main(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            download_root = tmp_path / "downloads"
+            stage_dir = download_root / "cmu_mosei_stage_inputs"
+            sdk_dir = download_root / "cmu_sdk" / "cmu_mosei"
+            stage_dir.mkdir(parents=True)
+            sdk_dir.mkdir(parents=True)
+            (sdk_dir / "CMU_MOSEI_COVAREP.csd").write_text("placeholder\n")
+            split_source_ids = {
+                "train": ["video-train-1", "video-train-2"],
+                "val": ["video-val-1"],
+                "test": ["video-test-1"],
+            }
+            source_ids = [source_id for split in ("train", "val", "test") for source_id in split_source_ids[split]]
+            (download_root / "cmu_mosei_splits.json").write_text(json.dumps(split_source_ids, sort_keys=True) + "\n")
+            (stage_dir / "cmu_mosei_splits.json").write_text(json.dumps(split_source_ids, sort_keys=True) + "\n")
+            np.save(stage_dir / "cmu_mosei_text_features.npy", np.zeros((len(source_ids), 1, 300), dtype=np.float32))
+            np.save(stage_dir / "cmu_mosei_audio_features.npy", np.zeros((len(source_ids), 1, 74), dtype=np.float32))
+            np.save(stage_dir / "cmu_mosei_visual_features.npy", np.zeros((len(source_ids), 1, 35), dtype=np.float32))
+            np.save(stage_dir / "cmu_mosei_sentiment.npy", np.zeros((len(source_ids), 1), dtype=np.float32))
+            np.save(stage_dir / "cmu_mosei_emotion.npy", np.zeros((len(source_ids), 6), dtype=np.float32))
+            (stage_dir / "cmu_mosei_stage_input_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "dataset_name": "cmu_mosei",
+                        "sample_count": len(source_ids),
+                        "splits": split_source_ids,
+                        "temporal_policy": "mean",
+                        "preprocessing_version": "cmu-mosei-cmu-sdk-mean-v0.1",
+                        "source_paths": {
+                            "text": "CMU_MOSEI_TimestampedWordVectors.csd",
+                            "audio": "CMU_MOSEI_COVAREP.csd",
+                            "vision": "CMU_MOSEI_VisualFacet42.csd",
+                            "labels": "CMU_MOSEI_Labels.csd",
+                        },
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "check_public_data_readiness.py"),
+                    "--datasets",
+                    "cmu_mosei",
+                    "--download-root",
+                    str(download_root),
+                    "--raw-root-base",
+                    str(tmp_path / "raw"),
+                    "--cache-root",
+                    str(tmp_path / "cache"),
+                    "--controlled-report",
+                    str(tmp_path / "controlled_report.json"),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        dataset = payload["datasets"]["cmu_mosei"]
+        joined_errors = "\n".join(dataset["phases"]["public_main_quality"]["errors"])
+        joined_commands = "\n".join(payload["next_commands"])
+        self.assertFalse(payload["ok"])
+        self.assertFalse(dataset["phases"]["stage_inputs"]["ok"])
+        self.assertFalse(dataset["phases"]["public_main_quality"]["ok"])
+        self.assertIn("mean-pooled", joined_errors)
+        self.assertIn("utterance/segment-level", joined_errors)
+        self.assertNotIn("scripts/multimodal/accept_public_data.py", joined_commands)
+
     def test_public_data_readiness_cli_points_valid_caches_to_acceptance(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
