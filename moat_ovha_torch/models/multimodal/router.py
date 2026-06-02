@@ -19,9 +19,15 @@ class MultimodalRouterOutput:
 
 
 class MultimodalRelationRouter(nn.Module):
-    def __init__(self, d_model: int, candidate_names: tuple[str, ...] = MULTIMODAL_CANDIDATE_NAMES):
+    def __init__(
+        self,
+        d_model: int,
+        candidate_names: tuple[str, ...] = MULTIMODAL_CANDIDATE_NAMES,
+        use_evidence_router: bool = True,
+    ):
         super().__init__()
         self.candidate_names = candidate_names
+        self.use_evidence_router = bool(use_evidence_router)
         self.memory_head = nn.Linear(d_model * 2, 1)
         self.query_candidate_head = nn.Linear(d_model, len(candidate_names))
         nn.init.zeros_(self.query_candidate_head.weight)
@@ -38,7 +44,11 @@ class MultimodalRelationRouter(nn.Module):
             memory = memory_bank[name].mean(dim=1).unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1)
             memory_logits.append(self.memory_head(torch.cat([evidence.query_features, memory], dim=-1)))
         memory_logit = torch.cat(memory_logits, dim=-1) + self.query_candidate_head(evidence.query_features)
-        evidence_logit = evidence.candidate_evidence_logits
+        evidence_logit = (
+            evidence.candidate_evidence_logits
+            if self.use_evidence_router
+            else torch.zeros_like(evidence.candidate_evidence_logits)
+        )
         reliability_logit = (
             reliability.operator_logit_bias
             if reliability is not None

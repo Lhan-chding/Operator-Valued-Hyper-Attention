@@ -26,7 +26,11 @@ from moat_ovha_torch.eval.multimodal_statistics import (
     REGION_TEXT_REQUIRED_PUBLIC_METRICS,
     SENTIMENT_REQUIRED_PUBLIC_METRICS,
 )
-from moat_ovha_torch.models.multimodal.baselines import assert_same_feature_baseline_policy, baseline_protocol_for_name
+from moat_ovha_torch.models.multimodal.baselines import (
+    assert_same_feature_baseline_policy,
+    baseline_protocol_for_name,
+    ovha_ablation_names_for_task,
+)
 from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA, MultimodalOVHAOutput
 from scripts.multimodal.run_public_smoke import (
     _as_float,
@@ -142,6 +146,8 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         baseline_train_steps=int(args.baseline_train_steps),
         device=str(device),
         progress_interval=progress_interval,
+        d_model=int(args.d_model),
+        memory_tokens=int(args.memory_tokens),
     )
     for seed in config.seeds:
         seed_report = _run_seed(
@@ -300,6 +306,8 @@ def _run_seed(
         hardware=hardware,
         raw_metrics_path=raw_metrics_path,
         progress_interval=progress_interval,
+        d_model=int(args.d_model),
+        memory_tokens=int(args.memory_tokens),
     )
     raw_rows.extend(baseline_rows)
     robustness_rows.extend(baseline_robustness_rows)
@@ -365,11 +373,59 @@ def _baseline_rows(
     hardware: dict[str, Any],
     raw_metrics_path: Path,
     progress_interval: int,
+    d_model: int,
+    memory_tokens: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     robustness_rows: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
     for baseline_name in config.baseline_names:
+        baseline_protocol = baseline_protocol_for_name(config.task_type, str(baseline_name))
+        if str(baseline_name) in ovha_ablation_names_for_task(config.task_type):
+            model, eval_output, summary = _train_ovha_ablation(
+                config,
+                str(baseline_name),
+                train_batch=train_batch,
+                eval_batch=eval_batch,
+                seed=seed,
+                train_steps=baseline_train_steps,
+                learning_rate=learning_rate,
+                progress_interval=progress_interval,
+                d_model=d_model,
+                memory_tokens=memory_tokens,
+            )
+            loss = _task_loss(eval_output.y_hat, eval_batch)
+            rows.append(
+                _raw_metric_row(
+                    config,
+                    eval_batch,
+                    model_name=str(baseline_name),
+                    seed=seed,
+                    prediction=eval_output.y_hat,
+                    score=_as_float(loss),
+                    training_steps=baseline_train_steps,
+                    parameter_count=_parameter_count(model),
+                    raw_metrics_path=raw_metrics_path,
+                    hardware=hardware,
+                    router_load_by_candidate=eval_output.diagnostics.get("router_load_by_candidate", {}),
+                    router_entropy=eval_output.diagnostics.get("router_entropy"),
+                    candidate_loss=eval_output.diagnostics.get("candidate_loss", {}),
+                    model_protocol=f"{baseline_protocol}_public_main_v1",
+                )
+            )
+            robustness_rows.extend(
+                _ovha_robustness_rows(
+                    config,
+                    model,
+                    eval_batch,
+                    seed=seed,
+                    raw_metric_path=raw_metrics_path,
+                    model_name=str(baseline_name),
+                )
+            )
+            summaries.append({**summary, "model": str(baseline_name)})
+            continue
+
         model, summary = _train_linear_baseline(
             str(baseline_name),
             train_batch=train_batch,
@@ -382,7 +438,6 @@ def _baseline_rows(
             eval_prediction = _baseline_prediction(str(baseline_name), model, eval_batch)
             loss = _task_loss(eval_prediction, eval_batch)
         router_load = _probe_router_load_by_candidate(str(baseline_name))
-        baseline_protocol = baseline_protocol_for_name(config.task_type, str(baseline_name))
         rows.append(
             _raw_metric_row(
                 config,
@@ -413,6 +468,98 @@ def _baseline_rows(
         )
         summaries.append({**summary, "model": str(baseline_name)})
     return rows, robustness_rows, summaries
+
+
+def _train_ovha_ablation(
+    config: MultimodalExperimentConfig,
+    baseline_name: str,
+    *,
+    train_batch: MultimodalEpisodeBatch,
+    eval_batch: MultimodalEpisodeBatch,
+    seed: int,
+    train_steps: int,
+    learning_rate: float,
+    progress_interval: int,
+    d_model: int,
+    memory_tokens: int,
+) -> tuple[MultimodalOVHA, MultimodalOVHAOutput, dict[str, Any]]:
+    field_dims = {name: int(field.x.shape[-1]) for name, field in train_batch.fields.items()}
+    torch.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name))
+    model = MultimodalOVHA(
+        field_dims=field_dims,
+        query_dim=int(train_batch.query.x.shape[-1]),
+        output_dim=int(train_batch.target_y.shape[-1]),
+        d_model=d_model,
+        memory_tokens=memory_tokens,
+        **_ovha_variant_kwargs(baseline_name),
+    ).to(train_batch.target_y.device)
+    initial = _parameter_vector(model)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    max_grad_norm = 0.0
+    final_loss = 0.0
+    model.train()
+    started_at = time.perf_counter()
+    _print_progress(
+        "model:start",
+        seed=seed,
+        model=baseline_name,
+        steps=train_steps,
+        learning_rate=learning_rate,
+        protocol="internal_ovha_ablation",
+    )
+    for step in range(1, train_steps + 1):
+        optimizer.zero_grad(set_to_none=True)
+        output = model(train_batch)
+        components = _public_loss_components(output, train_batch, config)
+        total_loss = torch.stack([value for value in components.values()]).sum()
+        total_loss.backward()
+        max_grad_norm = max(max_grad_norm, _grad_l2_norm(model))
+        optimizer.step()
+        final_loss = _as_float(total_loss)
+        if _should_log_progress(step, train_steps, progress_interval):
+            _print_step_progress(
+                seed=seed,
+                model=baseline_name,
+                step=step,
+                total_steps=train_steps,
+                loss=final_loss,
+                started_at=started_at,
+            )
+    _print_progress(
+        "model:done",
+        seed=seed,
+        model=baseline_name,
+        steps=train_steps,
+        loss=f"{final_loss:.6g}",
+        elapsed=f"{time.perf_counter() - started_at:.1f}s",
+    )
+    model.eval()
+    with torch.no_grad():
+        eval_output = model(eval_batch)
+    return model, eval_output, {
+        "baseline_optimizer_steps": train_steps,
+        "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial).item()),
+        "baseline_grad_l2_norm": max_grad_norm,
+        "baseline_train_loss_final": final_loss,
+        "baseline_training_protocol": "internal_ovha_ablation",
+        "baseline_variant": _ovha_variant_kwargs(baseline_name),
+    }
+
+
+def _ovha_variant_kwargs(baseline_name: str) -> dict[str, Any]:
+    if baseline_name == "ovha_no_rceo":
+        return {"use_reliability_prior": False}
+    if baseline_name == "ovha_no_evidence_router":
+        return {"use_evidence_router": False}
+    if baseline_name == "cato_only":
+        return {"router_weight_policy": {"only": "CATO"}}
+    if baseline_name == "ovha_no_cato":
+        return {"router_weight_policy": {"drop": "CATO"}}
+    if baseline_name == "ovha_no_lrio":
+        return {"router_weight_policy": {"drop": "LRIO"}}
+    if baseline_name == "ovha_no_spo":
+        return {"router_weight_policy": {"drop": "SPO"}}
+    raise ValueError(f"unknown OVHA ablation baseline: {baseline_name}")
 
 
 def _train_linear_baseline(
@@ -596,6 +743,7 @@ def _ovha_robustness_rows(
     *,
     seed: int,
     raw_metric_path: Path,
+    model_name: str = "ovha_full",
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     model.eval()
@@ -608,7 +756,7 @@ def _ovha_robustness_rows(
             _robustness_row(
                 config,
                 corrupted,
-                model_name="ovha_full",
+                model_name=model_name,
                 seed=seed,
                 raw_metric_path=raw_metric_path,
                 corruption_type=corruption_type,

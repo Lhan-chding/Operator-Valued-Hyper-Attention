@@ -43,16 +43,24 @@ class MultimodalOVHA(nn.Module):
         memory_tokens: int = 4,
         candidate_names: tuple[str, ...] = MULTIMODAL_CANDIDATE_NAMES,
         use_reliability_prior: bool = True,
+        use_evidence_router: bool = True,
+        router_weight_policy: dict[str, str] | None = None,
     ):
         super().__init__()
         if tuple(candidate_names) != MULTIMODAL_CANDIDATE_NAMES:
             raise ValueError("MultimodalOVHA v1 requires exactly TLEO / SPO / LRIO / CATO")
         self.output_dim = output_dim
         self.candidate_names = candidate_names
+        self.use_evidence_router = bool(use_evidence_router)
+        self.router_weight_policy = _validated_router_weight_policy(router_weight_policy, candidate_names)
         self.evidence_encoder = MultimodalEvidenceEncoder(field_dims=field_dims, query_dim=query_dim, d_model=d_model)
         self.memory_encoder = MultimodalOperatorMemory(d_model=d_model, memory_tokens=memory_tokens, candidate_names=candidate_names)
         self.reliability_prior = RCEOReliabilityPrior(d_model=d_model, candidate_names=candidate_names) if use_reliability_prior else None
-        self.joint_router_adapter = MultimodalJointRouterAdapter(d_model=d_model, candidate_names=candidate_names)
+        self.joint_router_adapter = MultimodalJointRouterAdapter(
+            d_model=d_model,
+            candidate_names=candidate_names,
+            use_evidence_router=self.use_evidence_router,
+        )
         self.candidate_primitives = make_candidate_bank(d_model=d_model, output_dim=output_dim)
 
     def forward(
@@ -79,7 +87,12 @@ class MultimodalOVHA(nn.Module):
         batch_size, q_count = batch.target_y.shape[0], batch.target_y.shape[1]
         assert_stackable(candidate_outputs, batch_size, q_count, self.output_dim)
         candidate_values = stack_candidate_values(candidate_outputs)
-        router_weights = _effective_router_weights(router_output.weights, router_weight_override)
+        router_weights = _effective_router_weights(
+            router_output.weights,
+            router_weight_override,
+            self.candidate_names,
+            self.router_weight_policy,
+        )
         y_hat = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
         candidate_losses = _candidate_losses(candidate_outputs, batch.target_y, batch.target_mask)
         diagnostics = {
@@ -99,6 +112,7 @@ class MultimodalOVHA(nn.Module):
                 "applied": router_weight_override is not None,
                 "source": "training_only_supplied_weights" if router_weight_override is not None else "learned_router",
             },
+            "router_weight_policy": _router_weight_policy_diagnostics(self.router_weight_policy),
         }
         return MultimodalOVHAOutput(
             y_hat=y_hat,
@@ -116,10 +130,52 @@ class MultimodalOVHA(nn.Module):
 def _effective_router_weights(
     learned_weights: torch.Tensor,
     router_weight_override: torch.Tensor | None,
+    candidate_names: tuple[str, ...],
+    router_weight_policy: dict[str, str] | None,
 ) -> torch.Tensor:
-    if router_weight_override is None:
-        return learned_weights
-    return router_weight_override.to(device=learned_weights.device, dtype=learned_weights.dtype)
+    weights = (
+        learned_weights
+        if router_weight_override is None
+        else router_weight_override.to(device=learned_weights.device, dtype=learned_weights.dtype)
+    )
+    if router_weight_policy is None:
+        return weights
+    if "only" in router_weight_policy:
+        candidate_index = candidate_names.index(router_weight_policy["only"])
+        only = torch.zeros_like(weights)
+        only[..., candidate_index] = 1.0
+        return only
+    if "drop" in router_weight_policy:
+        candidate_index = candidate_names.index(router_weight_policy["drop"])
+        kept = weights.clone()
+        kept[..., candidate_index] = 0.0
+        return kept / kept.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+    return weights
+
+
+def _validated_router_weight_policy(
+    router_weight_policy: dict[str, str] | None,
+    candidate_names: tuple[str, ...],
+) -> dict[str, str] | None:
+    if router_weight_policy is None:
+        return None
+    keys = tuple(router_weight_policy)
+    if keys not in (("only",), ("drop",)):
+        raise ValueError("router_weight_policy must contain exactly one of: only, drop")
+    candidate = router_weight_policy[keys[0]]
+    if candidate not in candidate_names:
+        raise ValueError(f"router_weight_policy candidate must be one of {candidate_names}: {candidate}")
+    return dict(router_weight_policy)
+
+
+def _router_weight_policy_diagnostics(router_weight_policy: dict[str, str] | None) -> dict[str, str] | None:
+    if router_weight_policy is None:
+        return None
+    if "only" in router_weight_policy:
+        return {"mode": "only", "candidate": router_weight_policy["only"]}
+    if "drop" in router_weight_policy:
+        return {"mode": "drop", "candidate": router_weight_policy["drop"]}
+    return None
 
 
 def _candidate_losses(

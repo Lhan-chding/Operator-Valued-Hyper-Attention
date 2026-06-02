@@ -8,9 +8,18 @@ from moat_ovha_torch.models.multimodal.router import MultimodalRelationRouter
 
 
 class MultimodalJointRouterAdapter(nn.Module):
-    def __init__(self, d_model: int, candidate_names: tuple[str, ...] = MULTIMODAL_CANDIDATE_NAMES):
+    def __init__(
+        self,
+        d_model: int,
+        candidate_names: tuple[str, ...] = MULTIMODAL_CANDIDATE_NAMES,
+        use_evidence_router: bool = True,
+    ):
         super().__init__()
-        self.router = MultimodalRelationRouter(d_model=d_model, candidate_names=candidate_names)
+        self.router = MultimodalRelationRouter(
+            d_model=d_model,
+            candidate_names=candidate_names,
+            use_evidence_router=use_evidence_router,
+        )
         self.hyper_adapter = MultimodalHyperAdapter(d_model=d_model, candidate_names=candidate_names)
 
     def forward(self, memory_bank, evidence, reliability):

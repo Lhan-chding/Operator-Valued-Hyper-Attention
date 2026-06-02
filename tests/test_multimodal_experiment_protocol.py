@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import json
 import subprocess
@@ -881,9 +882,51 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual({row["artifact_type"] for row in raw_rows}, {"public_main_raw_metric"})
         self.assertEqual({row["evidence_scope"] for row in raw_rows}, {"public_main_table"})
         self.assertEqual({row["public_metrics_scope"] for row in raw_rows}, {"public_main_metrics"})
+        rows_by_model = {row["model"]: row for row in raw_rows if row["seed"] == 201}
+        self.assertEqual(
+            rows_by_model["text_only"]["model_protocol"],
+            "same_feature_sanity_probe_public_main_v1",
+        )
+        self.assertEqual(
+            rows_by_model["concat_fusion"]["model_protocol"],
+            "same_feature_sanity_probe_public_main_v1",
+        )
+        self.assertEqual(
+            rows_by_model["cato_only"]["model_protocol"],
+            "internal_ovha_ablation_public_main_v1",
+        )
+        self.assertEqual(
+            rows_by_model["ovha_no_cato"]["model_protocol"],
+            "internal_ovha_ablation_public_main_v1",
+        )
+        self.assertEqual(
+            rows_by_model["ovha_no_rceo"]["model_protocol"],
+            "internal_ovha_ablation_public_main_v1",
+        )
+        self.assertEqual(
+            rows_by_model["ovha_no_evidence_router"]["model_protocol"],
+            "internal_ovha_ablation_public_main_v1",
+        )
+        sanity_parameter_count = rows_by_model["text_only"]["parameter_count"]
+        self.assertNotEqual(rows_by_model["cato_only"]["parameter_count"], sanity_parameter_count)
+        self.assertNotEqual(rows_by_model["ovha_no_cato"]["parameter_count"], sanity_parameter_count)
+        self.assertNotEqual(rows_by_model["ovha_no_rceo"]["parameter_count"], sanity_parameter_count)
+        self.assertNotEqual(rows_by_model["ovha_no_evidence_router"]["parameter_count"], sanity_parameter_count)
         self.assertNotIn("smoke", json.dumps(raw_rows, sort_keys=True).lower())
         self.assertNotIn("not_topconf", json.dumps(raw_rows, sort_keys=True).lower())
         self.assertEqual(preflight.returncode, 0, preflight.stdout + preflight.stderr)
+
+    def test_public_main_internal_ovha_ablation_variant_mapping_is_structural(self):
+        module = importlib.import_module("scripts.multimodal.run_public_main")
+
+        self.assertEqual(module._ovha_variant_kwargs("cato_only"), {"router_weight_policy": {"only": "CATO"}})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_cato"), {"router_weight_policy": {"drop": "CATO"}})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_lrio"), {"router_weight_policy": {"drop": "LRIO"}})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_spo"), {"router_weight_policy": {"drop": "SPO"}})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_rceo"), {"use_reliability_prior": False})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_evidence_router"), {"use_evidence_router": False})
+        with self.assertRaisesRegex(ValueError, "unknown OVHA ablation baseline"):
+            module._ovha_variant_kwargs("concat_fusion")
 
     def test_public_entry_requires_controlled_go_no_go_report(self):
         from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements

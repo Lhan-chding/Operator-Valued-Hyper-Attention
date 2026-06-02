@@ -2251,6 +2251,50 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
             {"applied": True, "source": "training_only_supplied_weights"},
         )
 
+    def test_multimodal_ovha_ablation_variants_change_router_and_reliability_behavior(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        batch = _batch(torch)
+        common_kwargs = {
+            "field_dims": {"text": 4, "region": 4},
+            "query_dim": 4,
+            "output_dim": 3,
+            "d_model": 8,
+        }
+
+        no_rceo = MultimodalOVHA(**common_kwargs, use_reliability_prior=False)
+        no_rceo_output = no_rceo(batch)
+
+        self.assertIsNone(no_rceo.reliability_prior)
+        self.assertIsNone(no_rceo_output.reliability_prior)
+        self.assertEqual(no_rceo_output.diagnostics["reliability"], {})
+        self.assertAlmostEqual(float(no_rceo_output.diagnostics["router_reliability_logit_norm"]), 0.0, places=6)
+
+        cato_only = MultimodalOVHA(**common_kwargs, router_weight_policy={"only": "CATO"})
+        cato_only_output = cato_only(batch)
+        self.assertTrue(torch.allclose(cato_only_output.router_weights[..., 3], torch.ones(2, 5), atol=1e-6))
+        self.assertTrue(torch.allclose(cato_only_output.router_weights[..., :3], torch.zeros(2, 5, 3), atol=1e-6))
+        self.assertEqual(cato_only_output.diagnostics["router_weight_policy"], {"mode": "only", "candidate": "CATO"})
+
+        no_cato = MultimodalOVHA(**common_kwargs, router_weight_policy={"drop": "CATO"})
+        no_cato_output = no_cato(batch)
+        self.assertTrue(torch.allclose(no_cato_output.router_weights[..., 3], torch.zeros(2, 5), atol=1e-6))
+        self.assertTrue(torch.allclose(no_cato_output.router_weights.sum(dim=-1), torch.ones(2, 5), atol=1e-6))
+        self.assertEqual(no_cato_output.diagnostics["router_weight_policy"], {"mode": "drop", "candidate": "CATO"})
+
+        no_lrio = MultimodalOVHA(**common_kwargs, router_weight_policy={"drop": "LRIO"})
+        no_spo = MultimodalOVHA(**common_kwargs, router_weight_policy={"drop": "SPO"})
+        self.assertTrue(torch.allclose(no_lrio(batch).router_weights[..., 2], torch.zeros(2, 5), atol=1e-6))
+        self.assertTrue(torch.allclose(no_spo(batch).router_weights[..., 1], torch.zeros(2, 5), atol=1e-6))
+
+        no_evidence_router = MultimodalOVHA(**common_kwargs, use_evidence_router=False)
+        no_evidence_output = no_evidence_router(batch)
+        self.assertFalse(no_evidence_router.use_evidence_router)
+        self.assertAlmostEqual(float(no_evidence_output.diagnostics["router_evidence_logit_norm"]), 0.0, places=6)
+        self.assertTrue(torch.allclose(no_evidence_output.router_logit_parts["evidence"], torch.zeros_like(no_evidence_output.router_logit_parts["evidence"])))
+
     def test_stackability_guard_rejects_non_candidate_and_bad_shape(self):
         import torch
 
