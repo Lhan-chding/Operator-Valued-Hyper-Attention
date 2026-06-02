@@ -1213,7 +1213,15 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                 },
             )
             (sdk_root / "splits.json").write_text(
-                json.dumps({"train": ["video-train"], "val": ["video-val"], "test": ["video-test"]}, sort_keys=True) + "\n"
+                json.dumps(
+                    {
+                        "train": ["video-train", "video-missing-label"],
+                        "val": ["video-val"],
+                        "test": ["video-test"],
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
             )
 
             extract_result = subprocess.run(
@@ -1314,6 +1322,11 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             text_mask = np.load(stage_inputs / "cmu_mosei_text_mask.npy")
             audio_mask = np.load(stage_inputs / "cmu_mosei_audio_mask.npy")
             missing_mask = np.load(stage_inputs / "cmu_mosei_missing_modality_mask.npy")
+            failed_rows = [
+                json.loads(line)
+                for line in (stage_inputs / "cmu_mosei_failed_samples.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
             raw_text_mask = np.load(raw_root / "features" / "text_mask.npy")
             cache_text_mask = np.load(cache_root / "cmu_mosei" / "v0.1" / "masks" / "text_mask_train.npy")
             sentiment = np.load(stage_inputs / "cmu_mosei_sentiment.npy")
@@ -1333,6 +1346,10 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(text_mask[:2].tolist(), [[True, True, False], [True, False, False]])
         self.assertEqual(audio_mask[:2].tolist(), [[True, True, True, True], [True, False, False, False]])
         self.assertEqual(missing_mask[:2].tolist(), [[False, False, False], [False, False, False]])
+        self.assertEqual(
+            failed_rows,
+            [{"source_id": "video-missing-label", "split": "train", "reason": "missing_labels_sequence"}],
+        )
         self.assertEqual(raw_text_mask.tolist(), text_mask.tolist())
         self.assertEqual(cache_text_mask.tolist(), text_mask[:2].tolist())
         self.assertEqual(sentiment[:2].tolist(), [[0.0], [10.0]])

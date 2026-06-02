@@ -172,10 +172,14 @@ def _extract_interval_segment_stage_inputs(args: argparse.Namespace, video_split
     missing_rows = []
     label_rows = []
     segment_records = []
+    failed_rows = []
 
     for split in [name for name in SPLIT_ORDER if name in video_splits] + [name for name in video_splits if name not in set(SPLIT_ORDER)]:
         for video_id in video_splits[split]:
-            label_record = _sequence_record_for(sequences["labels"], video_id, sequence_name="labels")
+            label_record = sequences["labels"].get(video_id)
+            if label_record is None:
+                failed_rows.append({"source_id": video_id, "split": split, "reason": "missing_labels_sequence"})
+                continue
             label_features = _finite_array(label_record["features"])
             label_intervals = _required_intervals(label_record, video_id, sequence_name="labels")
             if label_features.shape[0] != label_intervals.shape[0]:
@@ -186,14 +190,18 @@ def _extract_interval_segment_stage_inputs(args: argparse.Namespace, video_split
                 label_rows.append(np.asarray(label_row, dtype=np.float32).reshape(-1))
                 missing_row = []
                 for modality in ("text", "audio", "vision"):
-                    segment, mask = _interval_segment(
-                        _sequence_record_for(sequences[modality], video_id, sequence_name=modality),
-                        interval,
-                        max_steps=step_counts[modality],
-                        feature_dim=feature_dims[modality],
-                        sequence_name=modality,
-                        source_id=source_id,
-                    )
+                    modality_record = sequences[modality].get(video_id)
+                    if modality_record is None:
+                        segment, mask = _empty_segment(step_counts[modality], feature_dims[modality])
+                    else:
+                        segment, mask = _interval_segment(
+                            modality_record,
+                            interval,
+                            max_steps=step_counts[modality],
+                            feature_dim=feature_dims[modality],
+                            sequence_name=modality,
+                            source_id=source_id,
+                        )
                     feature_rows[modality].append(segment)
                     mask_rows[modality].append(mask)
                     missing_row.append(not bool(mask.any()))
@@ -209,6 +217,8 @@ def _extract_interval_segment_stage_inputs(args: argparse.Namespace, video_split
                 )
 
     source_ids = _ordered_source_ids(expanded_splits)
+    if not source_ids:
+        raise ValueError("label interval segmentation produced no source_ids")
     labels = np.stack(label_rows, axis=0).astype(np.float32, copy=False)
     emotion_columns = _column_indices(args.emotion_columns, labels.shape[1], option_name="--emotion-columns")
     sentiment_column = _single_column(args.sentiment_column, labels.shape[1], option_name="--sentiment-column")
@@ -221,6 +231,9 @@ def _extract_interval_segment_stage_inputs(args: argparse.Namespace, video_split
     np.save(outputs["sentiment_labels"], labels[:, sentiment_column : sentiment_column + 1])
     np.save(outputs["emotion_labels"], labels[:, emotion_columns])
     np.save(outputs["missing_modality_mask"], np.asarray(missing_rows, dtype=bool))
+    outputs["failed_samples"].write_text(
+        "\n".join(json.dumps(row, sort_keys=True) for row in failed_rows) + ("\n" if failed_rows else "")
+    )
 
     manifest = {
         "dataset_name": args.dataset_name,
@@ -235,6 +248,7 @@ def _extract_interval_segment_stage_inputs(args: argparse.Namespace, video_split
         "video_splits": video_splits,
         "segment_from_label_intervals": True,
         "segment_records": segment_records,
+        "failed_sample_count": len(failed_rows),
         "temporal_policy": "label_interval_segment",
         "segment_steps": step_counts,
         "sentiment_column": sentiment_column,
@@ -267,6 +281,7 @@ def _extract_interval_segment_stage_inputs(args: argparse.Namespace, video_split
             "emotion": list(np.load(outputs["emotion_labels"], mmap_mode="r").shape),
         },
         "manifest": str(outputs["manifest"]),
+        "failed_sample_count": len(failed_rows),
         "next": _stage_command(args, {name: str(path) for name, path in outputs.items()}),
     }
 
@@ -454,6 +469,7 @@ def _stage_output_paths(dataset_name: str, output_dir: Path) -> dict[str, Path]:
         "sentiment_labels": output_dir / f"{dataset_name}_sentiment.npy",
         "emotion_labels": output_dir / f"{dataset_name}_emotion.npy",
         "missing_modality_mask": output_dir / f"{dataset_name}_missing_modality_mask.npy",
+        "failed_samples": output_dir / f"{dataset_name}_failed_samples.jsonl",
         "manifest": output_dir / f"{dataset_name}_stage_input_manifest.json",
     }
 
@@ -514,6 +530,10 @@ def _interval_segment(
         output[:count] = selected[:count]
         mask[:count] = True
     return output, mask
+
+
+def _empty_segment(max_steps: int, feature_dim: int) -> tuple[np.ndarray, np.ndarray]:
+    return np.zeros((max_steps, feature_dim), dtype=np.float32), np.zeros((max_steps,), dtype=bool)
 
 
 def _evenly_spaced_indices(length: int, count: int) -> np.ndarray:
@@ -635,6 +655,8 @@ def _stage_command(args: argparse.Namespace, outputs: dict[str, str]) -> str:
         )
     if "missing_modality_mask" in outputs:
         command += f"--missing-modality-mask {outputs['missing_modality_mask']} "
+    if "failed_samples" in outputs:
+        command += f"--failed-samples {outputs['failed_samples']} "
     return (
         command
         +
