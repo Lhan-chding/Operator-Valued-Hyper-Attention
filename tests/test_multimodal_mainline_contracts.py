@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -1863,6 +1864,51 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(data_card["metadata_availability"]["speaker_id"], True)
         self.assertEqual(train_records[0]["speaker_id"], "Monica")
         self.assertEqual(train_records[0]["transcript_source"], "MELD train_sent_emo.csv")
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "torch is required for public batch loading")
+    def test_public_loader_maps_upstream_meld_dev_provenance_to_val_batch_split(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
+        from scripts.multimodal.run_public_smoke import _load_public_batch
+
+        import torch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_root = tmp_path / "raw"
+            cache_root = tmp_path / "cache"
+            _write_meld_raw_fixture(raw_root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "meld",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            layout = MultimodalCacheLayout(cache_root, "meld", "v0.1")
+            val_records_path = layout.root / "provenance" / "sample_records_val.jsonl"
+            val_records = [json.loads(line) for line in val_records_path.read_text().splitlines() if line.strip()]
+            val_records = [{**record, "original_split": "dev"} for record in val_records]
+            val_records_path.write_text("\n".join(json.dumps(record, sort_keys=True) for record in val_records) + "\n")
+
+            config = replace(
+                MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_meld_public_main.json"),
+                cache_root=cache_root,
+            )
+            batch = _load_public_batch(layout, config, "val", torch.device("cpu"))
+
+        self.assertEqual(batch.split, "val")
+        self.assertEqual(batch.provenance.original_split, ["val"])
+        batch.model_inputs()
 
     def test_extract_meld_ffmpeg_features_cli_writes_hash_and_missing_video_features(self):
         import numpy as np

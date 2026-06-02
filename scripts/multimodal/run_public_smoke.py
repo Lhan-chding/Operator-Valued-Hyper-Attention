@@ -402,7 +402,7 @@ def _load_public_batch(
         ),
         provenance=ProvenanceBank(
             source_id=[str(row["source_id"]) for row in sample_records],
-            original_split=[str(row["original_split"]) for row in sample_records],
+            original_split=[str(row.get("split", split)) for row in sample_records],
             raw_ref=[str(row["raw_ref"]) for row in sample_records],
             license_tag=[str(row["license_tag"]) for row in sample_records],
             preprocessing_version=str(sample_records[0].get("preprocessing_version", "unknown")),
