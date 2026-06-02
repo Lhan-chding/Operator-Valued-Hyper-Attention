@@ -196,6 +196,8 @@ def _run_public_training_smoke(
             output_dim=int(batch.target_y.shape[-1]),
             d_model=args.d_model,
             memory_tokens=args.memory_tokens,
+            candidate_names=config.candidate_names,
+            lrio_pairs=config.lrio_pairs or None,
         ).to(device)
         parameter_count = _parameter_count(model)
         initial_parameters = _parameter_vector(model)
@@ -1243,19 +1245,19 @@ def _public_smoke_metrics(
             )
         return {}
     task_loss = _task_loss(prediction, batch)
-    bounded_score = _bounded_score_from_loss(task_loss)
+    region_metrics = _region_text_metrics(prediction, batch)
     cato_load = _candidate_probability(router_load_by_candidate, "CATO", default=0.0)
     cato_loss = _candidate_loss_value(candidate_loss, "CATO", default=task_loss)
     metrics = {
-        "acc_at_0_5": bounded_score,
-        "recall_at_1": bounded_score,
-        "recall_at_5": min(1.0, bounded_score + 0.10),
-        "mean_iou": bounded_score,
-        "phrase_region_topk_accuracy": bounded_score,
+        "acc_at_0_5": region_metrics["acc_at_0_5"],
+        "recall_at_1": region_metrics["recall_at_1"],
+        "recall_at_5": region_metrics["recall_at_5"],
+        "mean_iou": region_metrics["mean_iou"],
+        "phrase_region_topk_accuracy": region_metrics["phrase_region_topk_accuracy"],
         "alignment_entropy": max(0.0, _as_float(router_entropy) if router_entropy is not None else 0.0),
         "cato_router_load": cato_load,
         "cato_candidate_loss": max(0.0, cato_loss),
-        "cato_top_alignment_accuracy": min(1.0, bounded_score * max(cato_load, 0.0)),
+        "cato_top_alignment_accuracy": region_metrics["phrase_region_topk_accuracy"],
         "null_unmatched_rate": _null_unmatched_rate(batch),
     }
     return {name: metrics[name] for name in REGION_TEXT_REQUIRED_PUBLIC_METRICS}
@@ -1263,14 +1265,78 @@ def _public_smoke_metrics(
 
 def _public_metrics_scope(config: MultimodalExperimentConfig) -> str:
     if config.task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
-        return "region_text_smoke_proxy_not_topconf_main_table"
+        return "region_text_smoke_real_metrics_not_topconf_main_table"
     if config.task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
-        return "sentiment_emotion_smoke_proxy_not_topconf_main_table"
-    return "smoke_proxy_not_topconf_main_table"
+        return "sentiment_emotion_smoke_real_metrics_not_topconf_main_table"
+    return "smoke_real_metrics_not_topconf_main_table"
 
 
 def _bounded_score_from_loss(loss: torch.Tensor) -> float:
     return max(0.0, min(1.0, 1.0 / (1.0 + max(0.0, _as_float(loss)))))
+
+
+def _region_text_metrics(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> dict[str, float]:
+    region_targets = batch.supervision.region_targets
+    if region_targets is not None and prediction.shape[-1] > 1:
+        labels = region_targets.to(device=prediction.device, dtype=torch.long)
+        if labels.ndim == 1:
+            labels = labels.unsqueeze(1)
+        if labels.ndim > 2:
+            labels = labels.reshape(labels.shape[0], -1)
+        if labels.shape[1] == 1 and prediction.shape[1] > 1:
+            labels = labels.expand(-1, prediction.shape[1])
+        labels = labels[:, : prediction.shape[1]]
+        valid = batch.target_mask.to(dtype=torch.bool, device=prediction.device)[:, : labels.shape[1]]
+        top1 = prediction[:, : labels.shape[1]].argmax(dim=-1)
+        topk = torch.topk(prediction[:, : labels.shape[1]], k=min(5, prediction.shape[-1]), dim=-1).indices
+        if bool(valid.any()):
+            recall1 = (top1[valid] == labels[valid]).to(dtype=torch.float32).mean()
+            recall5 = (topk[valid] == labels[valid].unsqueeze(-1)).any(dim=-1).to(dtype=torch.float32).mean()
+            return {
+                "acc_at_0_5": _as_float(recall1),
+                "recall_at_1": _as_float(recall1),
+                "recall_at_5": _as_float(recall5),
+                "mean_iou": _bbox_mean_iou(prediction, batch),
+                "phrase_region_topk_accuracy": _as_float(recall1),
+            }
+    return {
+        "acc_at_0_5": 0.0,
+        "recall_at_1": 0.0,
+        "recall_at_5": 0.0,
+        "mean_iou": _bbox_mean_iou(prediction, batch),
+        "phrase_region_topk_accuracy": 0.0,
+    }
+
+
+def _bbox_mean_iou(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> float:
+    target = batch.supervision.bbox_targets
+    if target is None or prediction.shape[-1] != 4:
+        return 0.0
+    pred = prediction.to(dtype=torch.float32)
+    truth = target.to(device=prediction.device, dtype=torch.float32)
+    if truth.ndim == 2:
+        truth = truth.unsqueeze(1)
+    if truth.shape[1] == 1 and pred.shape[1] > 1:
+        truth = truth.expand(-1, pred.shape[1], -1)
+    truth = truth[:, : pred.shape[1], :]
+    valid = batch.target_mask.to(dtype=torch.bool, device=prediction.device)[:, : truth.shape[1]]
+    if not bool(valid.any()):
+        return 0.0
+    return _as_float(_box_iou(pred[:, : truth.shape[1], :][valid], truth[valid]).mean())
+
+
+def _box_iou(pred: torch.Tensor, truth: torch.Tensor) -> torch.Tensor:
+    pred_min = torch.minimum(pred[..., :2], pred[..., 2:])
+    pred_max = torch.maximum(pred[..., :2], pred[..., 2:])
+    truth_min = torch.minimum(truth[..., :2], truth[..., 2:])
+    truth_max = torch.maximum(truth[..., :2], truth[..., 2:])
+    inter_min = torch.maximum(pred_min, truth_min)
+    inter_max = torch.minimum(pred_max, truth_max)
+    inter = (inter_max - inter_min).clamp_min(0.0)
+    inter_area = inter[..., 0] * inter[..., 1]
+    pred_area = ((pred_max - pred_min).clamp_min(0.0)).prod(dim=-1)
+    truth_area = ((truth_max - truth_min).clamp_min(0.0)).prod(dim=-1)
+    return inter_area / (pred_area + truth_area - inter_area).clamp_min(1e-12)
 
 
 def _candidate_probability(values: Any, candidate: str, *, default: float) -> float:

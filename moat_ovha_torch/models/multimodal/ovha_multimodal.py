@@ -45,6 +45,7 @@ class MultimodalOVHA(nn.Module):
         use_reliability_prior: bool = True,
         use_evidence_router: bool = True,
         router_weight_policy: dict[str, str] | None = None,
+        lrio_pairs: tuple[tuple[str, str], ...] | None = None,
     ):
         super().__init__()
         candidate_names = tuple(candidate_names)
@@ -61,7 +62,12 @@ class MultimodalOVHA(nn.Module):
             candidate_names=candidate_names,
             use_evidence_router=self.use_evidence_router,
         )
-        self.candidate_primitives = make_candidate_bank(d_model=d_model, output_dim=output_dim, candidate_names=candidate_names)
+        self.candidate_primitives = make_candidate_bank(
+            d_model=d_model,
+            output_dim=output_dim,
+            candidate_names=candidate_names,
+            lrio_pairs=lrio_pairs,
+        )
 
     def forward(
         self,

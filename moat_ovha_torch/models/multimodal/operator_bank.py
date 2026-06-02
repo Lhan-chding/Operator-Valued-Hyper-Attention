@@ -47,15 +47,20 @@ def make_candidate_bank(
     d_model: int,
     output_dim: int,
     candidate_names: tuple[str, ...] = MULTIMODAL_CANDIDATE_NAMES,
+    lrio_pairs: tuple[tuple[str, str], ...] | None = None,
 ) -> nn.ModuleDict:
     assert_candidate_names(candidate_names)
-    factories = {
-        "TLEO": TLEOPrimitive,
-        "SPO": SPOPrimitive,
-        "LRIO": LRIOPrimitive,
-        "CATO": CATOPrimitive,
-    }
-    return nn.ModuleDict({name: factories[name](d_model, output_dim) for name in candidate_names})
+    modules = {}
+    for name in candidate_names:
+        if name == "TLEO":
+            modules[name] = TLEOPrimitive(d_model, output_dim)
+        elif name == "SPO":
+            modules[name] = SPOPrimitive(d_model, output_dim)
+        elif name == "LRIO":
+            modules[name] = LRIOPrimitive(d_model, output_dim, pairs=lrio_pairs or LRIOPrimitive.default_pairs())
+        elif name == "CATO":
+            modules[name] = CATOPrimitive(d_model, output_dim)
+    return nn.ModuleDict(modules)
 
 
 def stack_candidate_values(

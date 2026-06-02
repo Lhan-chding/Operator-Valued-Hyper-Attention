@@ -233,6 +233,8 @@ def _run_seed(
         output_dim=int(train_batch.target_y.shape[-1]),
         d_model=int(args.d_model),
         memory_tokens=int(args.memory_tokens),
+        candidate_names=config.candidate_names,
+        lrio_pairs=config.lrio_pairs or None,
     ).to(device)
     initial_parameters = _parameter_vector(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.learning_rate), weight_decay=float(args.weight_decay))
@@ -696,13 +698,17 @@ def _train_ovha_ablation(
 ) -> tuple[MultimodalOVHA, MultimodalOVHAOutput, dict[str, Any]]:
     field_dims = {name: int(field.x.shape[-1]) for name, field in train_batch.fields.items()}
     torch.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name))
+    variant_kwargs = _ovha_variant_kwargs(baseline_name, config.candidate_names)
+    active_candidate_names = variant_kwargs.pop("candidate_names", config.candidate_names)
     model = MultimodalOVHA(
         field_dims=field_dims,
         query_dim=int(train_batch.query.x.shape[-1]),
         output_dim=int(train_batch.target_y.shape[-1]),
         d_model=d_model,
         memory_tokens=memory_tokens,
-        **_ovha_variant_kwargs(baseline_name),
+        candidate_names=active_candidate_names,
+        lrio_pairs=config.lrio_pairs or None,
+        **variant_kwargs,
     ).to(train_batch.target_y.device)
     initial = _parameter_vector(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
@@ -753,11 +759,14 @@ def _train_ovha_ablation(
         "baseline_grad_l2_norm": max_grad_norm,
         "baseline_train_loss_final": final_loss,
         "baseline_training_protocol": "internal_ovha_ablation",
-        "baseline_variant": _ovha_variant_kwargs(baseline_name),
+        "baseline_variant": {"candidate_names": active_candidate_names, **variant_kwargs},
     }
 
 
-def _ovha_variant_kwargs(baseline_name: str) -> dict[str, Any]:
+def _ovha_variant_kwargs(
+    baseline_name: str,
+    active_candidate_names: tuple[str, ...] = ("TLEO", "SPO", "LRIO", "CATO"),
+) -> dict[str, Any]:
     if baseline_name == "ovha_no_rceo":
         return {"use_reliability_prior": False}
     if baseline_name == "ovha_no_evidence_router":
@@ -765,12 +774,19 @@ def _ovha_variant_kwargs(baseline_name: str) -> dict[str, Any]:
     if baseline_name == "cato_only":
         return {"candidate_names": ("CATO",)}
     if baseline_name == "ovha_no_cato":
-        return {"candidate_names": ("TLEO", "SPO", "LRIO")}
+        return {"candidate_names": _drop_candidate(active_candidate_names, "CATO")}
     if baseline_name == "ovha_no_lrio":
-        return {"candidate_names": ("TLEO", "SPO", "CATO")}
+        return {"candidate_names": _drop_candidate(active_candidate_names, "LRIO")}
     if baseline_name == "ovha_no_spo":
-        return {"candidate_names": ("TLEO", "LRIO", "CATO")}
+        return {"candidate_names": _drop_candidate(active_candidate_names, "SPO")}
     raise ValueError(f"unknown OVHA ablation baseline: {baseline_name}")
+
+
+def _drop_candidate(active_candidate_names: tuple[str, ...], candidate: str) -> tuple[str, ...]:
+    kept = tuple(name for name in active_candidate_names if name != candidate)
+    if not kept:
+        raise ValueError(f"structural ablation would remove all active candidates: {candidate}")
+    return kept
 
 
 def _train_linear_baseline(
@@ -908,19 +924,19 @@ def _public_main_metrics(
 ) -> dict[str, Any]:
     if _is_region_task(config.task_type):
         task_loss = _task_loss(prediction, batch)
-        bounded_score = _bounded_score_from_loss(task_loss)
+        region_metrics = _region_text_metrics(prediction, batch)
         cato_load = _candidate_probability(router_load_by_candidate, "CATO", default=0.0)
         cato_loss = _candidate_loss_value(candidate_loss, "CATO", default=task_loss)
         metrics = {
-            "acc_at_0_5": bounded_score,
-            "recall_at_1": bounded_score,
-            "recall_at_5": min(1.0, bounded_score + 0.10),
-            "mean_iou": bounded_score,
-            "phrase_region_topk_accuracy": bounded_score,
+            "acc_at_0_5": region_metrics["acc_at_0_5"],
+            "recall_at_1": region_metrics["recall_at_1"],
+            "recall_at_5": region_metrics["recall_at_5"],
+            "mean_iou": region_metrics["mean_iou"],
+            "phrase_region_topk_accuracy": region_metrics["phrase_region_topk_accuracy"],
             "alignment_entropy": max(0.0, _as_float(router_entropy) if router_entropy is not None else 0.0),
             "cato_router_load": cato_load,
             "cato_candidate_loss": max(0.0, cato_loss),
-            "cato_top_alignment_accuracy": min(1.0, bounded_score * max(cato_load, 0.0)),
+            "cato_top_alignment_accuracy": region_metrics["phrase_region_topk_accuracy"],
             "null_unmatched_rate": _null_unmatched_rate(batch),
         }
         return {name: metrics[name] for name in REGION_TEXT_REQUIRED_PUBLIC_METRICS}
@@ -1173,6 +1189,70 @@ def _is_sentiment_task(task_type: str) -> bool:
 
 def _bounded_score_from_loss(loss: torch.Tensor) -> float:
     return max(0.0, min(1.0, 1.0 / (1.0 + max(0.0, _as_float(loss)))))
+
+
+def _region_text_metrics(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> dict[str, float]:
+    region_targets = batch.supervision.region_targets
+    if region_targets is not None and prediction.shape[-1] > 1:
+        labels = region_targets.to(device=prediction.device, dtype=torch.long)
+        if labels.ndim == 1:
+            labels = labels.unsqueeze(1)
+        if labels.ndim > 2:
+            labels = labels.reshape(labels.shape[0], -1)
+        if labels.shape[1] == 1 and prediction.shape[1] > 1:
+            labels = labels.expand(-1, prediction.shape[1])
+        labels = labels[:, : prediction.shape[1]]
+        valid = batch.target_mask.to(dtype=torch.bool, device=prediction.device)[:, : labels.shape[1]]
+        top1 = prediction[:, : labels.shape[1]].argmax(dim=-1)
+        topk = torch.topk(prediction[:, : labels.shape[1]], k=min(5, prediction.shape[-1]), dim=-1).indices
+        if bool(valid.any()):
+            recall1 = (top1[valid] == labels[valid]).to(dtype=torch.float32).mean()
+            recall5 = (topk[valid] == labels[valid].unsqueeze(-1)).any(dim=-1).to(dtype=torch.float32).mean()
+            return {
+                "acc_at_0_5": _as_float(recall1),
+                "recall_at_1": _as_float(recall1),
+                "recall_at_5": _as_float(recall5),
+                "mean_iou": _bbox_mean_iou(prediction, batch),
+                "phrase_region_topk_accuracy": _as_float(recall1),
+            }
+    return {
+        "acc_at_0_5": 0.0,
+        "recall_at_1": 0.0,
+        "recall_at_5": 0.0,
+        "mean_iou": _bbox_mean_iou(prediction, batch),
+        "phrase_region_topk_accuracy": 0.0,
+    }
+
+
+def _bbox_mean_iou(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> float:
+    target = batch.supervision.bbox_targets
+    if target is None or prediction.shape[-1] != 4:
+        return 0.0
+    pred = prediction.to(dtype=torch.float32)
+    truth = target.to(device=prediction.device, dtype=torch.float32)
+    if truth.ndim == 2:
+        truth = truth.unsqueeze(1)
+    if truth.shape[1] == 1 and pred.shape[1] > 1:
+        truth = truth.expand(-1, pred.shape[1], -1)
+    truth = truth[:, : pred.shape[1], :]
+    valid = batch.target_mask.to(dtype=torch.bool, device=prediction.device)[:, : truth.shape[1]]
+    if not bool(valid.any()):
+        return 0.0
+    return _as_float(_box_iou(pred[:, : truth.shape[1], :][valid], truth[valid]).mean())
+
+
+def _box_iou(pred: torch.Tensor, truth: torch.Tensor) -> torch.Tensor:
+    pred_min = torch.minimum(pred[..., :2], pred[..., 2:])
+    pred_max = torch.maximum(pred[..., :2], pred[..., 2:])
+    truth_min = torch.minimum(truth[..., :2], truth[..., 2:])
+    truth_max = torch.maximum(truth[..., :2], truth[..., 2:])
+    inter_min = torch.maximum(pred_min, truth_min)
+    inter_max = torch.minimum(pred_max, truth_max)
+    inter = (inter_max - inter_min).clamp_min(0.0)
+    inter_area = inter[..., 0] * inter[..., 1]
+    pred_area = ((pred_max - pred_min).clamp_min(0.0)).prod(dim=-1)
+    truth_area = ((truth_max - truth_min).clamp_min(0.0)).prod(dim=-1)
+    return inter_area / (pred_area + truth_area - inter_area).clamp_min(1e-12)
 
 
 def _pearson_correlation(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> float:

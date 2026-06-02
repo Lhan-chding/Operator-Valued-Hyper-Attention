@@ -127,7 +127,14 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 self.assertEqual(config.dataset_name, dataset)
                 self.assertEqual(config.task_type, task_type)
                 self.assertEqual(config.training_stages, ("T0", "T5"))
-                self.assertEqual(config.candidate_names, ("TLEO", "SPO", "LRIO", "CATO"))
+                if dataset == "cmu_mosei":
+                    self.assertEqual(config.candidate_names, ("SPO", "LRIO"))
+                    self.assertEqual(
+                        config.lrio_pairs,
+                        (("text", "audio"), ("text", "vision"), ("audio", "vision")),
+                    )
+                else:
+                    self.assertEqual(config.candidate_names, ("TLEO", "SPO", "LRIO", "CATO"))
                 self.assertGreaterEqual(len(config.seeds), 5)
                 self.assertEqual(len(set(config.seeds)), len(config.seeds))
                 self.assertEqual(set(config.eval_splits), {"val", "test"})
@@ -923,6 +930,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_cato"), {"candidate_names": ("TLEO", "SPO", "LRIO")})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_lrio"), {"candidate_names": ("TLEO", "SPO", "CATO")})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_spo"), {"candidate_names": ("TLEO", "LRIO", "CATO")})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_lrio", ("SPO", "LRIO")), {"candidate_names": ("SPO",)})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_spo", ("SPO", "LRIO")), {"candidate_names": ("LRIO",)})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_rceo"), {"use_reliability_prior": False})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_evidence_router"), {"use_evidence_router": False})
         with self.assertRaisesRegex(ValueError, "unknown OVHA ablation baseline"):

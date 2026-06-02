@@ -58,6 +58,7 @@ class MultimodalExperimentConfig:
     losses_by_stage: dict[str, tuple[str, ...]] | None = None
     loss_metadata: dict[str, dict[str, Any]] | None = None
     adapter_params_by_candidate: dict[str, tuple[str, ...]] | None = None
+    lrio_pairs: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def from_file(cls, path: Path | str) -> "MultimodalExperimentConfig":
@@ -69,8 +70,7 @@ class MultimodalExperimentConfig:
         if len(seeds) < 3:
             raise ValueError("multimodal experiments require at least 3 seeds")
         candidate_names = tuple(mapping.get("candidate_names", DEFAULT_CANDIDATE_NAMES))
-        if candidate_names != DEFAULT_CANDIDATE_NAMES:
-            raise ValueError("multimodal v1 candidate_names must be exactly TLEO/SPO/LRIO/CATO")
+        _validate_candidate_names(candidate_names)
         config = cls(
             name=str(mapping["name"]),
             dataset_name=str(mapping["dataset_name"]),
@@ -92,6 +92,7 @@ class MultimodalExperimentConfig:
             losses_by_stage=_tuple_mapping(mapping.get("losses_by_stage")),
             loss_metadata=dict(mapping.get("loss_metadata", {})) if "loss_metadata" in mapping else None,
             adapter_params_by_candidate=_tuple_mapping(mapping.get("adapter_params_by_candidate")),
+            lrio_pairs=_pair_tuple(mapping.get("lrio_pairs")),
         )
         config.validate()
         return config
@@ -196,3 +197,30 @@ def _tuple_mapping(value: Any) -> dict[str, tuple[str, ...]] | None:
     if not isinstance(value, dict):
         raise ValueError("embedded training protocol mapping fields must be objects")
     return {str(key): tuple(str(item) for item in values) for key, values in value.items()}
+
+
+def _pair_tuple(value: Any) -> tuple[tuple[str, str], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError("lrio_pairs must be a list of modality pairs")
+    pairs = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError("lrio_pairs entries must be two-modality lists")
+        left, right = str(item[0]), str(item[1])
+        if not left or not right or left == right:
+            raise ValueError("lrio_pairs entries must contain two distinct modalities")
+        pairs.append((left, right))
+    return tuple(pairs)
+
+
+def _validate_candidate_names(candidate_names: tuple[str, ...]) -> None:
+    if not candidate_names:
+        raise ValueError("candidate_names must contain at least one v1 candidate")
+    allowed = set(DEFAULT_CANDIDATE_NAMES)
+    invalid = sorted(candidate for candidate in candidate_names if candidate not in allowed)
+    if invalid:
+        raise ValueError("candidate_names may only contain TLEO/SPO/LRIO/CATO: " + ", ".join(invalid))
+    if len(set(candidate_names)) != len(candidate_names):
+        raise ValueError("candidate_names must not contain duplicates")

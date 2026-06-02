@@ -1,8 +1,44 @@
 import importlib.util
+import json
 import unittest
+from pathlib import Path
 
 
 TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class MultimodalStrictAuditStaticContracts(unittest.TestCase):
+    def test_cmu_public_configs_use_task_aware_spo_lrio_bank(self):
+        for name in ("multimodal_cmu_mosei_public_main.json", "multimodal_cmu_mosei_public_smoke.json"):
+            with self.subTest(config=name):
+                payload = json.loads((ROOT / "configs" / name).read_text())
+
+                self.assertEqual(payload["candidate_names"], ["SPO", "LRIO"])
+                self.assertEqual(
+                    payload["lrio_pairs"],
+                    [["text", "audio"], ["text", "vision"], ["audio", "vision"]],
+                )
+
+    def test_multimodal_primitives_are_not_shared_linear_head_stubs(self):
+        tleo = (ROOT / "moat_ovha_torch" / "models" / "multimodal" / "primitives" / "typed_local_evidence.py").read_text()
+        lrio = (ROOT / "moat_ovha_torch" / "models" / "multimodal" / "primitives" / "low_rank_interaction.py").read_text()
+        cato = (ROOT / "moat_ovha_torch" / "models" / "multimodal" / "primitives" / "alignment_transport.py").read_text()
+
+        self.assertIn("self.query_proj = nn.ModuleDict", tleo)
+        self.assertIn("self.key_proj = nn.ModuleDict", tleo)
+        self.assertIn("self.value_proj = nn.ModuleDict", tleo)
+        self.assertIn("self.source_gate = nn.ModuleDict", tleo)
+
+        self.assertIn("self.branch = nn.ModuleDict", lrio)
+        self.assertIn("self.trunk = nn.ModuleDict", lrio)
+        self.assertIn("self.pair_gate = nn.ModuleDict", lrio)
+        self.assertIn("active_pair_names", lrio)
+
+        self.assertIn("self.query_proj = nn.ModuleDict", cato)
+        self.assertIn("self.key_proj = nn.ModuleDict", cato)
+        self.assertIn("self.value_proj = nn.ModuleDict", cato)
+        self.assertIn("_source_transport_marginal_error", cato)
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; strict multimodal audit tests skipped.")
