@@ -1406,6 +1406,75 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("utterance/segment-level", joined_errors)
         self.assertNotIn("scripts/multimodal/accept_public_data.py", joined_commands)
 
+    def test_public_data_readiness_refcoco_stage_command_preserves_feature_masks(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            download_root = tmp_path / "downloads"
+            stage_dir = download_root / "refcoco_stage_inputs"
+            stage_dir.mkdir(parents=True)
+            split_source_ids = {"train": ["refcoco-train-1"], "val": ["refcoco-val-1"], "test": ["refcoco-test-1"]}
+            records = []
+            for split, source_ids in split_source_ids.items():
+                for index, source_id in enumerate(source_ids):
+                    records.append(
+                        {
+                            "source_id": source_id,
+                            "split": split,
+                            "image_id": f"image-{split}",
+                            "annotation_id": index + 1,
+                            "caption_id": f"sent-{split}",
+                            "ref_id": f"ref-{split}",
+                            "sentence": "target object",
+                            "phrase_span": {"start": 0, "end": 2},
+                            "target_region_index": 1,
+                            "target_region_box": [0.1, 0.1, 0.3, 0.3],
+                            "candidate_region_boxes": [[0.0, 0.0, 0.2, 0.2], [0.1, 0.1, 0.3, 0.3]],
+                            "candidate_region_annotation_ids": [10, index + 1],
+                            "candidate_region_source": "coco_gt_box",
+                        }
+                    )
+            (stage_dir / "refcoco_splits.json").write_text(json.dumps(split_source_ids, sort_keys=True) + "\n")
+            (stage_dir / "refcoco_phrase_region_records.json").write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
+            np.save(stage_dir / "refcoco_text_features.npy", np.ones((3, 4, 512), dtype=np.float32))
+            np.save(stage_dir / "refcoco_region_features.npy", np.ones((3, 2, 512), dtype=np.float32))
+            np.save(stage_dir / "refcoco_text_mask.npy", np.ones((3, 4), dtype=bool))
+            np.save(stage_dir / "refcoco_region_mask.npy", np.ones((3, 2), dtype=bool))
+            (stage_dir / "refcoco_clip_feature_manifest.json").write_text(
+                json.dumps({"dataset_name": "refcoco", "sample_count": 3}, sort_keys=True) + "\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "check_public_data_readiness.py"),
+                    "--datasets",
+                    "refcoco",
+                    "--download-root",
+                    str(download_root),
+                    "--raw-root-base",
+                    str(tmp_path / "raw"),
+                    "--cache-root",
+                    str(tmp_path / "cache"),
+                    "--controlled-report",
+                    str(tmp_path / "controlled_report.json"),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        joined_commands = "\n".join(payload["next_commands"])
+        self.assertIn("scripts/multimodal/stage_refcoco_raw.py", joined_commands)
+        self.assertIn("--text-mask", joined_commands)
+        self.assertIn("refcoco_text_mask.npy", joined_commands)
+        self.assertIn("--region-mask", joined_commands)
+        self.assertIn("refcoco_region_mask.npy", joined_commands)
+
     def test_public_data_readiness_cli_points_valid_caches_to_acceptance(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
