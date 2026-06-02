@@ -572,6 +572,34 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
             "\n".join(report.errors),
         )
 
+    def test_cache_validator_rejects_degenerate_grounding_token_axes(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "refcoco", "v0.1")
+            _write_minimal_cache(
+                layout.root,
+                train_ids=["train-source"],
+                test_ids=["test-source"],
+                mismatched_features=False,
+            )
+            _rewrite_token_axis_count(layout.root, "train", "text", 1)
+            _rewrite_token_axis_count(layout.root, "train", "region", 1)
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "grounding cache text token axis for split train must be > 1 for local token evidence",
+            joined,
+        )
+        self.assertIn(
+            "grounding cache region candidate axis for split train must be > 1 for non-trivial grounding",
+            joined,
+        )
+
     def test_cache_validator_rejects_incomplete_operator_supervision_data_card(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 
@@ -2206,6 +2234,17 @@ def _rewrite_token_manifest_modality(root: Path, split: str, old_modality: str, 
     manifest = json.loads(manifest_path.read_text())
     manifest[new_modality] = manifest.pop(old_modality)
     manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+
+
+def _rewrite_token_axis_count(root: Path, split: str, modality: str, token_count: int) -> None:
+    import numpy as np
+
+    x_path = root / "token_fields" / f"{modality}_{split}.npy"
+    pos_path = root / "positions" / f"{modality}_pos_{split}.npy"
+    mask_path = root / "masks" / f"{modality}_mask_{split}.npy"
+    np.save(x_path, np.zeros((1, token_count, 3), dtype=np.float32))
+    np.save(pos_path, np.zeros((1, token_count, 1), dtype=np.float32))
+    np.save(mask_path, np.ones((1, token_count), dtype=bool))
 
 
 def _write_hidden_metadata_token_shards(root: Path, modality: str) -> None:
