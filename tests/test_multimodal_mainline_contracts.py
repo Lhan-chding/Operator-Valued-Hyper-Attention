@@ -603,6 +603,51 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(payload["feature_extractor_versions"]["text"], "openai/clip-vit-base-patch32@main:text_projection")
         self.assertEqual(payload["candidate_region_source"], "coco_gt_box_crop")
 
+    def test_refcoco_clip_text_extraction_pads_batches_to_fixed_max_length(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for RefCOCO text extraction")
+
+        import argparse
+        import numpy as np
+        import torch
+
+        module = importlib.import_module("scripts.multimodal.extract_refcoco_clip_features")
+        args = argparse.Namespace(text_batch_size=2, max_text_length=8, normalize=False)
+        samples = [
+            {"text": "short phrase"},
+            {"text": "a much longer referring expression"},
+            {"text": "medium length phrase"},
+        ]
+
+        class FakeTokenizer:
+            def __call__(self, texts, *, padding, truncation, max_length, return_tensors):
+                del truncation, return_tensors
+                token_count = max_length if padding == "max_length" else max(len(text.split()) + 2 for text in texts)
+                token_count = min(token_count, max_length)
+                input_ids = torch.ones((len(texts), token_count), dtype=torch.long)
+                attention_mask = torch.zeros((len(texts), token_count), dtype=torch.long)
+                for row, text in enumerate(texts):
+                    valid = min(len(text.split()) + 2, token_count)
+                    attention_mask[row, :valid] = 1
+                return {"input_ids": input_ids, "attention_mask": attention_mask}
+
+        class FakeTextModel:
+            def __call__(self, *, input_ids, attention_mask):
+                del attention_mask
+                values = torch.ones((*input_ids.shape, 4), dtype=torch.float32)
+                return type("Output", (), {"last_hidden_state": values})()
+
+        class FakeModel:
+            text_model = FakeTextModel()
+            text_projection = None
+
+        features, mask = module._extract_text_features(args, samples, FakeTokenizer(), FakeModel(), torch, torch.device("cpu"))
+
+        self.assertEqual(features.shape, (3, 8, 4))
+        self.assertEqual(mask.shape, (3, 8))
+        self.assertEqual(mask.sum(axis=1).tolist(), [4, 7, 5])
+        self.assertTrue(np.isfinite(features).all())
+
     def test_align_refcoco_stage_features_cli_reorders_feature_banks_by_stage_splits(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
         import numpy as np
