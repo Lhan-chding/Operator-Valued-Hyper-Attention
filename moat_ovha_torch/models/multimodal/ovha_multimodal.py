@@ -95,8 +95,11 @@ class MultimodalOVHA(nn.Module):
         )
         y_hat = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
         candidate_losses = _candidate_losses(candidate_outputs, batch.target_y, batch.target_mask)
+        raw_router_load_by_candidate = router_output.diagnostics.get("router_load_by_candidate", {})
         diagnostics = {
             **router_output.diagnostics,
+            "raw_router_load_by_candidate": raw_router_load_by_candidate,
+            "router_load_by_candidate": _router_load_by_candidate(router_weights, self.candidate_names),
             "router_logit_parts": {
                 key: value.detach()
                 for key, value in router_output.logit_parts.items()
@@ -151,6 +154,16 @@ def _effective_router_weights(
         kept[..., candidate_index] = 0.0
         return kept / kept.sum(dim=-1, keepdim=True).clamp_min(1e-8)
     return weights
+
+
+def _router_load_by_candidate(
+    weights: torch.Tensor,
+    candidate_names: tuple[str, ...],
+) -> dict[str, torch.Tensor]:
+    return {
+        name: weights[..., index].mean()
+        for index, name in enumerate(candidate_names)
+    }
 
 
 def _validated_router_weight_policy(
