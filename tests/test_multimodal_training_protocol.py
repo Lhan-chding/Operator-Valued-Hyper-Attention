@@ -283,6 +283,48 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
 
         self.assertTrue(marked.ok, marked.errors)
 
+    def test_public_loss_metadata_accepts_non_negative_finite_weights(self):
+        from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
+
+        weighted = validate_training_protocol(
+            {
+                "task_type": "sentiment_emotion",
+                "training_stages": ["T0", "T5"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T5": ["task_loss", "candidate_individual_loss"],
+                },
+                "loss_metadata": {
+                    "task_loss": {"weight": 1.0},
+                    "candidate_individual_loss": {"weight": 0.03},
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+
+        self.assertTrue(weighted.ok, weighted.errors)
+
+        invalid = validate_training_protocol(
+            {
+                "task_type": "sentiment_emotion",
+                "training_stages": ["T0", "T5"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T5": ["task_loss", "candidate_individual_loss"],
+                },
+                "loss_metadata": {
+                    "candidate_individual_loss": {"weight": -0.1},
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+
+        self.assertFalse(invalid.ok)
+        self.assertIn(
+            "loss weight must be a finite non-negative number: candidate_individual_loss",
+            "\n".join(invalid.errors),
+        )
+
     def test_public_rceo_weak_losses_accept_marked_plan_signals(self):
         from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
 

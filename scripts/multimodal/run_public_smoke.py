@@ -442,7 +442,18 @@ def _public_loss_components(
         "public_alignment_ce": _public_alignment_ce(output.y_hat, batch),
         "public_contrastive_retrieval": output.y_hat.sum() * 0.0,
     }
-    return {name: available[name] for name in configured if name in available}
+    return {
+        name: available[name] * _public_loss_weight(config, name)
+        for name in configured
+        if name in available
+    }
+
+
+def _public_loss_weight(config: MultimodalExperimentConfig, loss_name: str) -> float:
+    metadata = (config.loss_metadata or {}).get(loss_name, {})
+    if not isinstance(metadata, dict):
+        return 1.0
+    return float(metadata.get("weight", 1.0))
 
 
 def _public_alignment_ce(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:

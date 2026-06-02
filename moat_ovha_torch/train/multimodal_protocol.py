@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 
@@ -181,6 +182,7 @@ def _validate_losses(
                     errors.append(f"unknown or unmarked public loss {loss} in {stage}")
                 elif loss in PUBLIC_MARKED_WEAK_LOSSES:
                     _validate_marked_weak_loss(loss, loss_metadata, errors)
+            _validate_loss_weight_metadata(loss, loss_metadata, errors)
 
 
 def _validate_stage_loss_contract(
@@ -233,6 +235,28 @@ def _validate_marked_weak_loss(
         errors.append(f"weak loss metadata must include non-empty source: {loss}")
     if metadata.get("must_report_as") != "weak":
         errors.append(f"weak loss metadata must set must_report_as=weak: {loss}")
+
+
+def _validate_loss_weight_metadata(
+    loss: str,
+    loss_metadata: dict[str, dict[str, Any]],
+    errors: list[str],
+) -> None:
+    metadata = loss_metadata.get(loss)
+    if metadata is None:
+        return
+    if not isinstance(metadata, dict):
+        errors.append(f"loss metadata must be structured: {loss}")
+        return
+    if "weight" not in metadata:
+        return
+    try:
+        weight = float(metadata["weight"])
+    except (TypeError, ValueError):
+        errors.append(f"loss weight must be a finite non-negative number: {loss}")
+        return
+    if not math.isfinite(weight) or weight < 0.0:
+        errors.append(f"loss weight must be a finite non-negative number: {loss}")
 
 
 def _validate_adapter_params(params_by_candidate: dict[str, list[str]], errors: list[str]) -> None:
