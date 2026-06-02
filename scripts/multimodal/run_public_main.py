@@ -79,6 +79,14 @@ def main() -> int:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
+        "--pilot-seed",
+        type=int,
+        help=(
+            "Run only one configured seed for a pilot fit. The config must still contain "
+            "the formal five-seed public-main plan, and outputs are marked as a pilot subset."
+        ),
+    )
+    parser.add_argument(
         "--progress-interval",
         type=int,
         default=None,
@@ -141,11 +149,15 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     diagnostics_rows: list[dict[str, Any]] = []
     robustness_rows: list[dict[str, Any]] = []
     seed_reports: list[dict[str, Any]] = []
+    selected_seeds = _selected_seeds(config, args.pilot_seed)
+    pilot_seed_subset = len(selected_seeds) != len(config.seeds)
     _print_progress(
         "start",
         dataset=config.dataset_name,
         task=config.task_type,
-        seeds=",".join(str(seed) for seed in config.seeds),
+        seeds=",".join(str(seed) for seed in selected_seeds),
+        configured_seeds=",".join(str(seed) for seed in config.seeds),
+        pilot_seed_subset=pilot_seed_subset,
         model_count=1 + len(config.baseline_names),
         train_steps=int(args.train_steps),
         baseline_train_steps=int(args.baseline_train_steps),
@@ -154,7 +166,7 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         d_model=int(args.d_model),
         memory_tokens=int(args.memory_tokens),
     )
-    for seed in config.seeds:
+    for seed in selected_seeds:
         seed_report = _run_seed(
             config,
             layout,
@@ -183,8 +195,11 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "task": config.task_type,
         "train_split": args.train_split,
         "eval_split": args.eval_split,
-        "seeds": list(config.seeds),
-        "seed_count": len(config.seeds),
+        "seeds": list(selected_seeds),
+        "seed_count": len(selected_seeds),
+        "configured_seeds": list(config.seeds),
+        "configured_seed_count": len(config.seeds),
+        "pilot_seed_subset": pilot_seed_subset,
         "models": ["ovha_full", *config.baseline_names],
         "row_counts": {
             "raw_metrics": len(raw_rows),
@@ -200,6 +215,15 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "warnings": [],
     }
     return payload, 0
+
+
+def _selected_seeds(config: MultimodalExperimentConfig, pilot_seed: int | None) -> tuple[int, ...]:
+    if pilot_seed is None:
+        return config.seeds
+    seed = int(pilot_seed)
+    if seed not in set(config.seeds):
+        raise ValueError(f"--pilot-seed must be one of the configured seeds: {', '.join(str(value) for value in config.seeds)}")
+    return (seed,)
 
 
 def _run_seed(

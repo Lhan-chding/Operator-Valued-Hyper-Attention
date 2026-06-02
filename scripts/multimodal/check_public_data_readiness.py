@@ -26,6 +26,9 @@ ACCEPTANCE_ARTIFACT_BY_DATASET = {
     "refcoco": "outputs/multimodal/refcoco_public_acceptance_multiseed",
     "cmu_mosei": "outputs/multimodal/cmu_mosei_public_acceptance_multiseed",
 }
+CMU_MOSEI_MEAN_PREPROCESSING_MARKER = "cmu-mosei-cmu-sdk-mean"
+CMU_MOSEI_PUBLIC_MAIN_MIN_SAMPLE_COUNT = 10_000
+CMU_MOSEI_MODALITIES = ("text", "audio", "vision")
 
 
 def main() -> int:
@@ -108,6 +111,7 @@ def _dataset_report(
     cache = _cache_phase(layout, dataset_name)
     phases["raw_manifest"] = raw_manifest
     phases["cache"] = cache
+    phases["public_main_quality"] = _public_main_quality_phase(dataset_name, phases, layout)
 
     commands = _next_commands_for_dataset(
         dataset_name,
@@ -121,7 +125,7 @@ def _dataset_report(
     next_commands.extend(commands)
     next_action = commands[0] if commands else "ready: formal cache is valid; continue with public acceptance/training"
     return {
-        "ok": bool(cache["ok"]),
+        "ok": bool(cache["ok"]) and bool(phases["public_main_quality"]["ok"]),
         "dataset_name": dataset_name,
         "raw_root": str(raw_root),
         "cache_root": str(layout.root),
@@ -166,18 +170,7 @@ def _cmu_mosei_download_and_stage_phases(download_root: Path) -> dict[str, dict[
     }
     splits = _path_phase("splits", [download_root / "cmu_mosei_splits.json"])
     sequence_inspection = _path_phase("sequence_inspection", [download_root / "cmu_mosei_sequence_inspection.json"])
-    stage_inputs = _path_phase(
-        "stage_inputs",
-        [
-            stage_dir / "cmu_mosei_splits.json",
-            stage_dir / "cmu_mosei_text_features.npy",
-            stage_dir / "cmu_mosei_audio_features.npy",
-            stage_dir / "cmu_mosei_visual_features.npy",
-            stage_dir / "cmu_mosei_sentiment.npy",
-            stage_dir / "cmu_mosei_emotion.npy",
-            stage_dir / "cmu_mosei_stage_input_manifest.json",
-        ],
-    )
+    stage_inputs = _cmu_mosei_stage_inputs_phase(stage_dir)
     return {
         "downloads": downloads,
         "splits": splits,
@@ -236,6 +229,47 @@ def _refcoco_stage_records_phase(stage_dir: Path) -> dict[str, Any]:
     return phase
 
 
+def _cmu_mosei_stage_inputs_phase(stage_dir: Path) -> dict[str, Any]:
+    phase = _path_phase(
+        "stage_inputs",
+        [
+            stage_dir / "cmu_mosei_splits.json",
+            stage_dir / "cmu_mosei_text_features.npy",
+            stage_dir / "cmu_mosei_audio_features.npy",
+            stage_dir / "cmu_mosei_visual_features.npy",
+            stage_dir / "cmu_mosei_sentiment.npy",
+            stage_dir / "cmu_mosei_emotion.npy",
+            stage_dir / "cmu_mosei_stage_input_manifest.json",
+        ],
+    )
+    if not phase["ok"]:
+        return phase
+
+    manifest_path = stage_dir / "cmu_mosei_stage_input_manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError as exc:
+        return {**phase, "ok": False, "errors": [f"invalid CMU-MOSEI stage input manifest: {exc}"]}
+    if not isinstance(manifest, dict):
+        return {**phase, "ok": False, "errors": ["CMU-MOSEI stage input manifest must be a JSON object"]}
+
+    feature_shapes = _npy_shapes(
+        {
+            "text": stage_dir / "cmu_mosei_text_features.npy",
+            "audio": stage_dir / "cmu_mosei_audio_features.npy",
+            "vision": stage_dir / "cmu_mosei_visual_features.npy",
+        }
+    )
+    errors = _cmu_mosei_public_main_stage_errors(manifest, feature_shapes)
+    return {
+        **phase,
+        "ok": not errors,
+        "errors": errors,
+        "manifest_summary": _cmu_mosei_manifest_summary(manifest),
+        "feature_shapes": feature_shapes,
+    }
+
+
 def _refcoco_aligned_features_phase(stage_dir: Path) -> dict[str, Any]:
     phase = _path_phase(
         "aligned_features",
@@ -277,6 +311,174 @@ def _refcoco_aligned_features_phase(stage_dir: Path) -> dict[str, Any]:
         if array.ndim < 2 or int(array.shape[1]) <= 1:
             errors.append(f"{path.name} token/candidate axis must be > 1")
     return {**phase, "ok": not errors, "feature_shapes": shapes, "errors": errors}
+
+
+def _public_main_quality_phase(
+    dataset_name: str,
+    phases: dict[str, dict[str, Any]],
+    layout: MultimodalCacheLayout,
+) -> dict[str, Any]:
+    if dataset_name != "cmu_mosei":
+        return {"ok": True, "name": "public_main_quality", "errors": [], "warnings": []}
+    errors: list[str] = []
+    warnings: list[str] = []
+    stage_inputs = phases.get("stage_inputs", {})
+    stage_errors = stage_inputs.get("errors", [])
+    if _phase_has_all_required_paths(stage_inputs) and isinstance(stage_errors, list):
+        errors.extend(str(error) for error in stage_errors)
+
+    cache_report = _cmu_mosei_cache_public_main_report(layout)
+    errors.extend(cache_report["errors"])
+    warnings.extend(cache_report["warnings"])
+    return {
+        "ok": not errors,
+        "name": "public_main_quality",
+        "errors": _unique(errors),
+        "warnings": _unique(warnings),
+        "cache_report": cache_report,
+    }
+
+
+def _phase_has_all_required_paths(phase: dict[str, Any]) -> bool:
+    required = phase.get("required", [])
+    existing = phase.get("existing", [])
+    return bool(required) and set(required) == set(existing)
+
+
+def _cmu_mosei_cache_public_main_report(layout: MultimodalCacheLayout) -> dict[str, Any]:
+    root = layout.root
+    errors: list[str] = []
+    warnings: list[str] = []
+    feature_versions = _read_json_if_exists(root / "provenance" / "feature_versions.json")
+    feature_version_text = json.dumps(feature_versions, sort_keys=True).lower() if feature_versions is not None else ""
+    uses_mean_sdk = CMU_MOSEI_MEAN_PREPROCESSING_MARKER in feature_version_text
+    token_shapes = _cmu_mosei_cache_token_shapes(layout)
+    split_source_counts = _cmu_mosei_cache_source_counts(layout)
+    sample_count = sum(split_source_counts.values())
+
+    if uses_mean_sdk:
+        errors.append(
+            "CMU-MOSEI public main cache uses mean-pooled SDK feature versions; rebuild "
+            "utterance/segment-level features before acceptance/training"
+        )
+    if token_shapes and _all_cmu_mosei_token_axes_are_degenerate(token_shapes):
+        errors.append(
+            "CMU-MOSEI public main cache has token axis <= 1 for text/audio/vision; this is a "
+            "mean-pooled or source-level cache, not full utterance/segment-level evidence"
+        )
+    if uses_mean_sdk and 0 < sample_count < CMU_MOSEI_PUBLIC_MAIN_MIN_SAMPLE_COUNT:
+        errors.append(
+            f"CMU-MOSEI public main cache has only {sample_count} retained samples; expected "
+            "full utterance/segment-level MOSEI scale, not the 3225-video/source-level mean cache"
+        )
+    if root.exists() and feature_versions is None:
+        warnings.append("CMU-MOSEI cache exists but feature_versions.json was unavailable for public-main quality checks")
+    return {
+        "errors": errors,
+        "warnings": warnings,
+        "feature_versions_uses_mean_sdk": uses_mean_sdk,
+        "token_shapes": token_shapes,
+        "split_source_counts": split_source_counts,
+        "sample_count": sample_count,
+    }
+
+
+def _cmu_mosei_public_main_stage_errors(manifest: dict[str, Any], feature_shapes: dict[str, list[int]]) -> list[str]:
+    errors: list[str] = []
+    preprocessing_version = str(manifest.get("preprocessing_version", "")).lower()
+    temporal_policy = str(manifest.get("temporal_policy", "")).lower()
+    sample_count = _int_or_zero(manifest.get("sample_count"))
+    if temporal_policy == "mean" or CMU_MOSEI_MEAN_PREPROCESSING_MARKER in preprocessing_version:
+        errors.append(
+            "CMU-MOSEI public main stage inputs are mean-pooled; rebuild utterance/segment-level "
+            "stage inputs before acceptance/training"
+        )
+    if feature_shapes and _all_cmu_mosei_token_axes_are_degenerate(feature_shapes):
+        errors.append(
+            "CMU-MOSEI public main stage inputs have token axis <= 1 for text/audio/vision; "
+            "this cannot support full temporal/local evidence"
+        )
+    if 0 < sample_count < CMU_MOSEI_PUBLIC_MAIN_MIN_SAMPLE_COUNT:
+        errors.append(
+            f"CMU-MOSEI public main stage inputs contain only {sample_count} samples; expected "
+            "full utterance/segment-level MOSEI scale"
+        )
+    return errors
+
+
+def _cmu_mosei_manifest_summary(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "sample_count": manifest.get("sample_count"),
+        "temporal_policy": manifest.get("temporal_policy"),
+        "preprocessing_version": manifest.get("preprocessing_version"),
+    }
+
+
+def _cmu_mosei_cache_token_shapes(layout: MultimodalCacheLayout) -> dict[str, dict[str, list[int]]]:
+    shapes: dict[str, dict[str, list[int]]] = {}
+    for split in ("train", "val", "test"):
+        split_shapes: dict[str, list[int]] = {}
+        for modality in CMU_MOSEI_MODALITIES:
+            path = layout.root / "token_fields" / f"{modality}_{split}.npy"
+            shape = _npy_shape(path)
+            if shape is not None:
+                split_shapes[modality] = shape
+        if split_shapes:
+            shapes[split] = split_shapes
+    return shapes
+
+
+def _cmu_mosei_cache_source_counts(layout: MultimodalCacheLayout) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for split in ("train", "val", "test"):
+        path = layout.root / "provenance" / f"source_ids_{split}.txt"
+        if path.exists():
+            counts[split] = len([line for line in path.read_text().splitlines() if line.strip()])
+    return counts
+
+
+def _all_cmu_mosei_token_axes_are_degenerate(shapes: dict[str, Any]) -> bool:
+    token_axes: list[int] = []
+    for value in shapes.values():
+        if isinstance(value, dict):
+            for nested in value.values():
+                if isinstance(nested, list) and len(nested) >= 2:
+                    token_axes.append(int(nested[1]))
+        elif isinstance(value, list) and len(value) >= 2:
+            token_axes.append(int(value[1]))
+    return bool(token_axes) and all(axis <= 1 for axis in token_axes)
+
+
+def _npy_shapes(paths: dict[str, Path]) -> dict[str, list[int]]:
+    return {name: shape for name, path in paths.items() if (shape := _npy_shape(path)) is not None}
+
+
+def _npy_shape(path: Path) -> list[int] | None:
+    if not path.exists():
+        return None
+    try:
+        import numpy as np
+
+        array = np.load(path, allow_pickle=False, mmap_mode="r")
+    except (ImportError, OSError, ValueError, TypeError):
+        return None
+    return [int(dim) for dim in array.shape]
+
+
+def _read_json_if_exists(path: Path) -> Any:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _raw_manifest_phase(dataset_name: str, raw_root: Path) -> dict[str, Any]:
@@ -360,8 +562,10 @@ def _next_commands_for_dataset(
     all_datasets: list[str],
 ) -> list[str]:
     commands: list[str] = []
-    if phases["cache"]["ok"]:
+    if phases["cache"]["ok"] and phases.get("public_main_quality", {}).get("ok", True):
         return [_acceptance_command(dataset_name, raw_root, cache_root, controlled_report)]
+    if dataset_name == "cmu_mosei" and not phases.get("public_main_quality", {}).get("ok", True):
+        return _cmu_mosei_public_main_rebuild_commands(download_root)
     if _needs_download_command(dataset_name, phases):
         commands.extend(_bootstrap_commands(all_datasets, download_root))
 
@@ -434,6 +638,9 @@ def _append_cmu_mosei_commands(
     cache_root: Path,
     controlled_report: Path,
 ) -> None:
+    if not phases.get("public_main_quality", {}).get("ok", True):
+        commands.extend(_cmu_mosei_public_main_rebuild_commands(download_root))
+        return
     stage_dir = download_root / "cmu_mosei_stage_inputs"
     if not phases["splits"]["ok"]:
         commands.append(f"python scripts/multimodal/write_cmu_sdk_splits.py cmu_mosei {download_root / 'cmu_mosei_splits.json'}")
@@ -479,6 +686,28 @@ def _append_cmu_mosei_commands(
             "--preprocessing-version cmu-mosei-cmu-sdk-mean-v0.1"
         )
     _append_cache_or_acceptance_command(commands, "cmu_mosei", raw_root, cache_root, controlled_report, phases)
+
+
+def _cmu_mosei_public_main_rebuild_commands(download_root: Path) -> list[str]:
+    stage_dir = download_root / "cmu_mosei_stage_inputs"
+    sdk_dir = download_root / "cmu_sdk" / "cmu_mosei"
+    split_path = download_root / "cmu_mosei_splits.json"
+    return [
+        (
+            "python scripts/multimodal/write_cmu_sdk_splits.py cmu_mosei "
+            f"{split_path} "
+            f"--expand-with-sequence {sdk_dir / 'replace_with_utterance_or_segment_sequence.csd'}"
+        ),
+        (
+            "python scripts/multimodal/inspect_cmu_sdk_sequences.py cmu_mosei "
+            f"{sdk_dir} "
+            f"--splits {split_path} "
+            f"--stage-output-dir {stage_dir} "
+            "--temporal-policy strict "
+            "--preprocessing-version cmu-mosei-cmu-sdk-utterance-v0.1 "
+            f"--output {download_root / 'cmu_mosei_sequence_inspection.json'}"
+        ),
+    ]
 
 
 def _append_cache_or_acceptance_command(

@@ -118,6 +118,13 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 None,
                 set(baseline_names_for_task("sentiment_emotion")),
             ),
+            (
+                ROOT / "configs" / "multimodal_meld_public_main.json",
+                "meld",
+                "sentiment_emotion",
+                None,
+                set(baseline_names_for_task("sentiment_emotion")),
+            ),
         ]
         for path, dataset, task_type, alignment_loss, required_baselines in expectations:
             with self.subTest(path=path):
@@ -127,7 +134,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 self.assertEqual(config.dataset_name, dataset)
                 self.assertEqual(config.task_type, task_type)
                 self.assertEqual(config.training_stages, ("T0", "T5"))
-                if dataset == "cmu_mosei":
+                if dataset in {"cmu_mosei", "meld"}:
                     self.assertEqual(config.candidate_names, ("SPO", "LRIO"))
                     self.assertEqual(
                         config.lrio_pairs,
@@ -922,6 +929,74 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertNotIn("smoke", json.dumps(raw_rows, sort_keys=True).lower())
         self.assertNotIn("not_topconf", json.dumps(raw_rows, sort_keys=True).lower())
         self.assertEqual(preflight.returncode, 0, preflight.stdout + preflight.stderr)
+
+    def test_public_main_runner_can_run_single_pilot_seed_without_downgrading_main_config(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for public main runner smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "cache"
+            artifact_root = tmp_path / "refcoco_pilot"
+            controlled_report_path = tmp_path / "controlled_report.json"
+            _write_valid_refcoco_public_cache(cache_root)
+            controlled_report_path.write_text(
+                json.dumps(_complete_controlled_public_entry_report(tmp_path / "controlled_artifacts"), sort_keys=True) + "\n"
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "run_public_main.py"),
+                    str(ROOT / "configs" / "multimodal_refcoco_public_main.json"),
+                    "--cache-root",
+                    str(cache_root),
+                    "--controlled-report",
+                    str(controlled_report_path),
+                    "--artifact-root",
+                    str(artifact_root),
+                    "--train-steps",
+                    "1",
+                    "--baseline-train-steps",
+                    "1",
+                    "--train-split",
+                    "train",
+                    "--eval-split",
+                    "test",
+                    "--d-model",
+                    "8",
+                    "--memory-tokens",
+                    "1",
+                    "--device",
+                    "cpu",
+                    "--progress-interval",
+                    "1",
+                    "--pilot-seed",
+                    "203",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(result.stdout) if result.stdout.strip() else {}
+            raw_metrics = artifact_root / "raw_metrics.jsonl"
+            raw_rows = [
+                json.loads(line)
+                for line in raw_metrics.read_text().splitlines()
+                if line.strip()
+            ] if raw_metrics.exists() else []
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertTrue(payload["pilot_seed_subset"])
+        self.assertEqual(payload["configured_seed_count"], 5)
+        self.assertEqual(payload["seed_count"], 1)
+        self.assertEqual(payload["seeds"], [203])
+        self.assertIn("[public-main:train] seed=203 model=ovha_full step=1/1", result.stderr)
+        self.assertNotIn("[public-main:train] seed=201 model=ovha_full step=1/1", result.stderr)
+        self.assertEqual(len(raw_rows), 8)
+        self.assertEqual({row["seed"] for row in raw_rows}, {203})
 
     def test_public_main_internal_ovha_ablation_variant_mapping_is_structural(self):
         module = importlib.import_module("scripts.multimodal.run_public_main")
