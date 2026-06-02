@@ -191,6 +191,8 @@ def validate_cache_layout(layout: MultimodalCacheLayout, splits: tuple[str, ...]
     _validate_sample_record_manifests(layout, splits, data_card, errors)
     _validate_failed_sample_manifests(layout, splits, errors)
     _validate_token_field_manifests(layout, splits, data_card, checksums, errors)
+    _validate_grounding_token_axes(layout, splits, data_card, errors)
+    _validate_sentiment_array_alignment(layout, splits, data_card, errors)
     _validate_supervision_artifacts(layout, splits, data_card, checksums, errors)
 
     return CacheValidationReport(ok=not errors, errors=errors, warnings=warnings)
@@ -1084,6 +1086,168 @@ def _validate_numpy_array_artifact(
         errors.append(
             f"{manifest_name} entry for {modality}.{key} must have at least one dimension: "
             f"{normalized_relative}"
+        )
+
+
+def _validate_grounding_token_axes(
+    layout: MultimodalCacheLayout,
+    splits: tuple[str, ...],
+    data_card: dict[str, Any],
+    errors: list[str],
+) -> None:
+    if not _data_card_requires_grounding_metadata(data_card):
+        return
+    for split in splits:
+        manifest = _read_token_manifest(layout, split, errors)
+        if manifest is None:
+            continue
+        text = _load_manifest_numpy(layout, split, manifest, "text", "x", errors)
+        text_mask = _load_manifest_numpy(layout, split, manifest, "text", "mask", errors)
+        region = _load_manifest_numpy(layout, split, manifest, "region", "x", errors)
+        region_mask = _load_manifest_numpy(layout, split, manifest, "region", "mask", errors)
+        text_valid = _max_valid_token_count(text, text_mask)
+        if text_valid is not None and text_valid <= 1:
+            errors.append(
+                f"grounding cache text token axis for split {split} must be > 1 for local token evidence"
+            )
+        region_valid = _max_valid_token_count(region, region_mask)
+        if region_valid is not None and region_valid <= 1:
+            errors.append(
+                f"grounding cache region candidate axis for split {split} must be > 1 for non-trivial grounding"
+            )
+
+
+def _read_token_manifest(
+    layout: MultimodalCacheLayout,
+    split: str,
+    errors: list[str],
+) -> dict[str, Any] | None:
+    path = layout.root / "token_fields" / f"manifest_{split}.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _load_manifest_numpy(
+    layout: MultimodalCacheLayout,
+    split: str,
+    manifest: dict[str, Any],
+    modality: str,
+    key: str,
+    errors: list[str],
+):
+    entry = manifest.get(modality)
+    if not isinstance(entry, dict):
+        return None
+    relative = entry.get(key)
+    if not isinstance(relative, str) or not relative:
+        return None
+    path = (layout.root / relative).resolve()
+    try:
+        path.relative_to(layout.root.resolve())
+    except ValueError:
+        return None
+    if not path.exists():
+        return None
+    try:
+        import numpy as np
+
+        value = np.load(path, allow_pickle=False)
+    except (ImportError, OSError, ValueError, TypeError):
+        return None
+    if not isinstance(value, np.ndarray):
+        return None
+    return value
+
+
+def _max_valid_token_count(values: Any, mask: Any) -> int | None:
+    if values is None or not hasattr(values, "ndim") or values.ndim < 2:
+        return None
+    token_axis_count = int(values.shape[1])
+    if mask is None or not hasattr(mask, "ndim") or mask.ndim < 2:
+        return token_axis_count
+    try:
+        valid_counts = mask.astype(bool).sum(axis=1)
+    except (TypeError, ValueError):
+        return token_axis_count
+    if getattr(valid_counts, "size", 0) == 0:
+        return 0
+    return int(valid_counts.max())
+
+
+def _validate_sentiment_array_alignment(
+    layout: MultimodalCacheLayout,
+    splits: tuple[str, ...],
+    data_card: dict[str, Any],
+    errors: list[str],
+) -> None:
+    if not _data_card_requires_sentiment_metadata(data_card):
+        return
+    modalities = data_card.get("modalities", [])
+    modality_count = len(modalities) if isinstance(modalities, list) else 0
+    for split in splits:
+        source_ids = _read_source_ids(layout, split)
+        if source_ids is None:
+            continue
+        expected_rows = len(source_ids)
+        manifest = _read_token_manifest(layout, split, errors)
+        if manifest is not None and isinstance(modalities, list):
+            for modality in modalities:
+                if not isinstance(modality, str):
+                    continue
+                values = _load_manifest_numpy(layout, split, manifest, modality, "x", errors)
+                mask = _load_manifest_numpy(layout, split, manifest, modality, "mask", errors)
+                _validate_leading_rows(values, expected_rows, f"sentiment cache {modality} features", split, errors)
+                _validate_leading_rows(mask, expected_rows, f"sentiment cache {modality} mask", split, errors)
+                if values is not None and mask is not None and hasattr(values, "shape") and hasattr(mask, "shape"):
+                    if getattr(values, "ndim", 0) >= 2 and tuple(mask.shape) != tuple(values.shape[:2]):
+                        errors.append(
+                            f"sentiment cache {modality} mask for split {split} must match feature sample/token axes"
+                        )
+        task_labels = _load_optional_numpy(layout.root / "supervision" / f"task_labels_{split}.npy")
+        _validate_leading_rows(task_labels, expected_rows, "sentiment cache task labels", split, errors)
+        missing_mask = _load_optional_numpy(layout.root / "supervision" / f"missing_modality_mask_{split}.npy")
+        _validate_leading_rows(missing_mask, expected_rows, "sentiment cache missing modality mask", split, errors)
+        if missing_mask is not None and hasattr(missing_mask, "ndim") and missing_mask.ndim >= 2:
+            if modality_count and int(missing_mask.shape[1]) != modality_count:
+                errors.append(
+                    f"sentiment cache missing modality mask for split {split} must have one column per modality"
+                )
+
+
+def _load_optional_numpy(path: Path):
+    if not path.exists():
+        return None
+    try:
+        import numpy as np
+
+        value = np.load(path, allow_pickle=False)
+    except (ImportError, OSError, ValueError, TypeError):
+        return None
+    if not isinstance(value, np.ndarray):
+        return None
+    return value
+
+
+def _validate_leading_rows(
+    value: Any,
+    expected_rows: int,
+    artifact_name: str,
+    split: str,
+    errors: list[str],
+) -> None:
+    if value is None or not hasattr(value, "ndim") or value.ndim == 0:
+        return
+    if int(value.shape[0]) != expected_rows:
+        errors.append(
+            f"{artifact_name} for split {split} first axis must match source_ids count "
+            f"{expected_rows}, got {int(value.shape[0])}"
         )
 
 

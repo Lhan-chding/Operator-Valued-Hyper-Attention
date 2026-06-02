@@ -90,12 +90,16 @@ def extract_refcoco_clip_features(args: argparse.Namespace) -> dict[str, Any]:
 
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    text_features = _extract_text_features(args, samples, tokenizer, model, torch, device)
-    region_features, region_missing = _extract_region_features(args, samples, image_processor, model, torch, image_module, device)
+    text_features, text_mask = _extract_text_features(args, samples, tokenizer, model, torch, device)
+    region_features, region_mask, region_missing = _extract_region_features(args, samples, image_processor, model, torch, image_module, device)
     text_path = output_dir / f"{args.dataset_name}_text_features.npy"
     region_path = output_dir / f"{args.dataset_name}_region_features.npy"
+    text_mask_path = output_dir / f"{args.dataset_name}_text_mask.npy"
+    region_mask_path = output_dir / f"{args.dataset_name}_region_mask.npy"
     np.save(text_path, text_features)
     np.save(region_path, region_features)
+    np.save(text_mask_path, text_mask)
+    np.save(region_mask_path, region_mask)
     failed_path = output_dir / f"{args.dataset_name}_failed_samples.jsonl"
     if any(region_missing):
         failed_path.write_text(
@@ -121,6 +125,8 @@ def extract_refcoco_clip_features(args: argparse.Namespace) -> dict[str, Any]:
         "outputs": {
             "text_features": str(text_path),
             "region_features": str(region_path),
+            "text_mask": str(text_mask_path),
+            "region_mask": str(region_mask_path),
             "failed_samples": str(failed_path) if failed_path.exists() else None,
         },
         "next": (
@@ -128,6 +134,7 @@ def extract_refcoco_clip_features(args: argparse.Namespace) -> dict[str, Any]:
             f"data/raw_multimodal/{args.dataset_name} "
             f"--splits {args.splits} --records {args.records} "
             f"--text-features {text_path} --region-features {region_path} "
+            f"--text-mask {text_mask_path} --region-mask {region_mask_path} "
             f"--license-tag refcoco-coco2014 --preprocessing-version {args.dataset_name}-clip-vit-b32-v0.1"
         ),
     }
@@ -272,6 +279,7 @@ def _samples(
                 "image_number": image_number,
                 "image_path": _find_image(image_roots, image_number),
                 "region_box": _region_box(record.get("region_box"), source_id),
+                "candidate_region_boxes": _candidate_region_boxes(record, source_id),
             }
         )
     return samples
@@ -322,8 +330,24 @@ def _region_box(value: Any, source_id: str) -> tuple[float, float, float, float]
     return x1, y1, x2, y2
 
 
-def _extract_text_features(args: argparse.Namespace, samples, tokenizer, model, torch, device) -> np.ndarray:
+def _candidate_region_boxes(record: dict[str, Any], source_id: str) -> list[tuple[float, float, float, float]]:
+    raw_boxes = record.get("candidate_region_boxes")
+    if raw_boxes is None:
+        return [_region_box(record.get("region_box"), source_id)]
+    if not isinstance(raw_boxes, list) or not raw_boxes:
+        raise ValueError(f"record {source_id} candidate_region_boxes must be a non-empty list when provided")
+    boxes = [_region_box(box, source_id) for box in raw_boxes]
+    target_region_index = record.get("target_region_index", 0)
+    if not isinstance(target_region_index, int) or isinstance(target_region_index, bool):
+        raise ValueError(f"record {source_id} target_region_index must be an integer")
+    if target_region_index < 0 or target_region_index >= len(boxes):
+        raise ValueError(f"record {source_id} target_region_index is outside candidate_region_boxes")
+    return boxes
+
+
+def _extract_text_features(args: argparse.Namespace, samples, tokenizer, model, torch, device) -> tuple[np.ndarray, np.ndarray]:
     outputs = []
+    masks = []
     with torch.no_grad():
         for batch in _chunks(samples, args.text_batch_size):
             encoded = tokenizer(
@@ -334,42 +358,77 @@ def _extract_text_features(args: argparse.Namespace, samples, tokenizer, model, 
                 return_tensors="pt",
             )
             encoded = {key: value.to(device) for key, value in encoded.items()}
-            features = model.get_text_features(**encoded)
+            features = model.text_model(
+                input_ids=encoded["input_ids"],
+                attention_mask=encoded.get("attention_mask"),
+            ).last_hidden_state
+            features = _project_text_tokens(model, features)
             if args.normalize:
                 features = torch.nn.functional.normalize(features, p=2, dim=-1)
+            attention_mask = encoded.get("attention_mask")
+            if attention_mask is None:
+                attention_mask = torch.ones(features.shape[:2], dtype=torch.bool, device=device)
+            features = features * attention_mask.unsqueeze(-1).to(dtype=features.dtype)
             outputs.append(features.detach().cpu().float().numpy())
-    return np.concatenate(outputs, axis=0)[:, None, :].astype(np.float32, copy=False)
+            masks.append(attention_mask.detach().cpu().bool().numpy())
+    return (
+        np.concatenate(outputs, axis=0).astype(np.float32, copy=False),
+        np.concatenate(masks, axis=0).astype(bool, copy=False),
+    )
 
 
 def _extract_region_features(args: argparse.Namespace, samples, image_processor, model, torch, image_module, device):
+    max_regions = max(len(sample["candidate_region_boxes"]) for sample in samples)
+    if max_regions <= 1:
+        raise ValueError("RefCOCO records must provide more than one candidate region for non-trivial grounding")
     outputs = []
+    masks = []
     missing = np.zeros((len(samples),), dtype=bool)
     with torch.no_grad():
         for batch in _chunks(samples, args.region_batch_size):
             images = []
-            batch_missing = []
+            slots: list[tuple[int, int]] = []
             for sample in batch:
-                crop = _crop_region(sample, image_module)
-                batch_missing.append(crop is None)
-                if crop is None:
-                    images.append(_blank_image(image_module))
-                    missing[int(sample["index"])] = True
-                else:
-                    images.append(crop)
+                for region_index, region_box in enumerate(sample["candidate_region_boxes"]):
+                    crop = _crop_region(sample, region_box, image_module)
+                    slots.append((int(sample["index"]), region_index))
+                    if crop is None:
+                        images.append(_blank_image(image_module))
+                        missing[int(sample["index"])] = True
+                    else:
+                        images.append(crop)
             encoded = image_processor(images=images, return_tensors="pt")
             encoded = {key: value.to(device) for key, value in encoded.items()}
             features = model.get_image_features(**encoded)
             if args.normalize:
                 features = torch.nn.functional.normalize(features, p=2, dim=-1)
             values = features.detach().cpu().float().numpy()
-            for row_index, row_missing in enumerate(batch_missing):
-                if row_missing:
-                    values[row_index, :] = 0
-            outputs.append(values)
-    return np.concatenate(outputs, axis=0)[:, None, :].astype(np.float32, copy=False), missing
+            batch_features = np.zeros((len(batch), max_regions, values.shape[-1]), dtype=np.float32)
+            batch_mask = np.zeros((len(batch), max_regions), dtype=bool)
+            sample_position_by_index = {int(sample["index"]): position for position, sample in enumerate(batch)}
+            for value_index, (sample_index, region_index) in enumerate(slots):
+                batch_position = sample_position_by_index[sample_index]
+                batch_features[batch_position, region_index, :] = values[value_index]
+                batch_mask[batch_position, region_index] = True
+            outputs.append(batch_features)
+            masks.append(batch_mask)
+    return (
+        np.concatenate(outputs, axis=0).astype(np.float32, copy=False),
+        np.concatenate(masks, axis=0).astype(bool, copy=False),
+        missing,
+    )
 
 
-def _crop_region(sample: dict[str, Any], image_module):
+def _project_text_tokens(model, features):
+    projection = getattr(model, "text_projection", None)
+    if projection is None:
+        return features
+    if callable(projection):
+        return projection(features)
+    return features @ projection
+
+
+def _crop_region(sample: dict[str, Any], region_box: tuple[float, float, float, float], image_module):
     path = sample["image_path"]
     if path is None:
         return None
@@ -377,7 +436,7 @@ def _crop_region(sample: dict[str, Any], image_module):
         with image_module.open(path) as image:
             rgb = image.convert("RGB")
             width, height = rgb.size
-            x1, y1, x2, y2 = sample["region_box"]
+            x1, y1, x2, y2 = region_box
             pixel_box = (
                 max(0, min(width - 1, int(round(x1 * width)))),
                 max(0, min(height - 1, int(round(y1 * height)))),
@@ -401,6 +460,7 @@ def _chunks(values: list[Any], size: int):
 
 
 def _dry_run_payload(args: argparse.Namespace, samples, image_coverage: float, missing_images: list[str]) -> dict[str, Any]:
+    max_regions = max((len(sample["candidate_region_boxes"]) for sample in samples), default=0)
     return {
         "ok": True,
         "mode": "dry_run",
@@ -409,8 +469,8 @@ def _dry_run_payload(args: argparse.Namespace, samples, image_coverage: float, m
             samples,
             image_coverage,
             missing_images,
-            text_shape=[len(samples), 1, "clip_projection_dim"],
-            region_shape=[len(samples), 1, "clip_projection_dim"],
+            text_shape=[len(samples), f"<= {args.max_text_length}", "clip_projection_dim"],
+            region_shape=[len(samples), max_regions, "clip_projection_dim"],
         ),
     }
 

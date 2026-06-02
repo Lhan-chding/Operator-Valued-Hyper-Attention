@@ -144,21 +144,8 @@ def _refcoco_download_and_stage_phases(download_root: Path) -> dict[str, dict[st
             download_dir / "extracted" / "annotations" / "instances_train2014.json",
         ],
     )
-    stage_records = _path_phase(
-        "stage_records",
-        [
-            stage_dir / "refcoco_splits.json",
-            stage_dir / "refcoco_phrase_region_records.json",
-        ],
-    )
-    aligned_features = _path_phase(
-        "aligned_features",
-        [
-            stage_dir / "refcoco_text_features.npy",
-            stage_dir / "refcoco_region_features.npy",
-            stage_dir / "refcoco_feature_alignment_manifest.json",
-        ],
-    )
+    stage_records = _refcoco_stage_records_phase(stage_dir)
+    aligned_features = _refcoco_aligned_features_phase(stage_dir)
     return {
         "downloads": downloads,
         "stage_records": stage_records,
@@ -211,6 +198,85 @@ def _path_phase(name: str, required_paths: list[Path], optional_paths: list[Path
         "missing": [str(path) for path in missing],
         "optional_existing": [str(path) for path in optional_existing],
     }
+
+
+def _refcoco_stage_records_phase(stage_dir: Path) -> dict[str, Any]:
+    phase = _path_phase(
+        "stage_records",
+        [
+            stage_dir / "refcoco_splits.json",
+            stage_dir / "refcoco_phrase_region_records.json",
+        ],
+    )
+    records_path = stage_dir / "refcoco_phrase_region_records.json"
+    if not phase["ok"] or not records_path.exists():
+        return phase
+    try:
+        payload = json.loads(records_path.read_text())
+    except json.JSONDecodeError as exc:
+        return {**phase, "ok": False, "errors": [f"invalid stage records JSON: {exc}"]}
+    records = payload.get("records") if isinstance(payload, dict) else payload
+    if not isinstance(records, list) or not records:
+        return {**phase, "ok": False, "errors": ["stage records must contain records"]}
+    checked = records[: min(256, len(records))]
+    degenerate = [
+        str(record.get("source_id", index))
+        for index, record in enumerate(checked)
+        if not isinstance(record, dict)
+        or not isinstance(record.get("candidate_region_boxes"), list)
+        or len(record.get("candidate_region_boxes", [])) <= 1
+    ]
+    if degenerate:
+        return {
+            **phase,
+            "ok": False,
+            "errors": ["RefCOCO stage records are degenerate: candidate_region_boxes missing or length <= 1"],
+            "degenerate_examples": degenerate[:5],
+        }
+    return phase
+
+
+def _refcoco_aligned_features_phase(stage_dir: Path) -> dict[str, Any]:
+    phase = _path_phase(
+        "aligned_features",
+        [
+            stage_dir / "refcoco_text_features.npy",
+            stage_dir / "refcoco_region_features.npy",
+        ],
+        optional_paths=[
+            stage_dir / "refcoco_feature_alignment_manifest.json",
+            stage_dir / "refcoco_clip_feature_manifest.json",
+            stage_dir / "refcoco_text_mask.npy",
+            stage_dir / "refcoco_region_mask.npy",
+        ],
+    )
+    if not phase["ok"]:
+        return phase
+    manifest_candidates = [
+        stage_dir / "refcoco_feature_alignment_manifest.json",
+        stage_dir / "refcoco_clip_feature_manifest.json",
+    ]
+    if not any(path.exists() for path in manifest_candidates):
+        return {
+            **phase,
+            "ok": False,
+            "errors": ["missing RefCOCO feature manifest: expected feature_alignment or clip_feature manifest"],
+        }
+    errors: list[str] = []
+    shapes: dict[str, list[int]] = {}
+    for modality in ("text", "region"):
+        path = stage_dir / f"refcoco_{modality}_features.npy"
+        try:
+            import numpy as np
+
+            array = np.load(path, allow_pickle=False, mmap_mode="r")
+        except (ImportError, OSError, ValueError, TypeError) as exc:
+            errors.append(f"{path.name} must be a loadable numpy array: {exc}")
+            continue
+        shapes[modality] = [int(dim) for dim in array.shape]
+        if array.ndim < 2 or int(array.shape[1]) <= 1:
+            errors.append(f"{path.name} token/candidate axis must be > 1")
+    return {**phase, "ok": not errors, "feature_shapes": shapes, "errors": errors}
 
 
 def _raw_manifest_phase(dataset_name: str, raw_root: Path) -> dict[str, Any]:

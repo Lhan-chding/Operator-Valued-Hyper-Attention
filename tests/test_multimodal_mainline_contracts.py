@@ -393,8 +393,11 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                         ],
                         "annotations": [
                             {"id": 501, "image_id": 10, "bbox": [10, 20, 30, 40]},
+                            {"id": 511, "image_id": 10, "bbox": [50, 60, 20, 30]},
                             {"id": 502, "image_id": 20, "bbox": [5, 10, 10, 20]},
+                            {"id": 512, "image_id": 20, "bbox": [25, 30, 10, 20]},
                             {"id": 503, "image_id": 30, "bbox": [8, 16, 16, 24]},
+                            {"id": 513, "image_id": 30, "bbox": [32, 24, 16, 16]},
                         ],
                     },
                     sort_keys=True,
@@ -450,7 +453,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                 check=False,
             )
             np.save(stage_inputs / "refcoco_text_features.npy", np.arange(3 * 4 * 5, dtype=np.float32).reshape(3, 4, 5))
-            np.save(stage_inputs / "refcoco_region_features.npy", np.arange(3 * 1 * 4, dtype=np.float32).reshape(3, 1, 4))
+            np.save(stage_inputs / "refcoco_region_features.npy", np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4))
             stage_result = subprocess.run(
                 [
                     sys.executable,
@@ -509,6 +512,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         })
         self.assertEqual(records[0]["phrase_span"], {"start": 0, "end": 2})
         self.assertEqual(records[0]["region_box"], [0.1, 0.1, 0.4, 0.3])
+        self.assertEqual(len(records[0]["candidate_region_boxes"]), 2)
         self.assertEqual(records[0]["target_region_index"], 0)
         self.assertEqual(records[0]["box_coordinate_convention"], "xyxy_normalized")
         self.assertTrue(validation.ok, validation.errors)
@@ -533,6 +537,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                         "caption_id": caption_id,
                         "phrase_span": {"start": 0, "end": 2},
                         "region_box": [0.1, 0.1, 0.4, 0.3],
+                        "candidate_region_boxes": [[0.1, 0.1, 0.4, 0.3], [0.5, 0.5, 0.7, 0.8]],
                         "target_region_index": 0,
                     }
                     for source_id, image_id, caption_id in (
@@ -593,8 +598,8 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "dry_run")
         self.assertEqual(payload["sample_count"], 3)
         self.assertEqual(payload["missing_image_count"], 3)
-        self.assertEqual(payload["feature_shapes"]["text"], [3, 1, "clip_projection_dim"])
-        self.assertEqual(payload["feature_shapes"]["region"], [3, 1, "clip_projection_dim"])
+        self.assertEqual(payload["feature_shapes"]["text"], [3, "<= 77", "clip_projection_dim"])
+        self.assertEqual(payload["feature_shapes"]["region"], [3, 2, "clip_projection_dim"])
         self.assertEqual(payload["feature_extractor_versions"]["text"], "openai/clip-vit-base-patch32@main:text_projection")
         self.assertEqual(payload["candidate_region_source"], "coco_gt_box_crop")
 
@@ -630,8 +635,14 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
             (stage_inputs / "refcoco_phrase_region_records.json").write_text(json.dumps(records, sort_keys=True) + "\n")
             bank_ids = [splits["test"][0], splits["train"][0], splits["val"][0]]
             (stage_inputs / "bank_source_ids.txt").write_text("\n".join(bank_ids) + "\n")
-            np.save(stage_inputs / "text_bank.npy", np.array([[[30.0]], [[10.0]], [[20.0]]], dtype=np.float32))
-            np.save(stage_inputs / "region_bank.npy", np.array([[[300.0]], [[100.0]], [[200.0]]], dtype=np.float32))
+            np.save(
+                stage_inputs / "text_bank.npy",
+                np.array([[[30.0], [31.0]], [[10.0], [11.0]], [[20.0], [21.0]]], dtype=np.float32),
+            )
+            np.save(
+                stage_inputs / "region_bank.npy",
+                np.array([[[300.0], [301.0]], [[100.0], [101.0]], [[200.0], [201.0]]], dtype=np.float32),
+            )
 
             align_result = subprocess.run(
                 [

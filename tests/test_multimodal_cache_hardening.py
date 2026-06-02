@@ -1638,6 +1638,37 @@ class MultimodalCacheHardeningTests(unittest.TestCase):
         self.assertTrue(report.ok, report.errors)
         self.assertEqual(report.warnings, [])
 
+    def test_sentiment_cache_rejects_misaligned_missing_modality_mask(self):
+        import numpy as np
+
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = MultimodalCacheLayout(Path(tmp), "cmu_mosei", "v0.1")
+            _write_minimal_sentiment_cache(
+                layout.root,
+                train_ids=["train-utterance-a", "train-utterance-b"],
+                test_ids=["test-utterance"],
+                include_sentiment_record_fields=True,
+                include_missing_modality_mask=True,
+                speaker_id_available=True,
+            )
+            np.save(layout.root / "supervision" / "missing_modality_mask_train.npy", np.zeros((1, 2), dtype=bool))
+            _write_complete_checksums(layout.root)
+
+            report = validate_cache_layout(layout, splits=("train", "test"))
+
+        self.assertFalse(report.ok)
+        joined = "\n".join(report.errors)
+        self.assertIn(
+            "sentiment cache missing modality mask for split train first axis must match source_ids count 2, got 1",
+            joined,
+        )
+        self.assertIn(
+            "sentiment cache missing modality mask for split train must have one column per modality",
+            joined,
+        )
+
     def test_cache_validator_rejects_missing_grounding_and_rceo_supervision_shards(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
 

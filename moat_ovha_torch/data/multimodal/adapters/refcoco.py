@@ -171,12 +171,17 @@ def _write_split_cache_files(
         "text": manifest.files["features/text_features.npy"],
         "region": manifest.files["features/region_features.npy"],
     }
+    mask_sources = {
+        "text": manifest.raw_root / "features" / "text_mask.npy",
+        "region": manifest.raw_root / "features" / "region_mask.npy",
+    }
     feature_shards: dict[str, np.ndarray] = {}
     for modality, source in feature_sources.items():
         shard = _load_and_select_rows(source, row_indices, artifact_name=f"{modality} features")
         feature_shards[modality] = shard
+        mask = _load_optional_mask(mask_sources[modality], row_indices, shard, artifact_name=f"{modality} mask")
         _write_array(root / "token_fields" / f"{modality}_{split}.npy", shard)
-        _write_position_and_mask_artifacts(root, modality, split, shard)
+        _write_position_and_mask_artifacts(root, modality, split, shard, mask)
     token_manifest = {
         "text": {
             "x": f"token_fields/text_{split}.npy",
@@ -226,7 +231,13 @@ def _write_array(destination: Path, array: np.ndarray) -> None:
     np.save(destination, array)
 
 
-def _write_position_and_mask_artifacts(root: Path, modality: str, split: str, shard: np.ndarray) -> None:
+def _write_position_and_mask_artifacts(
+    root: Path,
+    modality: str,
+    split: str,
+    shard: np.ndarray,
+    mask: np.ndarray | None = None,
+) -> None:
     if shard.ndim < 2:
         raise ValueError(f"{modality} feature shard for split {split} must have at least [sample, token] axes")
     sample_count = int(shard.shape[0])
@@ -235,7 +246,8 @@ def _write_position_and_mask_artifacts(root: Path, modality: str, split: str, sh
         np.arange(token_count, dtype=np.float32).reshape(1, token_count, 1),
         (sample_count, token_count, 1),
     ).copy()
-    mask = np.ones((sample_count, token_count), dtype=bool)
+    if mask is None:
+        mask = np.ones((sample_count, token_count), dtype=bool)
     _write_array(root / "positions" / f"{modality}_pos_{split}.npy", positions)
     _write_array(root / "masks" / f"{modality}_mask_{split}.npy", mask)
 
@@ -248,6 +260,22 @@ def _load_and_select_rows(source: Path, row_indices: list[int], *, artifact_name
     if any(row_index < 0 or row_index >= sample_count for row_index in row_indices):
         raise ValueError(f"{artifact_name} row index exceeds available rows in {source}")
     return np.asarray(array[row_indices]).copy()
+
+
+def _load_optional_mask(
+    source: Path,
+    row_indices: list[int],
+    shard: np.ndarray,
+    *,
+    artifact_name: str,
+) -> np.ndarray | None:
+    if not source.exists():
+        return None
+    mask = _load_and_select_rows(source, row_indices, artifact_name=artifact_name).astype(bool, copy=False)
+    expected_shape = tuple(shard.shape[:2])
+    if tuple(mask.shape) != expected_shape:
+        raise ValueError(f"{artifact_name} shape must match feature sample/token axes: expected {expected_shape}, got {tuple(mask.shape)}")
+    return np.asarray(mask).copy()
 
 
 def _candidate_region_count(region_shard: np.ndarray, split: str) -> int:
@@ -513,6 +541,26 @@ def _validate_grounding_record(source_name: str, index: int, record: dict[str, A
         not isinstance(target_region_index, int) or isinstance(target_region_index, bool) or target_region_index < 0
     ):
         raise ValueError(f"{source_name} records[{index}] target_region_index must be a non-negative integer")
+    candidate_boxes = record.get("candidate_region_boxes")
+    if candidate_boxes is not None:
+        if not isinstance(candidate_boxes, list) or not candidate_boxes:
+            raise ValueError(f"{source_name} records[{index}] candidate_region_boxes must be a non-empty list when provided")
+        for candidate_index, candidate_box in enumerate(candidate_boxes):
+            if not isinstance(candidate_box, list) or len(candidate_box) != 4:
+                raise ValueError(
+                    f"{source_name} records[{index}] candidate_region_boxes[{candidate_index}] must contain four coordinates"
+                )
+            for coordinate in candidate_box:
+                try:
+                    float(coordinate)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"{source_name} records[{index}] candidate_region_boxes[{candidate_index}] must be numeric"
+                    ) from exc
+        if target_region_index is not None and target_region_index >= len(candidate_boxes):
+            raise ValueError(
+                f"{source_name} records[{index}] target_region_index must be inside candidate_region_boxes"
+            )
 
 
 def _sample_record(record: dict[str, Any], split: str) -> dict[str, Any]:
@@ -529,6 +577,8 @@ def _sample_record(record: dict[str, Any], split: str) -> dict[str, Any]:
         "caption_id": record["caption_id"],
         "phrase_span": record["phrase_span"],
         "region_box": [float(value) for value in record["region_box"]],
+        "candidate_region_boxes": [[float(value) for value in box] for box in record.get("candidate_region_boxes", [])],
+        "candidate_region_annotation_ids": [int(value) for value in record.get("candidate_region_annotation_ids", [])],
         "target_region_index": int(record.get("target_region_index", 0)),
         "candidate_region_source": record["candidate_region_source"],
         "box_coordinate_convention": record["box_coordinate_convention"],

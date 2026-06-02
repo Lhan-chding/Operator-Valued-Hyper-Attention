@@ -25,6 +25,7 @@ def main() -> int:
     parser.add_argument("--instances", type=Path, required=True)
     parser.add_argument("--candidate-region-source", default="coco_gt_box")
     parser.add_argument("--box-coordinate-convention", default="xyxy_normalized")
+    parser.add_argument("--max-candidate-regions", type=int, default=32)
     args = parser.parse_args()
 
     try:
@@ -49,6 +50,8 @@ def main() -> int:
 
 
 def build_refcoco_stage_records(args: argparse.Namespace) -> dict[str, Any]:
+    if args.max_candidate_regions <= 1:
+        raise ValueError("--max-candidate-regions must be greater than 1 for non-trivial grounding")
     instances = _read_instances(args.instances)
     refs = _read_refs(args.refs)
     records: list[dict[str, Any]] = []
@@ -65,6 +68,7 @@ def build_refcoco_stage_records(args: argparse.Namespace) -> dict[str, Any]:
                 split,
                 candidate_region_source=args.candidate_region_source,
                 box_coordinate_convention=args.box_coordinate_convention,
+                max_candidate_regions=args.max_candidate_regions,
             )
             records.append(record)
             splits[split].append(record["source_id"])
@@ -88,6 +92,7 @@ def build_refcoco_stage_records(args: argparse.Namespace) -> dict[str, Any]:
         "sample_count": len(records_by_ordered_splits),
         "split_counts": {split: len(source_ids) for split, source_ids in sorted(splits.items())},
         "candidate_region_source": args.candidate_region_source,
+        "max_candidate_regions": args.max_candidate_regions,
         "box_coordinate_convention": args.box_coordinate_convention,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -122,6 +127,7 @@ def _read_instances(path: Path) -> dict[str, dict[int, Any]]:
         height = _positive_float(image.get("height"), field=f"image {image_id} height")
         image_by_id[image_id] = {"id": image_id, "width": width, "height": height}
     annotation_by_id = {}
+    annotations_by_image: dict[int, list[dict[str, Any]]] = {}
     for annotation in annotations:
         if not isinstance(annotation, dict):
             continue
@@ -132,8 +138,12 @@ def _read_instances(path: Path) -> dict[str, dict[int, Any]]:
         bbox = annotation.get("bbox")
         if not isinstance(bbox, list) or len(bbox) != 4:
             raise ValueError(f"annotation {ann_id} bbox must be COCO [x,y,w,h]")
-        annotation_by_id[ann_id] = {"id": ann_id, "image_id": image_id, "bbox": [float(value) for value in bbox]}
-    return {"images": image_by_id, "annotations": annotation_by_id}
+        normalized = {"id": ann_id, "image_id": image_id, "bbox": [float(value) for value in bbox]}
+        annotation_by_id[ann_id] = normalized
+        annotations_by_image.setdefault(image_id, []).append(normalized)
+    for image_annotations in annotations_by_image.values():
+        image_annotations.sort(key=lambda item: int(item["id"]))
+    return {"images": image_by_id, "annotations": annotation_by_id, "annotations_by_image": annotations_by_image}
 
 
 def _read_refs(path: Path) -> list[dict[str, Any]]:
@@ -161,11 +171,17 @@ def _ref_base(ref: dict[str, Any], instances: dict[str, dict[int, Any]]) -> dict
     if image_id != annotation["image_id"]:
         raise ValueError(f"ref ann_id {ann_id} image_id disagrees with COCO annotation")
     image = instances["images"][image_id]
+    candidate_annotations = instances["annotations_by_image"].get(image_id, [])
+    if not candidate_annotations:
+        raise ValueError(f"image_id {image_id} has no COCO candidate annotations")
     return {
         "ref_id": _int_value(ref.get("ref_id", ann_id), field="ref_id"),
         "ann_id": ann_id,
         "image_id": image_id,
         "bbox": _normalize_coco_bbox(annotation["bbox"], image["width"], image["height"]),
+        "candidate_annotations": candidate_annotations,
+        "image_width": image["width"],
+        "image_height": image["height"],
     }
 
 
@@ -187,6 +203,7 @@ def _record_for_sentence(
     *,
     candidate_region_source: str,
     box_coordinate_convention: str,
+    max_candidate_regions: int,
 ) -> dict[str, Any]:
     sent_id = _int_value(sentence.get("sent_id"), field="sentence sent_id")
     tokens = sentence.get("tokens")
@@ -197,18 +214,46 @@ def _record_for_sentence(
     if token_count <= 0:
         raise ValueError(f"sentence {sent_id} has no tokens")
     source_id = f"{dataset_name}::image{base['image_id']}::ann{base['ann_id']}::sent{sent_id}"
+    candidate_boxes, candidate_ann_ids, target_region_index = _candidate_regions(
+        base,
+        max_candidate_regions=max_candidate_regions,
+    )
     return {
         "source_id": source_id,
         "image_id": f"image{base['image_id']}",
         "caption_id": f"sent{sent_id}",
         "phrase_span": {"start": 0, "end": token_count},
         "region_box": base["bbox"],
-        "target_region_index": 0,
+        "candidate_region_boxes": candidate_boxes,
+        "candidate_region_annotation_ids": candidate_ann_ids,
+        "target_region_index": target_region_index,
         "candidate_region_source": candidate_region_source,
         "box_coordinate_convention": box_coordinate_convention,
         "original_split": split,
         "raw_ref": f"{dataset_name}://ref{base['ref_id']}/sent{sent_id}",
     }
+
+
+def _candidate_regions(
+    base: dict[str, Any],
+    *,
+    max_candidate_regions: int,
+) -> tuple[list[list[float]], list[int], int]:
+    target_ann_id = int(base["ann_id"])
+    width = float(base["image_width"])
+    height = float(base["image_height"])
+    annotations = list(base["candidate_annotations"])
+    target = [annotation for annotation in annotations if int(annotation["id"]) == target_ann_id]
+    if not target:
+        raise ValueError(f"target annotation {target_ann_id} missing from image candidate annotations")
+    target_annotation = target[0]
+    distractors = [annotation for annotation in annotations if int(annotation["id"]) != target_ann_id]
+    selected = [target_annotation, *distractors[: max_candidate_regions - 1]]
+    selected.sort(key=lambda item: int(item["id"]))
+    candidate_ann_ids = [int(annotation["id"]) for annotation in selected]
+    target_region_index = candidate_ann_ids.index(target_ann_id)
+    candidate_boxes = [_normalize_coco_bbox(annotation["bbox"], width, height) for annotation in selected]
+    return candidate_boxes, candidate_ann_ids, target_region_index
 
 
 def _normalize_coco_bbox(bbox: list[float], width: float, height: float) -> list[float]:

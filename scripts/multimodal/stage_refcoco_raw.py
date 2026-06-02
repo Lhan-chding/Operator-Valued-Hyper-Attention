@@ -26,6 +26,8 @@ def main() -> int:
     parser.add_argument("--records", type=Path, required=True)
     parser.add_argument("--text-features", type=Path, required=True)
     parser.add_argument("--region-features", type=Path, required=True)
+    parser.add_argument("--text-mask", type=Path)
+    parser.add_argument("--region-mask", type=Path)
     parser.add_argument("--failed-samples", type=Path)
     parser.add_argument("--license-tag", required=True)
     parser.add_argument("--preprocessing-version", required=True)
@@ -62,6 +64,8 @@ def stage_refcoco_raw(args: argparse.Namespace) -> dict[str, Any]:
 
     text_shape = _copy_npy(args.text_features, raw_root / "features" / "text_features.npy", sample_count)
     region_shape = _copy_npy(args.region_features, raw_root / "features" / "region_features.npy", sample_count)
+    text_mask_shape = _copy_optional_npy(args.text_mask, raw_root / "features" / "text_mask.npy", sample_count)
+    region_mask_shape = _copy_optional_npy(args.region_mask, raw_root / "features" / "region_mask.npy", sample_count)
     records = _records(
         args.records,
         splits,
@@ -92,6 +96,7 @@ def stage_refcoco_raw(args: argparse.Namespace) -> dict[str, Any]:
         "raw_root": str(raw_root),
         "sample_count": sample_count,
         "feature_shapes": {"text": text_shape, "region": region_shape},
+        "mask_shapes": {"text": text_mask_shape, "region": region_mask_shape},
         "annotation_records": len(records),
         "next": (
             f"python scripts/multimodal/build_cache.py {args.dataset_name} "
@@ -137,6 +142,12 @@ def _copy_npy(source: Path, destination: Path, sample_count: int) -> tuple[int, 
     return tuple(int(dim) for dim in array.shape)
 
 
+def _copy_optional_npy(source: Path | None, destination: Path, sample_count: int) -> tuple[int, ...] | None:
+    if source is None:
+        return None
+    return _copy_npy(source, destination, sample_count)
+
+
 def _records(
     path: Path,
     splits: dict[str, list[str]],
@@ -169,7 +180,7 @@ def _records(
 
 def _stage_record(record: dict[str, Any], split: str, license_tag: str, preprocessing_version: str) -> dict[str, Any]:
     source_id = _required_str(record, "source_id")
-    return {
+    staged = {
         "source_id": source_id,
         "split": split,
         "original_split": str(record.get("original_split") or split),
@@ -184,6 +195,13 @@ def _stage_record(record: dict[str, Any], split: str, license_tag: str, preproce
         "candidate_region_source": str(record.get("candidate_region_source") or "region_features"),
         "box_coordinate_convention": str(record.get("box_coordinate_convention") or "xyxy_normalized"),
     }
+    candidate_boxes = _candidate_region_boxes(record.get("candidate_region_boxes"))
+    if candidate_boxes:
+        staged["candidate_region_boxes"] = candidate_boxes
+    candidate_ann_ids = _candidate_region_annotation_ids(record.get("candidate_region_annotation_ids"))
+    if candidate_ann_ids:
+        staged["candidate_region_annotation_ids"] = candidate_ann_ids
+    return staged
 
 
 def _required_str(record: dict[str, Any], key: str) -> str:
@@ -210,6 +228,27 @@ def _region_box(value: Any) -> list[float]:
         return [float(coordinate) for coordinate in value]
     except (TypeError, ValueError) as exc:
         raise ValueError("region_box must contain four numeric coordinates") from exc
+
+
+def _candidate_region_boxes(value: Any) -> list[list[float]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("candidate_region_boxes must be a list when provided")
+    return [_region_box(box) for box in value]
+
+
+def _candidate_region_annotation_ids(value: Any) -> list[int]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("candidate_region_annotation_ids must be a list when provided")
+    ids: list[int] = []
+    for item in value:
+        if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+            raise ValueError("candidate_region_annotation_ids must contain non-negative integers")
+        ids.append(item)
+    return ids
 
 
 def _target_region_index(value: Any) -> int:
