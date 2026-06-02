@@ -452,7 +452,9 @@ def _public_loss_components(
 def _public_loss_weight(config: MultimodalExperimentConfig, loss_name: str) -> float:
     metadata = (config.loss_metadata or {}).get(loss_name, {})
     if not isinstance(metadata, dict):
-        return 1.0
+        return 0.0 if loss_name == "candidate_individual_loss" else 1.0
+    if loss_name == "candidate_individual_loss" and bool(metadata.get("diagnostic_only", True)):
+        return 0.0
     return float(metadata.get("weight", 1.0))
 
 
@@ -1296,13 +1298,14 @@ def _sentiment_smoke_metrics(
     router_load_by_candidate: Any,
 ) -> dict[str, object]:
     mae = _as_float((prediction - batch.target_y).abs().mean())
-    bounded_score = _bounded_score_from_loss(_task_loss(prediction, batch))
+    pearson = _pearson_correlation(prediction, batch.target_y, batch.target_mask)
+    accuracy, f1 = _binary_sign_accuracy_f1(prediction, batch.target_y, batch.target_mask)
     missing_drop = _missing_modality_fraction(batch)
     metrics = {
         "mae": max(0.0, mae),
-        "pearson_correlation": 0.0,
-        "accuracy": bounded_score,
-        "f1": bounded_score,
+        "pearson_correlation": pearson,
+        "accuracy": accuracy,
+        "f1": f1,
         "missing_modality_performance_drop": missing_drop,
         "corruption_robustness_auc": max(0.0, min(1.0, 1.0 - missing_drop)),
         "router_load_by_corruption_type": {
@@ -1310,9 +1313,44 @@ def _sentiment_smoke_metrics(
         },
         "lrio_rank_entropy": _entropy_proxy(router_load_by_candidate, "LRIO"),
         "spo_prototype_entropy": _entropy_proxy(router_load_by_candidate, "SPO"),
-        "rceo_reliability_calibration": _smoke_rceo_calibration(batch, bounded_score),
+        "rceo_reliability_calibration": _smoke_rceo_calibration(batch, accuracy),
     }
     return {name: metrics[name] for name in SENTIMENT_REQUIRED_PUBLIC_METRICS}
+
+
+def _pearson_correlation(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> float:
+    pred, truth = _masked_flat_pair(prediction, target, mask)
+    if pred.numel() < 2:
+        return 0.0
+    pred_centered = pred - pred.mean()
+    truth_centered = truth - truth.mean()
+    denom = pred_centered.norm() * truth_centered.norm()
+    if float(denom.item()) <= 1e-12:
+        return 0.0
+    return max(-1.0, min(1.0, _as_float((pred_centered * truth_centered).sum() / denom)))
+
+
+def _binary_sign_accuracy_f1(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> tuple[float, float]:
+    pred, truth = _masked_flat_pair(prediction, target, mask)
+    if pred.numel() == 0:
+        return 0.0, 0.0
+    pred_positive = pred >= 0
+    truth_positive = truth >= 0
+    accuracy = (pred_positive == truth_positive).to(dtype=torch.float32).mean()
+    true_positive = (pred_positive & truth_positive).to(dtype=torch.float32).sum()
+    false_positive = (pred_positive & ~truth_positive).to(dtype=torch.float32).sum()
+    false_negative = (~pred_positive & truth_positive).to(dtype=torch.float32).sum()
+    precision = true_positive / (true_positive + false_positive).clamp_min(1.0)
+    recall = true_positive / (true_positive + false_negative).clamp_min(1.0)
+    f1 = 2.0 * precision * recall / (precision + recall).clamp_min(1e-12)
+    return _as_float(accuracy), _as_float(f1)
+
+
+def _masked_flat_pair(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    valid = mask.to(dtype=torch.bool, device=prediction.device)
+    pred = prediction[..., 0][valid].reshape(-1)
+    truth = target[..., 0].to(device=prediction.device, dtype=prediction.dtype)[valid].reshape(-1)
+    return pred, truth
 
 
 def _missing_modality_fraction(batch: MultimodalEpisodeBatch) -> float:

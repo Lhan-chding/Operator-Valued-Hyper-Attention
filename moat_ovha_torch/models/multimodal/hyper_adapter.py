@@ -20,7 +20,9 @@ class MultimodalHyperAdapter(nn.Module):
     def __init__(self, d_model: int, candidate_names: tuple[str, ...] = MULTIMODAL_CANDIDATE_NAMES):
         super().__init__()
         self.candidate_names = candidate_names
-        self.heads = nn.ModuleDict({name: nn.Linear(d_model * 2, 8) for name in candidate_names})
+        self.reliability_projection = nn.Linear(d_model + 1, d_model)
+        self.router_projection = nn.Linear(len(candidate_names), d_model)
+        self.heads = nn.ModuleDict({name: nn.Linear(d_model * 5, 8) for name in candidate_names})
         self._initialize_identity()
 
     def forward(
@@ -28,11 +30,24 @@ class MultimodalHyperAdapter(nn.Module):
         memory_bank: dict[str, torch.Tensor],
         evidence: MultimodalEvidenceBank,
         reliability: ReliabilityPrior | None,
+        router_weights: torch.Tensor | None = None,
     ) -> dict[str, dict[str, torch.Tensor]]:
         params: dict[str, dict[str, torch.Tensor]] = {}
+        reliability_features = _reliability_query_features(self.reliability_projection, reliability, evidence)
+        router_features = _router_query_features(self.router_projection, router_weights, evidence)
         for name in self.candidate_names:
             memory = memory_bank[name].mean(dim=1).unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1)
-            features = torch.cat([evidence.query_features, memory], dim=-1)
+            candidate_feature = _candidate_query_feature(name, evidence)
+            features = torch.cat(
+                [
+                    evidence.query_features,
+                    memory,
+                    candidate_feature,
+                    reliability_features,
+                    router_features,
+                ],
+                dim=-1,
+            )
             raw = self.heads[name](features)
             params[name] = _params_for_name(name, raw)
         return params
@@ -41,6 +56,40 @@ class MultimodalHyperAdapter(nn.Module):
         for head in self.heads.values():
             nn.init.zeros_(head.weight)
             nn.init.zeros_(head.bias)
+        nn.init.zeros_(self.router_projection.weight)
+        nn.init.zeros_(self.router_projection.bias)
+
+
+def _candidate_query_feature(name: str, evidence: MultimodalEvidenceBank) -> torch.Tensor:
+    if name == "TLEO":
+        return evidence.local_features
+    if name == "SPO":
+        return evidence.prototype_features
+    if name == "LRIO":
+        return evidence.low_rank_features
+    if name == "CATO":
+        return evidence.alignment_features
+    raise ValueError(f"unknown multimodal candidate: {name}")
+
+
+def _reliability_query_features(
+    projection: nn.Linear,
+    reliability: ReliabilityPrior | None,
+    evidence: MultimodalEvidenceBank,
+) -> torch.Tensor:
+    if reliability is None:
+        return torch.zeros_like(evidence.query_features)
+    return projection(reliability.features)
+
+
+def _router_query_features(
+    projection: nn.Linear,
+    router_weights: torch.Tensor | None,
+    evidence: MultimodalEvidenceBank,
+) -> torch.Tensor:
+    if router_weights is None:
+        return torch.zeros_like(evidence.query_features)
+    return projection(router_weights.detach().to(dtype=evidence.query_features.dtype, device=evidence.query_features.device))
 
 
 def _params_for_name(name: str, raw: torch.Tensor) -> dict[str, torch.Tensor]:

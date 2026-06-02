@@ -72,6 +72,11 @@ def main() -> int:
     parser.add_argument("--d-model", type=int, default=64)
     parser.add_argument("--memory-tokens", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--validation-fraction", type=float, default=0.20)
+    parser.add_argument("--eval-interval", type=int, default=100)
+    parser.add_argument("--early-stopping-patience", type=int, default=0)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
         "--progress-interval",
@@ -212,6 +217,15 @@ def _run_seed(
     _print_progress("seed:start", seed=seed)
     train_batch = _load_public_batch(layout, config, args.train_split, device)
     eval_batch = _load_public_batch(layout, config, args.eval_split, device)
+    fit_batch, val_batch = _split_train_val_batch(
+        train_batch,
+        validation_fraction=float(args.validation_fraction),
+        seed=seed,
+    )
+    target_mean, target_std = _target_standardizer(fit_batch)
+    fit_batch_std = _standardize_batch_targets(fit_batch, target_mean, target_std)
+    val_batch_std = _standardize_batch_targets(val_batch, target_mean, target_std)
+    eval_batch_std = _standardize_batch_targets(eval_batch, target_mean, target_std)
     field_dims = {name: int(field.x.shape[-1]) for name, field in train_batch.fields.items()}
     model = MultimodalOVHA(
         field_dims=field_dims,
@@ -221,9 +235,15 @@ def _run_seed(
         memory_tokens=int(args.memory_tokens),
     ).to(device)
     initial_parameters = _parameter_vector(model)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.learning_rate))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.learning_rate), weight_decay=float(args.weight_decay))
     max_grad_norm = 0.0
     final_loss = 0.0
+    best_val_loss = float("inf")
+    best_step = 0
+    best_state = _clone_state_dict(model)
+    stale_evals = 0
+    batch_generator = torch.Generator(device=device)
+    batch_generator.manual_seed(int(seed) + 17)
     model.train()
     train_started_at = time.perf_counter()
     _print_progress(
@@ -234,14 +254,34 @@ def _run_seed(
         learning_rate=float(args.learning_rate),
     )
     for step in range(1, int(args.train_steps) + 1):
+        train_step_batch = _sample_batch(fit_batch_std, int(args.batch_size), batch_generator)
         optimizer.zero_grad(set_to_none=True)
-        output = model(train_batch)
-        components = _public_loss_components(output, train_batch, config)
+        output = model(train_step_batch)
+        components = _public_loss_components(output, train_step_batch, config)
         total_loss = torch.stack([value for value in components.values()]).sum()
         total_loss.backward()
         max_grad_norm = max(max_grad_norm, _grad_l2_norm(model))
         optimizer.step()
         final_loss = _as_float(total_loss)
+        if _should_validate(step, int(args.train_steps), int(args.eval_interval)):
+            val_loss = _evaluate_task_loss(model, val_batch_std)
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_step = step
+                best_state = _clone_state_dict(model)
+                stale_evals = 0
+            else:
+                stale_evals += 1
+            if int(args.early_stopping_patience) > 0 and stale_evals >= int(args.early_stopping_patience):
+                _print_progress(
+                    "model:early_stop",
+                    seed=seed,
+                    model="ovha_full",
+                    step=step,
+                    best_step=best_step,
+                    best_val_loss=f"{best_val_loss:.6g}",
+                )
+                break
         if _should_log_progress(step, int(args.train_steps), progress_interval):
             _print_step_progress(
                 seed=seed,
@@ -260,9 +300,10 @@ def _run_seed(
         elapsed=f"{time.perf_counter() - train_started_at:.1f}s",
     )
 
+    model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        eval_output = model(eval_batch)
+        eval_output = _destandardize_output(model(eval_batch_std), target_mean, target_std)
     elapsed = time.perf_counter() - seed_started_at
     hardware = _hardware_metadata(device, elapsed)
     raw_rows = [
@@ -294,6 +335,8 @@ def _run_seed(
         eval_batch,
         seed=seed,
         raw_metric_path=raw_metrics_path,
+        target_mean=target_mean,
+        target_std=target_std,
     )
 
     baseline_rows, baseline_robustness_rows, baseline_summaries = _baseline_rows(
@@ -326,10 +369,178 @@ def _run_seed(
             "seed": seed,
             "ovha_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial_parameters).item()),
             "ovha_max_grad_norm": max_grad_norm,
+            "ovha_best_val_task_loss": best_val_loss,
+            "ovha_best_checkpoint_step": best_step,
+            "ovha_training_protocol": "mini_batch_validation_best_checkpoint",
+            "ovha_batch_size": int(args.batch_size),
+            "ovha_validation_fraction": float(args.validation_fraction),
+            "ovha_target_standardized": True,
             "baseline_count": len(baseline_rows),
             "baseline_summaries": baseline_summaries,
         },
     }
+
+
+def _split_train_val_batch(
+    batch: MultimodalEpisodeBatch,
+    *,
+    validation_fraction: float,
+    seed: int,
+) -> tuple[MultimodalEpisodeBatch, MultimodalEpisodeBatch]:
+    batch_size = int(batch.target_y.shape[0])
+    if batch_size <= 1 or validation_fraction <= 0.0:
+        return batch, batch
+    val_count = max(1, min(batch_size - 1, int(round(batch_size * validation_fraction))))
+    generator = torch.Generator(device=batch.target_y.device)
+    generator.manual_seed(int(seed) + 104729)
+    order = torch.randperm(batch_size, generator=generator, device=batch.target_y.device)
+    val_indices = order[:val_count]
+    fit_indices = order[val_count:]
+    return _slice_batch(batch, fit_indices), _slice_batch(batch, val_indices)
+
+
+def _sample_batch(
+    batch: MultimodalEpisodeBatch,
+    batch_size: int,
+    generator: torch.Generator,
+) -> MultimodalEpisodeBatch:
+    total = int(batch.target_y.shape[0])
+    if batch_size <= 0 or batch_size >= total:
+        return batch
+    indices = torch.randint(total, (batch_size,), generator=generator, device=batch.target_y.device)
+    return _slice_batch(batch, indices)
+
+
+def _slice_batch(batch: MultimodalEpisodeBatch, indices: torch.Tensor) -> MultimodalEpisodeBatch:
+    fields = {
+        name: replace(
+            field,
+            x=field.x.index_select(0, indices),
+            pos=field.pos.index_select(0, indices),
+            mask=field.mask.index_select(0, indices),
+            quality=_slice_optional_tensor(field.quality, indices),
+        )
+        for name, field in batch.fields.items()
+    }
+    query = replace(
+        batch.query,
+        x=batch.query.x.index_select(0, indices),
+        pos=batch.query.pos.index_select(0, indices),
+        query_type=batch.query.query_type.index_select(0, indices),
+        mask=batch.query.mask.index_select(0, indices),
+    )
+    supervision = replace(
+        batch.supervision,
+        task_label=_slice_optional_tensor(batch.supervision.task_label, indices),
+        alignment_pairs=_slice_optional_tensor(batch.supervision.alignment_pairs, indices),
+        alignment_weights=_slice_optional_tensor(batch.supervision.alignment_weights, indices),
+        bbox_targets=_slice_optional_tensor(batch.supervision.bbox_targets, indices),
+        region_targets=_slice_optional_tensor(batch.supervision.region_targets, indices),
+        timestamp_targets=_slice_optional_tensor(batch.supervision.timestamp_targets, indices),
+        modality_missing_mask=_slice_optional_tensor(batch.supervision.modality_missing_mask, indices),
+        corruption_metadata=_slice_optional_tensor_dict(batch.supervision.corruption_metadata, indices),
+        weak_labels=_slice_optional_tensor_dict(batch.supervision.weak_labels, indices),
+        weak_label_confidence=_slice_optional_tensor_dict(batch.supervision.weak_label_confidence, indices),
+    )
+    provenance_indices = [int(index) for index in indices.detach().cpu().tolist()]
+    provenance = replace(
+        batch.provenance,
+        source_id=[batch.provenance.source_id[index] for index in provenance_indices],
+        original_split=[batch.provenance.original_split[index] for index in provenance_indices],
+        raw_ref=[batch.provenance.raw_ref[index] for index in provenance_indices],
+        license_tag=[batch.provenance.license_tag[index] for index in provenance_indices],
+    )
+    hidden = _slice_hidden(batch.hidden, indices)
+    return replace(
+        batch,
+        fields=fields,
+        query=query,
+        target_y=batch.target_y.index_select(0, indices),
+        target_mask=batch.target_mask.index_select(0, indices),
+        supervision=supervision,
+        provenance=provenance,
+        hidden=hidden,
+    )
+
+
+def _slice_optional_tensor(value: Any, indices: torch.Tensor) -> Any:
+    if value is None or not hasattr(value, "index_select"):
+        return value
+    return value.index_select(0, indices)
+
+
+def _slice_optional_tensor_dict(values: dict[str, Any] | None, indices: torch.Tensor) -> dict[str, Any] | None:
+    if values is None:
+        return None
+    return {key: _slice_optional_tensor(value, indices) for key, value in values.items()}
+
+
+def _slice_hidden(hidden: dict[str, Any] | None, indices: torch.Tensor) -> dict[str, Any] | None:
+    if hidden is None:
+        return None
+    return {key: _slice_optional_tensor(value, indices) for key, value in hidden.items()}
+
+
+def _clone_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
+    return {key: value.detach().clone() for key, value in model.state_dict().items()}
+
+
+def _evaluate_task_loss(model: MultimodalOVHA, batch: MultimodalEpisodeBatch) -> float:
+    was_training = model.training
+    model.eval()
+    with torch.no_grad():
+        loss = _task_loss(model(batch).y_hat, batch)
+    if was_training:
+        model.train()
+    return _as_float(loss)
+
+
+def _should_validate(step: int, train_steps: int, eval_interval: int) -> bool:
+    interval = max(1, int(eval_interval))
+    return step == 1 or step == train_steps or step % interval == 0
+
+
+def _target_standardizer(batch: MultimodalEpisodeBatch) -> tuple[torch.Tensor, torch.Tensor]:
+    mask = batch.target_mask.to(dtype=batch.target_y.dtype, device=batch.target_y.device).unsqueeze(-1)
+    denom = mask.sum(dim=(0, 1), keepdim=True).clamp_min(1.0)
+    mean = (batch.target_y * mask).sum(dim=(0, 1), keepdim=True) / denom
+    variance = ((batch.target_y - mean).square() * mask).sum(dim=(0, 1), keepdim=True) / denom
+    std = variance.sqrt().clamp_min(1e-6)
+    return mean.detach(), std.detach()
+
+
+def _standardize_batch_targets(
+    batch: MultimodalEpisodeBatch,
+    target_mean: torch.Tensor,
+    target_std: torch.Tensor,
+) -> MultimodalEpisodeBatch:
+    target_y = (batch.target_y - target_mean) / target_std
+    supervision = replace(
+        batch.supervision,
+        task_label=_standardize_optional_tensor(batch.supervision.task_label, target_mean, target_std),
+    )
+    return replace(batch, target_y=target_y, supervision=supervision)
+
+
+def _standardize_optional_tensor(value: Any, target_mean: torch.Tensor, target_std: torch.Tensor) -> Any:
+    if value is None or not hasattr(value, "shape"):
+        return value
+    try:
+        return (value - target_mean) / target_std
+    except RuntimeError:
+        return value
+
+
+def _destandardize_output(
+    output: MultimodalOVHAOutput,
+    target_mean: torch.Tensor,
+    target_std: torch.Tensor,
+) -> MultimodalOVHAOutput:
+    return replace(
+        output,
+        y_hat=output.y_hat * target_std + target_mean,
+        candidate_values=output.candidate_values * target_std.unsqueeze(-2) + target_mean.unsqueeze(-2),
+    )
 
 
 def _ovha_raw_metric_row(
@@ -552,13 +763,13 @@ def _ovha_variant_kwargs(baseline_name: str) -> dict[str, Any]:
     if baseline_name == "ovha_no_evidence_router":
         return {"use_evidence_router": False}
     if baseline_name == "cato_only":
-        return {"router_weight_policy": {"only": "CATO"}}
+        return {"candidate_names": ("CATO",)}
     if baseline_name == "ovha_no_cato":
-        return {"router_weight_policy": {"drop": "CATO"}}
+        return {"candidate_names": ("TLEO", "SPO", "LRIO")}
     if baseline_name == "ovha_no_lrio":
-        return {"router_weight_policy": {"drop": "LRIO"}}
+        return {"candidate_names": ("TLEO", "SPO", "CATO")}
     if baseline_name == "ovha_no_spo":
-        return {"router_weight_policy": {"drop": "SPO"}}
+        return {"candidate_names": ("TLEO", "LRIO", "CATO")}
     raise ValueError(f"unknown OVHA ablation baseline: {baseline_name}")
 
 
@@ -715,14 +926,15 @@ def _public_main_metrics(
         return {name: metrics[name] for name in REGION_TEXT_REQUIRED_PUBLIC_METRICS}
     if _is_sentiment_task(config.task_type):
         mae = _as_float((prediction - batch.target_y).abs().mean())
-        bounded_score = _bounded_score_from_loss(_task_loss(prediction, batch))
+        pearson = _pearson_correlation(prediction, batch.target_y, batch.target_mask)
+        accuracy, f1 = _binary_sign_accuracy_f1(prediction, batch.target_y, batch.target_mask)
         missing_drop = _missing_modality_fraction(batch)
         corruption_key = _missing_corruption_key(batch)
         metrics = {
             "mae": max(0.0, mae),
-            "pearson_correlation": 0.0,
-            "accuracy": bounded_score,
-            "f1": bounded_score,
+            "pearson_correlation": pearson,
+            "accuracy": accuracy,
+            "f1": f1,
             "missing_modality_performance_drop": missing_drop,
             "corruption_robustness_auc": max(0.0, min(1.0, 1.0 - missing_drop)),
             "router_load_by_corruption_type": {
@@ -730,7 +942,7 @@ def _public_main_metrics(
             },
             "lrio_rank_entropy": _entropy_proxy(router_load_by_candidate, "LRIO"),
             "spo_prototype_entropy": _entropy_proxy(router_load_by_candidate, "SPO"),
-            "rceo_reliability_calibration": _rceo_calibration(batch, bounded_score),
+            "rceo_reliability_calibration": _rceo_calibration(batch, accuracy),
         }
         return {name: metrics[name] for name in SENTIMENT_REQUIRED_PUBLIC_METRICS}
     return {}
@@ -744,13 +956,22 @@ def _ovha_robustness_rows(
     seed: int,
     raw_metric_path: Path,
     model_name: str = "ovha_full",
+    target_mean: torch.Tensor | None = None,
+    target_std: torch.Tensor | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     model.eval()
     for corruption_type in ("clean", *DEFAULT_REQUIRED_STRESS_TARGETS):
         corrupted = _corrupted_batch(batch, corruption_type)
+        model_batch = (
+            _standardize_batch_targets(corrupted, target_mean, target_std)
+            if target_mean is not None and target_std is not None
+            else corrupted
+        )
         with torch.no_grad():
-            output = model(corrupted)
+            output = model(model_batch)
+            if target_mean is not None and target_std is not None:
+                output = _destandardize_output(output, target_mean, target_std)
             loss = _task_loss(output.y_hat, corrupted)
         rows.append(
             _robustness_row(
@@ -952,6 +1173,41 @@ def _is_sentiment_task(task_type: str) -> bool:
 
 def _bounded_score_from_loss(loss: torch.Tensor) -> float:
     return max(0.0, min(1.0, 1.0 / (1.0 + max(0.0, _as_float(loss)))))
+
+
+def _pearson_correlation(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> float:
+    pred, truth = _masked_flat_pair(prediction, target, mask)
+    if pred.numel() < 2:
+        return 0.0
+    pred_centered = pred - pred.mean()
+    truth_centered = truth - truth.mean()
+    denom = pred_centered.norm() * truth_centered.norm()
+    if float(denom.item()) <= 1e-12:
+        return 0.0
+    return max(-1.0, min(1.0, _as_float((pred_centered * truth_centered).sum() / denom)))
+
+
+def _binary_sign_accuracy_f1(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> tuple[float, float]:
+    pred, truth = _masked_flat_pair(prediction, target, mask)
+    if pred.numel() == 0:
+        return 0.0, 0.0
+    pred_positive = pred >= 0
+    truth_positive = truth >= 0
+    accuracy = (pred_positive == truth_positive).to(dtype=torch.float32).mean()
+    true_positive = (pred_positive & truth_positive).to(dtype=torch.float32).sum()
+    false_positive = (pred_positive & ~truth_positive).to(dtype=torch.float32).sum()
+    false_negative = (~pred_positive & truth_positive).to(dtype=torch.float32).sum()
+    precision = true_positive / (true_positive + false_positive).clamp_min(1.0)
+    recall = true_positive / (true_positive + false_negative).clamp_min(1.0)
+    f1 = 2.0 * precision * recall / (precision + recall).clamp_min(1e-12)
+    return _as_float(accuracy), _as_float(f1)
+
+
+def _masked_flat_pair(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    valid = mask.to(dtype=torch.bool, device=prediction.device)
+    pred = prediction[..., 0][valid].reshape(-1)
+    truth = target[..., 0].to(device=prediction.device, dtype=prediction.dtype)[valid].reshape(-1)
+    return pred, truth
 
 
 def _candidate_probability(values: Any, candidate: str, *, default: float) -> float:

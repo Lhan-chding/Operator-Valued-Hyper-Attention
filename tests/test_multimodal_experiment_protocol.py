@@ -919,10 +919,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
     def test_public_main_internal_ovha_ablation_variant_mapping_is_structural(self):
         module = importlib.import_module("scripts.multimodal.run_public_main")
 
-        self.assertEqual(module._ovha_variant_kwargs("cato_only"), {"router_weight_policy": {"only": "CATO"}})
-        self.assertEqual(module._ovha_variant_kwargs("ovha_no_cato"), {"router_weight_policy": {"drop": "CATO"}})
-        self.assertEqual(module._ovha_variant_kwargs("ovha_no_lrio"), {"router_weight_policy": {"drop": "LRIO"}})
-        self.assertEqual(module._ovha_variant_kwargs("ovha_no_spo"), {"router_weight_policy": {"drop": "SPO"}})
+        self.assertEqual(module._ovha_variant_kwargs("cato_only"), {"candidate_names": ("CATO",)})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_cato"), {"candidate_names": ("TLEO", "SPO", "LRIO")})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_lrio"), {"candidate_names": ("TLEO", "SPO", "CATO")})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_spo"), {"candidate_names": ("TLEO", "LRIO", "CATO")})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_rceo"), {"use_reliability_prior": False})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_evidence_router"), {"use_evidence_router": False})
         with self.assertRaisesRegex(ValueError, "unknown OVHA ablation baseline"):

@@ -15,8 +15,13 @@ FORBIDDEN_V1_STACK_NAMES = ("RCEO", "MMRO", "CTRO", "TLDO", "OMRO")
 
 
 def assert_candidate_names(names: tuple[str, ...] | list[str]) -> None:
-    if tuple(names) != MULTIMODAL_CANDIDATE_NAMES:
-        raise ValueError("Only TLEO / SPO / LRIO / CATO may enter the v1 candidate stack")
+    values = tuple(names)
+    if not values:
+        raise ValueError("At least one TLEO / SPO / LRIO / CATO candidate must enter the v1 candidate stack")
+    allowed = set(MULTIMODAL_CANDIDATE_NAMES)
+    invalid = sorted(name for name in values if name not in allowed)
+    if invalid:
+        raise ValueError(f"Only TLEO / SPO / LRIO / CATO may enter the v1 candidate stack: {invalid}")
 
 
 def assert_stackable(outputs: dict[str, CandidateOutput], batch_size: int, q_count: int, dy: int) -> None:
@@ -38,17 +43,25 @@ def assert_stackable(outputs: dict[str, CandidateOutput], batch_size: int, q_cou
             )
 
 
-def make_candidate_bank(d_model: int, output_dim: int) -> nn.ModuleDict:
-    return nn.ModuleDict(
-        {
-            "TLEO": TLEOPrimitive(d_model, output_dim),
-            "SPO": SPOPrimitive(d_model, output_dim),
-            "LRIO": LRIOPrimitive(d_model, output_dim),
-            "CATO": CATOPrimitive(d_model, output_dim),
-        }
-    )
+def make_candidate_bank(
+    d_model: int,
+    output_dim: int,
+    candidate_names: tuple[str, ...] = MULTIMODAL_CANDIDATE_NAMES,
+) -> nn.ModuleDict:
+    assert_candidate_names(candidate_names)
+    factories = {
+        "TLEO": TLEOPrimitive,
+        "SPO": SPOPrimitive,
+        "LRIO": LRIOPrimitive,
+        "CATO": CATOPrimitive,
+    }
+    return nn.ModuleDict({name: factories[name](d_model, output_dim) for name in candidate_names})
 
 
-def stack_candidate_values(outputs: dict[str, CandidateOutput]) -> torch.Tensor:
-    assert_candidate_names(tuple(outputs))
-    return torch.stack([outputs[name].value for name in MULTIMODAL_CANDIDATE_NAMES], dim=-2)
+def stack_candidate_values(
+    outputs: dict[str, CandidateOutput],
+    candidate_names: tuple[str, ...] | None = None,
+) -> torch.Tensor:
+    names = tuple(outputs) if candidate_names is None else tuple(candidate_names)
+    assert_candidate_names(names)
+    return torch.stack([outputs[name].value for name in names], dim=-2)

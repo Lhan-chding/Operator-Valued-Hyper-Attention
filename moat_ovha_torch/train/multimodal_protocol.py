@@ -47,7 +47,7 @@ CONTROLLED_REQUIRED_STAGE_LOSSES = {
 }
 PUBLIC_REQUIRED_STAGE_LOSSES = {
     "T0": ("cache_validation",),
-    "T5": ("task_loss", "candidate_individual_loss"),
+    "T5": ("task_loss",),
 }
 ROBUSTNESS_REQUIRED_STAGE_LOSSES = {
     "T0": ("cache_validation",),
@@ -182,6 +182,8 @@ def _validate_losses(
                     errors.append(f"unknown or unmarked public loss {loss} in {stage}")
                 elif loss in PUBLIC_MARKED_WEAK_LOSSES:
                     _validate_marked_weak_loss(loss, loss_metadata, errors)
+                elif loss == "candidate_individual_loss":
+                    _validate_public_candidate_loss_metadata(loss_metadata, errors)
             _validate_loss_weight_metadata(loss, loss_metadata, errors)
 
 
@@ -257,6 +259,28 @@ def _validate_loss_weight_metadata(
         return
     if not math.isfinite(weight) or weight < 0.0:
         errors.append(f"loss weight must be a finite non-negative number: {loss}")
+
+
+def _validate_public_candidate_loss_metadata(
+    loss_metadata: dict[str, dict[str, Any]],
+    errors: list[str],
+) -> None:
+    metadata = loss_metadata.get("candidate_individual_loss", {})
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        errors.append("loss metadata must be structured: candidate_individual_loss")
+        return
+    try:
+        weight = float(metadata.get("weight", 0.0))
+    except (TypeError, ValueError):
+        weight = float("nan")
+    diagnostic_only = bool(metadata.get("diagnostic_only", True))
+    if weight != 0.0 or not diagnostic_only:
+        errors.append(
+            "public candidate_individual_loss must be diagnostic_only with weight 0.0; "
+            "only controlled data may train every candidate against the same target"
+        )
 
 
 def _validate_adapter_params(params_by_candidate: dict[str, list[str]], errors: list[str]) -> None:

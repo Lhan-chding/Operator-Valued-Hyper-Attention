@@ -2398,7 +2398,7 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
 
         self.assertTrue(torch.equal(output.logit_parts["memory"].argmax(dim=-1), torch.arange(4).view(1, 4)))
 
-    def test_evidence_encoder_uses_explicit_query_relation_code_as_router_prior(self):
+    def test_evidence_encoder_ignores_controlled_query_relation_code_as_router_prior(self):
         import torch
 
         from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import ControlledSyntheticMultimodalAdapter
@@ -2418,20 +2418,14 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
 
         evidence = encoder(batch)
 
-        self.assertTrue(
-            torch.equal(
-                evidence.candidate_evidence_logits.argmax(dim=-1),
-                batch.hidden["true_active_operator"],
-            )
-        )
+        self.assertFalse(torch.equal(evidence.candidate_evidence_logits.argmax(dim=-1), batch.hidden["true_active_operator"]))
+        self.assertEqual(float(evidence.diagnostics["explicit_query_relation_prior_rate"].item()), 0.0)
         self.assertNotIn("true_active_operator", str(batch.model_inputs()))
 
-    def test_evidence_encoder_uses_controlled_family_relation_prior_without_hidden_input(self):
+    def test_evidence_encoder_does_not_use_controlled_family_relation_prior(self):
         import torch
 
         from moat_ovha_torch.data.multimodal.adapters.controlled_synthetic import (
-            CONTROLLED_FAMILY_ACTIVE_OPERATOR,
-            CONTROLLED_OPERATOR_ORDER,
             ControlledSyntheticMultimodalAdapter,
         )
         from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceEncoder
@@ -2446,9 +2440,9 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
             with self.subTest(family=family):
                 batch = adapter.sample_batch(family=family, batch_size=2, query_count=4, device="cpu")
                 evidence = encoder(batch)
-                expected = CONTROLLED_OPERATOR_ORDER.index(CONTROLLED_FAMILY_ACTIVE_OPERATOR[family])
 
-                self.assertTrue(torch.equal(evidence.candidate_evidence_logits.argmax(dim=-1), torch.full((2, 4), expected)))
+                self.assertEqual(float(evidence.diagnostics["controlled_family_relation_prior_rate"].item()), 0.0)
+                self.assertFalse(torch.equal(evidence.candidate_evidence_logits.argmax(dim=-1), batch.hidden["true_active_operator"]))
                 self.assertNotIn("true_active_operator", str(batch.model_inputs()))
 
     def test_controlled_spo_and_lrio_have_non_degenerate_adapter_truth(self):
@@ -2510,7 +2504,7 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
         self.assertTrue(torch.allclose(batch.hidden["true_candidate_values"][..., cato_index, :], expected_cato))
         self.assertTrue(torch.allclose(batch.target_y, expected_cato))
 
-    def test_rceo_reliability_prior_reinforces_evidence_operator_prior(self):
+    def test_rceo_reliability_prior_does_not_duplicate_evidence_operator_prior(self):
         import torch
 
         from moat_ovha_torch.data.multimodal.typed_batch import (
@@ -2573,7 +2567,23 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
 
         reliability = prior(batch, evidence)
 
-        self.assertTrue(torch.equal(reliability.operator_logit_bias.argmax(dim=-1), torch.arange(4).view(1, 4)))
+        perturbed = evidence.__class__(
+            query_features=evidence.query_features,
+            global_features=evidence.global_features,
+            local_features=evidence.local_features,
+            prototype_features=evidence.prototype_features,
+            low_rank_features=evidence.low_rank_features,
+            alignment_features=evidence.alignment_features,
+            candidate_evidence_logits=evidence.candidate_evidence_logits + 100.0,
+            local_entropy=evidence.local_entropy,
+            alignment_entropy=evidence.alignment_entropy,
+            field_features=evidence.field_features,
+            diagnostics=evidence.diagnostics,
+        )
+        perturbed_reliability = prior(batch, perturbed)
+
+        self.assertTrue(torch.allclose(reliability.operator_logit_bias, perturbed_reliability.operator_logit_bias))
+        self.assertEqual(float(reliability.diagnostics["evidence_conditioned_bias_norm"].item()), 0.0)
 
     def test_oracle_matrix_true_true_reconstructs_controlled_targets(self):
         import torch

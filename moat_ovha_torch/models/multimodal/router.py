@@ -44,10 +44,16 @@ class MultimodalRelationRouter(nn.Module):
             memory = memory_bank[name].mean(dim=1).unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1)
             memory_logits.append(self.memory_head(torch.cat([evidence.query_features, memory], dim=-1)))
         memory_logit = torch.cat(memory_logits, dim=-1) + self.query_candidate_head(evidence.query_features)
+        candidate_indices = torch.as_tensor(
+            [MULTIMODAL_CANDIDATE_NAMES.index(name) for name in self.candidate_names],
+            dtype=torch.long,
+            device=evidence.candidate_evidence_logits.device,
+        )
+        candidate_evidence_logits = evidence.candidate_evidence_logits.index_select(-1, candidate_indices)
         evidence_logit = (
-            evidence.candidate_evidence_logits
+            candidate_evidence_logits
             if self.use_evidence_router
-            else torch.zeros_like(evidence.candidate_evidence_logits)
+            else torch.zeros_like(candidate_evidence_logits)
         )
         reliability_logit = (
             reliability.operator_logit_bias

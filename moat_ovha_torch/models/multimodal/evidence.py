@@ -9,15 +9,6 @@ from moat_ovha_torch.data.multimodal.typed_batch import MultimodalEpisodeBatch
 from moat_ovha_torch.models.multimodal.operator_bank import MULTIMODAL_CANDIDATE_NAMES
 
 
-CONTROLLED_FAMILY_RELATION_INDEX = {
-    "tleo_local_evidence": 0,
-    "spo_global_prototype": 1,
-    "lrio_low_rank_interaction": 2,
-    "cato_alignment_transport": 3,
-    "rceo_reliability_corruption": 2,
-}
-
-
 @dataclass(frozen=True)
 class MultimodalEvidenceBank:
     query_features: torch.Tensor
@@ -65,26 +56,20 @@ class MultimodalEvidenceEncoder(nn.Module):
         alignment_features, alignment_entropy = _alignment_features(query_features, field_features)
         local_features = self.local_head(torch.cat([local_features, repeated_global], dim=-1))
         alignment_features = self.alignment_head(torch.cat([alignment_features, repeated_global], dim=-1))
-        explicit_relation_logits, explicit_relation_rate = _explicit_query_relation_logits(
-            batch.query.x,
-            len(MULTIMODAL_CANDIDATE_NAMES),
-            dtype=query_features.dtype,
-            device=query_features.device,
-        )
-        controlled_relation_logits, controlled_relation_rate = _controlled_family_relation_logits(
-            batch.task_type,
+        explicit_relation_logits, explicit_relation_rate = _explicit_query_type_relation_logits(
+            batch.query.query_type,
             query_features.shape[:2],
             len(MULTIMODAL_CANDIDATE_NAMES),
             dtype=query_features.dtype,
             device=query_features.device,
         )
-        candidate_evidence_logits = self.evidence_logit_head(fused) + explicit_relation_logits + controlled_relation_logits
+        candidate_evidence_logits = self.evidence_logit_head(fused) + explicit_relation_logits
         diagnostics = {
             "local_entropy": local_entropy,
             "alignment_entropy": alignment_entropy,
             "field_count": torch.tensor(float(len(field_features)), dtype=query_features.dtype, device=query_features.device),
             "explicit_query_relation_prior_rate": explicit_relation_rate,
-            "controlled_family_relation_prior_rate": controlled_relation_rate,
+            "controlled_family_relation_prior_rate": torch.zeros((), dtype=query_features.dtype, device=query_features.device),
         }
         return MultimodalEvidenceBank(
             query_features=query_features,
@@ -133,43 +118,29 @@ def _paired_field_interaction(pooled: dict[str, torch.Tensor], query_features: t
     if len(values) == 1:
         interaction = values[0]
     else:
-        interaction = values[0] * values[1]
+        pairwise = []
+        for left_index, left in enumerate(values):
+            for right in values[left_index + 1:]:
+                pairwise.append(left * right)
+        interaction = torch.stack(pairwise, dim=0).mean(dim=0)
     return interaction.unsqueeze(1).expand(-1, query_features.shape[1], -1)
 
 
-def _explicit_query_relation_logits(
-    query_x: torch.Tensor,
-    candidate_count: int,
-    *,
-    dtype: torch.dtype,
-    device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    shape = query_x.shape
-    if len(shape) != 3 or int(shape[-1]) < candidate_count:
-        zeros = torch.zeros(*shape[:2], candidate_count, dtype=dtype, device=device)
-        return zeros, torch.zeros((), dtype=dtype, device=device)
-    prefix = query_x[..., :candidate_count].to(dtype=dtype, device=device)
-    row_sum = prefix.sum(dim=-1)
-    max_value = prefix.max(dim=-1).values
-    min_value = prefix.min(dim=-1).values
-    is_relation_code = (
-        (row_sum - 1.0).abs() <= 1e-6
-    ) & (max_value >= 1.0 - 1e-6) & (min_value >= -1e-6)
-    mask = is_relation_code.unsqueeze(-1).to(dtype=dtype)
-    return prefix * mask * 8.0, mask.mean()
-
-
-def _controlled_family_relation_logits(
-    task_type: str,
+def _explicit_query_type_relation_logits(
+    query_type: torch.Tensor,
     batch_query_shape: torch.Size,
     candidate_count: int,
     *,
     dtype: torch.dtype,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    logits = torch.zeros(*batch_query_shape, candidate_count, dtype=dtype, device=device)
-    relation_index = CONTROLLED_FAMILY_RELATION_INDEX.get(str(task_type))
-    if relation_index is None:
-        return logits, torch.zeros((), dtype=dtype, device=device)
-    logits[..., relation_index] = 6.0
-    return logits, torch.ones((), dtype=dtype, device=device)
+    zeros = torch.zeros(*batch_query_shape, candidate_count, dtype=dtype, device=device)
+    shape = getattr(query_type, "shape", None)
+    if shape is None or len(shape) not in (2, 3):
+        return zeros, torch.zeros((), dtype=dtype, device=device)
+    values = query_type.to(dtype=dtype, device=device)
+    if values.ndim == 3 and int(values.shape[-1]) == candidate_count:
+        # Query type may encode public task/query family, but never controlled hidden active operator.
+        # Keep the prior deliberately weak so an untrained router cannot become one-hot.
+        return 0.25 * values, torch.ones((), dtype=dtype, device=device)
+    return zeros, torch.zeros((), dtype=dtype, device=device)

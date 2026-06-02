@@ -9,18 +9,31 @@ from moat_ovha_torch.models.multimodal.primitives.base import CandidateOutput, M
 class SPOPrimitive(MultimodalCandidatePrimitive):
     name = "SPO"
 
-    def __init__(self, d_model: int, output_dim: int):
+    def __init__(self, d_model: int, output_dim: int, num_prototypes: int = 4):
         super().__init__()
+        self.prototypes = nn.Parameter(torch.randn(num_prototypes, d_model) * 0.02)
+        self.context_proj = nn.Linear(d_model, d_model)
+        self.query_proj = nn.Linear(d_model, d_model)
+        self.memory_proj = nn.Linear(d_model, d_model)
+        self.norm = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, output_dim)
 
     def forward(self, batch, memory_slot: torch.Tensor, evidence, params: dict[str, torch.Tensor], output_dim: int) -> CandidateOutput:
-        feature = evidence.prototype_features + memory_slot.mean(dim=1).unsqueeze(1)
+        context = self.context_proj(evidence.global_features)
+        base_logits = torch.matmul(context, self.prototypes.transpose(0, 1)).unsqueeze(1)
+        shift = 0.5 * torch.tanh(params["prototype_logits_shift"])
+        temperature = params["prototype_temperature"].clamp_min(1e-4)
+        logits = (base_logits + shift) / temperature
+        weights = torch.softmax(logits, dim=-1)
+        prototype_mix = torch.matmul(weights, self.prototypes)
+        memory = self.memory_proj(memory_slot.mean(dim=1)).unsqueeze(1)
+        feature = self.norm(prototype_mix + self.query_proj(evidence.query_features) + memory)
         value = apply_scale_bias(self.head(feature), params)
-        logits = params.get("prototype_logits_shift")
         diagnostics = {
             "prototype_entropy": _entropy(logits) if logits is not None else torch.zeros((), device=value.device),
             "top_prototype": _top_index(logits, value.device),
             "prototype_temperature": params.get("prototype_temperature"),
+            "prototype_usage": weights.mean(dim=(0, 1)),
             "candidate": self.name,
         }
         return CandidateOutput(value=value, feature=feature, diagnostics=diagnostics)

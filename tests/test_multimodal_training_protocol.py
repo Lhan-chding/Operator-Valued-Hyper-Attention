@@ -81,7 +81,7 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
         self.assertFalse(incomplete_public.ok)
         joined_public = "\n".join(incomplete_public.errors)
         self.assertIn("losses_by_stage missing stage: T0", joined_public)
-        self.assertIn("cmu_mosi T5 must include required loss/record: candidate_individual_loss", joined_public)
+        self.assertNotIn("candidate_individual_loss", joined_public)
 
         incomplete_region = validate_training_protocol(
             {
@@ -296,13 +296,34 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
                 },
                 "loss_metadata": {
                     "task_loss": {"weight": 1.0},
-                    "candidate_individual_loss": {"weight": 0.03},
+                    "candidate_individual_loss": {"weight": 0.0, "diagnostic_only": True},
                 },
                 "adapter_params_by_candidate": _valid_adapter_params(),
             }
         )
 
         self.assertTrue(weighted.ok, weighted.errors)
+
+        train_candidate = validate_training_protocol(
+            {
+                "task_type": "sentiment_emotion",
+                "training_stages": ["T0", "T5"],
+                "losses_by_stage": {
+                    "T0": ["cache_validation"],
+                    "T5": ["task_loss", "candidate_individual_loss"],
+                },
+                "loss_metadata": {
+                    "candidate_individual_loss": {"weight": 0.03, "diagnostic_only": False},
+                },
+                "adapter_params_by_candidate": _valid_adapter_params(),
+            }
+        )
+
+        self.assertFalse(train_candidate.ok)
+        self.assertIn(
+            "public candidate_individual_loss must be diagnostic_only with weight 0.0",
+            "\n".join(train_candidate.errors),
+        )
 
         invalid = validate_training_protocol(
             {

@@ -28,6 +28,12 @@
     "T0": ["cache_validation"],
     "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss"]
   },
+  "loss_metadata": {
+    "candidate_individual_loss": {
+      "weight": 0.0,
+      "diagnostic_only": true
+    }
+  },
   "adapter_params_by_candidate": {
     "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
     "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],

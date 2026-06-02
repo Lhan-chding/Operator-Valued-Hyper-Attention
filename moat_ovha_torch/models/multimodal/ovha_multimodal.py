@@ -47,8 +47,8 @@ class MultimodalOVHA(nn.Module):
         router_weight_policy: dict[str, str] | None = None,
     ):
         super().__init__()
-        if tuple(candidate_names) != MULTIMODAL_CANDIDATE_NAMES:
-            raise ValueError("MultimodalOVHA v1 requires exactly TLEO / SPO / LRIO / CATO")
+        candidate_names = tuple(candidate_names)
+        _validate_candidate_subset(candidate_names)
         self.output_dim = output_dim
         self.candidate_names = candidate_names
         self.use_evidence_router = bool(use_evidence_router)
@@ -61,7 +61,7 @@ class MultimodalOVHA(nn.Module):
             candidate_names=candidate_names,
             use_evidence_router=self.use_evidence_router,
         )
-        self.candidate_primitives = make_candidate_bank(d_model=d_model, output_dim=output_dim)
+        self.candidate_primitives = make_candidate_bank(d_model=d_model, output_dim=output_dim, candidate_names=candidate_names)
 
     def forward(
         self,
@@ -71,7 +71,7 @@ class MultimodalOVHA(nn.Module):
     ) -> MultimodalOVHAOutput:
         batch.model_inputs()
         evidence = self.evidence_encoder(batch)
-        memory_bank = self.memory_encoder(evidence.global_features)
+        memory_bank = self.memory_encoder(evidence.global_features, evidence)
         reliability = self.reliability_prior(batch, evidence) if self.reliability_prior is not None else None
         router_output, params = self.joint_router_adapter(memory_bank, evidence, reliability)
 
@@ -86,7 +86,7 @@ class MultimodalOVHA(nn.Module):
             )
         batch_size, q_count = batch.target_y.shape[0], batch.target_y.shape[1]
         assert_stackable(candidate_outputs, batch_size, q_count, self.output_dim)
-        candidate_values = stack_candidate_values(candidate_outputs)
+        candidate_values = stack_candidate_values(candidate_outputs, self.candidate_names)
         router_weights = _effective_router_weights(
             router_output.weights,
             router_weight_override,
@@ -105,6 +105,7 @@ class MultimodalOVHA(nn.Module):
                 for key, value in router_output.logit_parts.items()
             },
             "candidate_loss": candidate_losses,
+            "candidate_value_stats": _candidate_value_stats(candidate_outputs),
             "adapter_params": _adapter_param_diagnostics(params),
             "adapter_params_detail": _adapter_param_details(params),
             "memory_slot_norm": {name: memory_bank[name].norm(dim=-1).mean() for name in self.candidate_names},
@@ -181,6 +182,17 @@ def _validated_router_weight_policy(
     return dict(router_weight_policy)
 
 
+def _validate_candidate_subset(candidate_names: tuple[str, ...]) -> None:
+    if not candidate_names:
+        raise ValueError("MultimodalOVHA requires at least one active candidate")
+    allowed = set(MULTIMODAL_CANDIDATE_NAMES)
+    invalid = sorted(name for name in candidate_names if name not in allowed)
+    if invalid:
+        raise ValueError(f"MultimodalOVHA candidates must be TLEO/SPO/LRIO/CATO: {invalid}")
+    if len(set(candidate_names)) != len(candidate_names):
+        raise ValueError("MultimodalOVHA candidate_names must not contain duplicates")
+
+
 def _router_weight_policy_diagnostics(router_weight_policy: dict[str, str] | None) -> dict[str, str] | None:
     if router_weight_policy is None:
         return None
@@ -205,12 +217,16 @@ def _candidate_losses(
 
 
 def _adapter_param_diagnostics(params: dict[str, dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
-    return {
-        "TLEO_lengthscale": params["TLEO"]["lengthscale"].mean(),
-        "SPO_temperature": params["SPO"]["prototype_temperature"].mean(),
-        "LRIO_rank_entropy": _entropy(params["LRIO"]["rank_logits"]),
-        "CATO_alignment_temperature": params["CATO"]["alignment_temperature"].mean(),
-    }
+    diagnostics = {}
+    if "TLEO" in params:
+        diagnostics["TLEO_lengthscale"] = params["TLEO"]["lengthscale"].mean()
+    if "SPO" in params:
+        diagnostics["SPO_temperature"] = params["SPO"]["prototype_temperature"].mean()
+    if "LRIO" in params:
+        diagnostics["LRIO_rank_entropy"] = _entropy(params["LRIO"]["rank_logits"])
+    if "CATO" in params:
+        diagnostics["CATO_alignment_temperature"] = params["CATO"]["alignment_temperature"].mean()
+    return diagnostics
 
 
 def _adapter_param_details(params: dict[str, dict[str, torch.Tensor]]) -> dict[str, dict[str, torch.Tensor]]:
@@ -237,3 +253,18 @@ def _candidate_diagnostics(
         diagnostics[name] = values
     diagnostics["RCEO"] = dict(reliability.diagnostics) if reliability is not None else {}
     return diagnostics
+
+
+def _candidate_value_stats(candidate_outputs: dict[str, CandidateOutput]) -> dict[str, dict[str, torch.Tensor]]:
+    stats = {}
+    for name, output in candidate_outputs.items():
+        values = output.value.detach()
+        abs_values = values.abs().reshape(-1)
+        stats[name] = {
+            "mean": values.mean(),
+            "std": values.std(unbiased=False),
+            "min": values.min(),
+            "max": values.max(),
+            "p95_abs": torch.quantile(abs_values, 0.95) if abs_values.numel() else torch.zeros((), device=values.device),
+        }
+    return stats

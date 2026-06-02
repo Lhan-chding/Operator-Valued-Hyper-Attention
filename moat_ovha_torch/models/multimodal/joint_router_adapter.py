@@ -24,5 +24,5 @@ class MultimodalJointRouterAdapter(nn.Module):
 
     def forward(self, memory_bank, evidence, reliability):
         router_output = self.router(memory_bank, evidence, reliability)
-        params = self.hyper_adapter(memory_bank, evidence, reliability)
+        params = self.hyper_adapter(memory_bank, evidence, reliability, router_weights=router_output.weights.detach())
         return router_output, params
