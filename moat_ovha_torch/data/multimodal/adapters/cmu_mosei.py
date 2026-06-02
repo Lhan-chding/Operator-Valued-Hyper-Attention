@@ -29,7 +29,7 @@ class CMUMOSEIAdapter:
     version: str = "v0.1"
 
     def discover_raw(self, raw_root: Path) -> RawDatasetManifest:
-        return require_files(
+        manifest = require_files(
             self.name,
             raw_root,
             (
@@ -45,6 +45,18 @@ class CMUMOSEIAdapter:
                 "metadata/corruption_transforms.json",
                 "splits.json",
             ),
+        )
+        files = dict(manifest.files)
+        for modality in ("text", "audio", "vision"):
+            relative = f"features/{modality}_mask.npy"
+            path = raw_root / relative
+            if path.exists():
+                files[relative] = path
+        return RawDatasetManifest(
+            dataset_name=manifest.dataset_name,
+            raw_root=manifest.raw_root,
+            files=files,
+            missing_files=manifest.missing_files,
         )
 
     def build_index(self, manifest: RawDatasetManifest):
@@ -241,7 +253,8 @@ def _write_split_cache_files(
     for modality, source in feature_sources.items():
         shard = _load_and_select_rows(source, row_indices, artifact_name=f"{modality} features")
         _write_array(root / "token_fields" / f"{modality}_{split}.npy", shard)
-        _write_position_and_mask_artifacts(root, modality, split, shard)
+        mask = _load_optional_mask(manifest.files.get(f"features/{modality}_mask.npy"), row_indices, shard, artifact_name=f"{modality} mask")
+        _write_position_and_mask_artifacts(root, modality, split, shard, mask=mask)
     token_manifest = {
         modality: {
             "x": f"token_fields/{modality}_{split}.npy",
@@ -293,7 +306,14 @@ def _write_array(destination: Path, array: np.ndarray) -> None:
     np.save(destination, array)
 
 
-def _write_position_and_mask_artifacts(root: Path, modality: str, split: str, shard: np.ndarray) -> None:
+def _write_position_and_mask_artifacts(
+    root: Path,
+    modality: str,
+    split: str,
+    shard: np.ndarray,
+    *,
+    mask: np.ndarray | None = None,
+) -> None:
     if shard.ndim < 2:
         raise ValueError(f"{modality} feature shard for split {split} must have at least [sample, token] axes")
     sample_count = int(shard.shape[0])
@@ -302,9 +322,26 @@ def _write_position_and_mask_artifacts(root: Path, modality: str, split: str, sh
         np.arange(token_count, dtype=np.float32).reshape(1, token_count, 1),
         (sample_count, token_count, 1),
     ).copy()
-    mask = np.ones((sample_count, token_count), dtype=bool)
+    if mask is None:
+        mask = np.ones((sample_count, token_count), dtype=bool)
     _write_array(root / "positions" / f"{modality}_pos_{split}.npy", positions)
     _write_array(root / "masks" / f"{modality}_mask_{split}.npy", mask)
+
+
+def _load_optional_mask(
+    source: Path | None,
+    row_indices: list[int],
+    shard: np.ndarray,
+    *,
+    artifact_name: str,
+) -> np.ndarray | None:
+    if source is None:
+        return None
+    mask = _load_and_select_rows(source, row_indices, artifact_name=artifact_name).astype(bool, copy=False)
+    expected_shape = tuple(shard.shape[:2])
+    if tuple(mask.shape) != expected_shape:
+        raise ValueError(f"{artifact_name} shape must match feature sample/token axes: expected {expected_shape}, got {tuple(mask.shape)}")
+    return np.asarray(mask).copy()
 
 
 def _write_optional_label_array(source: Path | None, destination: Path, row_indices: list[int]) -> None:

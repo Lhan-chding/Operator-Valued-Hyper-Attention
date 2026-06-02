@@ -1154,6 +1154,192 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertIn("next", payload)
         self.assertTrue(validation.ok, validation.errors)
 
+    def test_extract_cmu_sdk_stage_inputs_cli_segments_by_label_intervals_with_masks(self):
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sdk_root = tmp_path / "sdk"
+            stage_inputs = tmp_path / "stage_inputs"
+            raw_root = tmp_path / "raw_cmu_mosei"
+            cache_root = tmp_path / "cache"
+            sdk_root.mkdir()
+            video_ids = ("video-train", "video-val", "video-test")
+            _write_cmu_sequence_json_with_intervals(
+                sdk_root / "text.json",
+                {
+                    video_id: (
+                        np.arange(4 * 3, dtype=np.float32).reshape(4, 3) + float(index * 100),
+                        np.array([[0.0, 1.0], [1.0, 2.0], [2.0, 3.0], [6.0, 7.0]], dtype=np.float32),
+                    )
+                    for index, video_id in enumerate(video_ids)
+                },
+            )
+            _write_cmu_sequence_json_with_intervals(
+                sdk_root / "audio.json",
+                {
+                    video_id: (
+                        np.arange(6 * 2, dtype=np.float32).reshape(6, 2) + float(index * 100),
+                        np.array([[0.0, 0.5], [0.5, 1.0], [1.0, 1.5], [1.5, 2.0], [2.0, 2.5], [6.0, 6.5]], dtype=np.float32),
+                    )
+                    for index, video_id in enumerate(video_ids)
+                },
+            )
+            _write_cmu_sequence_json_with_intervals(
+                sdk_root / "vision.json",
+                {
+                    video_id: (
+                        np.arange(3 * 4, dtype=np.float32).reshape(3, 4) + float(index * 100),
+                        np.array([[0.0, 1.0], [1.0, 2.0], [6.0, 7.0]], dtype=np.float32),
+                    )
+                    for index, video_id in enumerate(video_ids)
+                },
+            )
+            _write_cmu_sequence_json_with_intervals(
+                sdk_root / "labels.json",
+                {
+                    video_id: (
+                        np.array(
+                            [
+                                [float(index), 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                                [float(index + 10), 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                            ],
+                            dtype=np.float32,
+                        ),
+                        np.array([[0.0, 2.0], [6.0, 7.0]], dtype=np.float32),
+                    )
+                    for index, video_id in enumerate(video_ids)
+                },
+            )
+            (sdk_root / "splits.json").write_text(
+                json.dumps({"train": ["video-train"], "val": ["video-val"], "test": ["video-test"]}, sort_keys=True) + "\n"
+            )
+
+            extract_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "extract_cmu_sdk_stage_inputs.py"),
+                    "cmu_mosei",
+                    str(stage_inputs),
+                    "--splits",
+                    str(sdk_root / "splits.json"),
+                    "--text-sequence",
+                    str(sdk_root / "text.json"),
+                    "--audio-sequence",
+                    str(sdk_root / "audio.json"),
+                    "--visual-sequence",
+                    str(sdk_root / "vision.json"),
+                    "--label-sequence",
+                    str(sdk_root / "labels.json"),
+                    "--segment-from-label-intervals",
+                    "--text-steps",
+                    "3",
+                    "--audio-steps",
+                    "4",
+                    "--visual-steps",
+                    "2",
+                    "--sentiment-column",
+                    "0",
+                    "--emotion-columns",
+                    "1:",
+                    "--preprocessing-version",
+                    "unit-cmu-sdk-segment-v1",
+                    "--license-tag",
+                    "unit-cmu-sdk",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            stage_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "stage_cmu_sentiment_raw.py"),
+                    "cmu_mosei",
+                    str(raw_root),
+                    "--splits",
+                    str(stage_inputs / "cmu_mosei_splits.json"),
+                    "--text-features",
+                    str(stage_inputs / "cmu_mosei_text_features.npy"),
+                    "--audio-features",
+                    str(stage_inputs / "cmu_mosei_audio_features.npy"),
+                    "--visual-features",
+                    str(stage_inputs / "cmu_mosei_visual_features.npy"),
+                    "--sentiment-labels",
+                    str(stage_inputs / "cmu_mosei_sentiment.npy"),
+                    "--emotion-labels",
+                    str(stage_inputs / "cmu_mosei_emotion.npy"),
+                    "--text-mask",
+                    str(stage_inputs / "cmu_mosei_text_mask.npy"),
+                    "--audio-mask",
+                    str(stage_inputs / "cmu_mosei_audio_mask.npy"),
+                    "--visual-mask",
+                    str(stage_inputs / "cmu_mosei_visual_mask.npy"),
+                    "--missing-modality-mask",
+                    str(stage_inputs / "cmu_mosei_missing_modality_mask.npy"),
+                    "--feature-version",
+                    "text=unit-text-segment",
+                    "--feature-version",
+                    "audio=unit-audio-segment",
+                    "--feature-version",
+                    "vision=unit-vision-segment",
+                    "--license-tag",
+                    "unit-cmu-sdk",
+                    "--preprocessing-version",
+                    "unit-cmu-sdk-segment-v1",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            build_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "cmu_mosei",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            payload = json.loads(extract_result.stdout) if extract_result.stdout.strip() else {}
+            splits = json.loads((stage_inputs / "cmu_mosei_splits.json").read_text())
+            text = np.load(stage_inputs / "cmu_mosei_text_features.npy")
+            text_mask = np.load(stage_inputs / "cmu_mosei_text_mask.npy")
+            audio_mask = np.load(stage_inputs / "cmu_mosei_audio_mask.npy")
+            missing_mask = np.load(stage_inputs / "cmu_mosei_missing_modality_mask.npy")
+            raw_text_mask = np.load(raw_root / "features" / "text_mask.npy")
+            cache_text_mask = np.load(cache_root / "cmu_mosei" / "v0.1" / "masks" / "text_mask_train.npy")
+            sentiment = np.load(stage_inputs / "cmu_mosei_sentiment.npy")
+            manifest = json.loads((stage_inputs / "cmu_mosei_stage_input_manifest.json").read_text())
+            validation = validate_cache_layout(
+                MultimodalCacheLayout(cache_root, "cmu_mosei", "v0.1"),
+                splits=("train", "val", "test"),
+            )
+
+        self.assertEqual(extract_result.returncode, 0, extract_result.stdout + extract_result.stderr)
+        self.assertEqual(stage_result.returncode, 0, stage_result.stdout + stage_result.stderr)
+        self.assertEqual(build_result.returncode, 0, build_result.stdout + build_result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["sample_count"], 6)
+        self.assertEqual(splits["train"], ["video-train[0000]", "video-train[0001]"])
+        self.assertEqual(text.shape, (6, 3, 3))
+        self.assertEqual(text_mask[:2].tolist(), [[True, True, False], [True, False, False]])
+        self.assertEqual(audio_mask[:2].tolist(), [[True, True, True, True], [True, False, False, False]])
+        self.assertEqual(missing_mask[:2].tolist(), [[False, False, False], [False, False, False]])
+        self.assertEqual(raw_text_mask.tolist(), text_mask.tolist())
+        self.assertEqual(cache_text_mask.tolist(), text_mask[:2].tolist())
+        self.assertEqual(sentiment[:2].tolist(), [[0.0], [10.0]])
+        self.assertEqual(manifest["temporal_policy"], "label_interval_segment")
+        self.assertTrue(manifest["segment_from_label_intervals"])
+        self.assertTrue(validation.ok, validation.errors)
+
     def test_inspect_cmu_sdk_sequences_cli_suggests_extract_command_from_download_dir(self):
         import numpy as np
 
@@ -3080,6 +3266,19 @@ def _write_cmu_sequence_json(path: Path, features_by_source_id: dict[str, object
                 "intervals": [[0.0, 1.0] for _ in range(int(values.shape[0]))],
             }
             for source_id, values in features_by_source_id.items()
+        }
+    }
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def _write_cmu_sequence_json_with_intervals(path: Path, values_by_source_id: dict[str, tuple[object, object]]) -> None:
+    payload = {
+        "data": {
+            source_id: {
+                "features": values.tolist(),
+                "intervals": intervals.tolist(),
+            }
+            for source_id, (values, intervals) in values_by_source_id.items()
         }
     }
     path.write_text(json.dumps(payload, sort_keys=True) + "\n")

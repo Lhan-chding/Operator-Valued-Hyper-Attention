@@ -27,6 +27,9 @@ def main() -> int:
     parser.add_argument("--text-features", type=Path, required=True)
     parser.add_argument("--audio-features", type=Path, required=True)
     parser.add_argument("--visual-features", type=Path, required=True)
+    parser.add_argument("--text-mask", type=Path)
+    parser.add_argument("--audio-mask", type=Path)
+    parser.add_argument("--visual-mask", type=Path)
     parser.add_argument("--sentiment-labels", type=Path, required=True)
     parser.add_argument("--emotion-labels", type=Path, required=True)
     parser.add_argument("--missing-modality-mask", type=Path)
@@ -80,6 +83,16 @@ def stage_cmu_sentiment_raw(args: argparse.Namespace) -> dict[str, Any]:
             ("vision", feature_paths["vision"], "visual"),
         )
     }
+    mask_paths = {
+        "text": args.text_mask,
+        "audio": args.audio_mask,
+        "vision": args.visual_mask,
+    }
+    mask_shapes = {}
+    for modality, source in mask_paths.items():
+        if source is None:
+            continue
+        mask_shapes[modality] = _copy_mask_npy(source, raw_root / "features" / f"{modality}_mask.npy", feature_shapes[modality])
     sentiment_shape = _copy_npy(args.sentiment_labels, raw_root / "labels" / "sentiment.npy", sample_count)
     emotion_shape = _copy_npy(args.emotion_labels, raw_root / "labels" / "emotion.npy", sample_count)
 
@@ -124,6 +137,7 @@ def stage_cmu_sentiment_raw(args: argparse.Namespace) -> dict[str, Any]:
         "raw_root": str(raw_root),
         "sample_count": sample_count,
         "feature_shapes": feature_shapes,
+        "mask_shapes": mask_shapes,
         "label_shapes": {"sentiment": sentiment_shape, "emotion": emotion_shape},
         "next": (
             f"python scripts/multimodal/build_cache.py {args.dataset_name} "
@@ -164,6 +178,16 @@ def _copy_npy(source: Path, destination: Path, sample_count: int) -> tuple[int, 
     array = np.load(source, allow_pickle=False)
     if array.ndim == 0 or int(array.shape[0]) != sample_count:
         raise ValueError(f"{source} first axis must match split sample count {sample_count}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    np.save(destination, array)
+    return tuple(int(dim) for dim in array.shape)
+
+
+def _copy_mask_npy(source: Path, destination: Path, feature_shape: tuple[int, ...]) -> tuple[int, ...]:
+    array = np.load(source, allow_pickle=False).astype(bool, copy=False)
+    expected_shape = feature_shape[:2]
+    if tuple(array.shape) != expected_shape:
+        raise ValueError(f"{source} mask shape must match feature sample/token axes: expected {expected_shape}, got {tuple(array.shape)}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     np.save(destination, array)
     return tuple(int(dim) for dim in array.shape)

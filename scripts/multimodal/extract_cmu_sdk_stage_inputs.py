@@ -28,6 +28,14 @@ def main() -> int:
     parser.add_argument("--visual-sequence", type=Path, required=True)
     parser.add_argument("--label-sequence", type=Path, required=True)
     parser.add_argument("--temporal-policy", choices=("strict", "mean", "first"), default="strict")
+    parser.add_argument(
+        "--segment-from-label-intervals",
+        action="store_true",
+        help="Use each label interval row as one utterance/segment sample and slice modalities by overlapping intervals.",
+    )
+    parser.add_argument("--text-steps", type=int, default=64)
+    parser.add_argument("--audio-steps", type=int, default=64)
+    parser.add_argument("--visual-steps", type=int, default=64)
     parser.add_argument("--sentiment-column", type=int, default=0)
     parser.add_argument("--emotion-columns", default="1:")
     parser.add_argument("--license-tag", default="cmu-multimodal-sdk")
@@ -57,6 +65,8 @@ def main() -> int:
 
 def extract_cmu_sdk_stage_inputs(args: argparse.Namespace) -> dict[str, Any]:
     splits = _read_splits(args.splits)
+    if args.segment_from_label_intervals:
+        return _extract_interval_segment_stage_inputs(args, splits)
     source_ids = _ordered_source_ids(splits)
     sequences = {
         "text": _read_sequence(args.text_sequence),
@@ -136,6 +146,131 @@ def extract_cmu_sdk_stage_inputs(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _extract_interval_segment_stage_inputs(args: argparse.Namespace, video_splits: dict[str, list[str]]) -> dict[str, Any]:
+    _validate_segment_args(args)
+    sequences = {
+        "text": _read_sequence_records(args.text_sequence),
+        "audio": _read_sequence_records(args.audio_sequence),
+        "vision": _read_sequence_records(args.visual_sequence),
+        "labels": _read_sequence_records(args.label_sequence),
+    }
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    feature_dims = {
+        "text": _feature_width(sequences["text"], "text"),
+        "audio": _feature_width(sequences["audio"], "audio"),
+        "vision": _feature_width(sequences["vision"], "vision"),
+    }
+    step_counts = {"text": args.text_steps, "audio": args.audio_steps, "vision": args.visual_steps}
+    expanded_splits: dict[str, list[str]] = {split: [] for split in video_splits}
+    feature_rows = {
+        modality: []
+        for modality in ("text", "audio", "vision")
+    }
+    mask_rows = {modality: [] for modality in ("text", "audio", "vision")}
+    missing_rows = []
+    label_rows = []
+    segment_records = []
+
+    for split in [name for name in SPLIT_ORDER if name in video_splits] + [name for name in video_splits if name not in set(SPLIT_ORDER)]:
+        for video_id in video_splits[split]:
+            label_record = _sequence_record_for(sequences["labels"], video_id, sequence_name="labels")
+            label_features = _finite_array(label_record["features"])
+            label_intervals = _required_intervals(label_record, video_id, sequence_name="labels")
+            if label_features.shape[0] != label_intervals.shape[0]:
+                raise ValueError(f"labels sequence {video_id} features and intervals row counts must match")
+            for label_index, (label_row, interval) in enumerate(zip(label_features, label_intervals)):
+                source_id = f"{video_id}[{label_index:04d}]"
+                expanded_splits.setdefault(split, []).append(source_id)
+                label_rows.append(np.asarray(label_row, dtype=np.float32).reshape(-1))
+                missing_row = []
+                for modality in ("text", "audio", "vision"):
+                    segment, mask = _interval_segment(
+                        _sequence_record_for(sequences[modality], video_id, sequence_name=modality),
+                        interval,
+                        max_steps=step_counts[modality],
+                        feature_dim=feature_dims[modality],
+                        sequence_name=modality,
+                        source_id=source_id,
+                    )
+                    feature_rows[modality].append(segment)
+                    mask_rows[modality].append(mask)
+                    missing_row.append(not bool(mask.any()))
+                missing_rows.append(missing_row)
+                segment_records.append(
+                    {
+                        "source_id": source_id,
+                        "video_id": video_id,
+                        "split": split,
+                        "label_index": label_index,
+                        "interval": [float(interval[0]), float(interval[1])],
+                    }
+                )
+
+    source_ids = _ordered_source_ids(expanded_splits)
+    labels = np.stack(label_rows, axis=0).astype(np.float32, copy=False)
+    emotion_columns = _column_indices(args.emotion_columns, labels.shape[1], option_name="--emotion-columns")
+    sentiment_column = _single_column(args.sentiment_column, labels.shape[1], option_name="--sentiment-column")
+
+    outputs = _stage_output_paths(args.dataset_name, output_dir)
+    outputs["splits"].write_text(json.dumps(expanded_splits, sort_keys=True) + "\n")
+    for modality in ("text", "audio", "vision"):
+        np.save(outputs[f"{modality}_features"], np.stack(feature_rows[modality], axis=0).astype(np.float32, copy=False))
+        np.save(outputs[f"{modality}_mask"], np.stack(mask_rows[modality], axis=0).astype(bool, copy=False))
+    np.save(outputs["sentiment_labels"], labels[:, sentiment_column : sentiment_column + 1])
+    np.save(outputs["emotion_labels"], labels[:, emotion_columns])
+    np.save(outputs["missing_modality_mask"], np.asarray(missing_rows, dtype=bool))
+
+    manifest = {
+        "dataset_name": args.dataset_name,
+        "sample_count": len(source_ids),
+        "source_paths": {
+            "text": str(args.text_sequence),
+            "audio": str(args.audio_sequence),
+            "vision": str(args.visual_sequence),
+            "labels": str(args.label_sequence),
+        },
+        "splits": expanded_splits,
+        "video_splits": video_splits,
+        "segment_from_label_intervals": True,
+        "segment_records": segment_records,
+        "temporal_policy": "label_interval_segment",
+        "segment_steps": step_counts,
+        "sentiment_column": sentiment_column,
+        "emotion_columns": emotion_columns,
+        "license_tag": args.license_tag,
+        "preprocessing_version": args.preprocessing_version,
+        "non_finite_policy": "nan_to_num_zero_before_interval_padding",
+        "non_finite_summary": {
+            name: _non_finite_summary({source_id: record["features"] for source_id, record in sequence.items()})
+            for name, sequence in sequences.items()
+        },
+        "outputs": {name: str(path) for name, path in outputs.items()},
+    }
+    outputs["manifest"].write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return {
+        "ok": True,
+        "dataset_name": args.dataset_name,
+        "output_dir": str(output_dir),
+        "sample_count": len(source_ids),
+        "feature_shapes": {
+            modality: list(np.load(outputs[f"{modality}_features"], mmap_mode="r").shape)
+            for modality in ("text", "audio", "vision")
+        },
+        "mask_shapes": {
+            modality: list(np.load(outputs[f"{modality}_mask"], mmap_mode="r").shape)
+            for modality in ("text", "audio", "vision")
+        },
+        "label_shapes": {
+            "sentiment": list(np.load(outputs["sentiment_labels"], mmap_mode="r").shape),
+            "emotion": list(np.load(outputs["emotion_labels"], mmap_mode="r").shape),
+        },
+        "manifest": str(outputs["manifest"]),
+        "next": _stage_command(args, {name: str(path) for name, path in outputs.items()}),
+    }
+
+
 def _read_splits(path: Path) -> dict[str, list[str]]:
     payload = json.loads(path.read_text())
     if not isinstance(payload, dict) or not payload:
@@ -171,33 +306,69 @@ def _read_sequence(path: Path) -> dict[str, np.ndarray]:
     return _read_sequence_hdf5(path)
 
 
+def _read_sequence_records(path: Path) -> dict[str, dict[str, np.ndarray | None]]:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return _read_sequence_json_records(path)
+    return _read_sequence_hdf5_records(path)
+
+
 def _read_sequence_json(path: Path) -> dict[str, np.ndarray]:
+    return {
+        source_id: record["features"]
+        for source_id, record in _read_sequence_json_records(path).items()
+        if record["features"] is not None
+    }
+
+
+def _read_sequence_json_records(path: Path) -> dict[str, dict[str, np.ndarray | None]]:
     payload = json.loads(path.read_text())
     raw_data = payload.get("data") if isinstance(payload, dict) else payload
     if not isinstance(raw_data, dict) or not raw_data:
         raise ValueError(f"{path} must contain a non-empty data object")
-    data = {}
+    data: dict[str, dict[str, np.ndarray | None]] = {}
     for source_id, raw_record in raw_data.items():
         if not isinstance(source_id, str) or not source_id.strip() or source_id != source_id.strip():
             raise ValueError(f"{path} contains an invalid source_id")
         features = raw_record.get("features") if isinstance(raw_record, dict) else raw_record
-        data[source_id] = _as_feature_array(features, source_id=source_id, source_name=str(path))
+        intervals = raw_record.get("intervals") if isinstance(raw_record, dict) else None
+        feature_array = _as_feature_array(features, source_id=source_id, source_name=str(path))
+        data[source_id] = {
+            "features": feature_array,
+            "intervals": _as_interval_array(intervals, feature_array.shape[0], source_id=source_id, source_name=str(path))
+            if intervals is not None
+            else None,
+        }
     return data
 
 
 def _read_sequence_hdf5(path: Path) -> dict[str, np.ndarray]:
+    return {
+        source_id: record["features"]
+        for source_id, record in _read_sequence_hdf5_records(path).items()
+        if record["features"] is not None
+    }
+
+
+def _read_sequence_hdf5_records(path: Path) -> dict[str, dict[str, np.ndarray | None]]:
     try:
         import h5py  # type: ignore[import-not-found]
     except ImportError as exc:
         raise ValueError("reading CMU SDK .csd/.h5 files requires h5py; install it in the active .venv") from exc
-    data: dict[str, np.ndarray] = {}
+    data: dict[str, dict[str, np.ndarray | None]] = {}
     with h5py.File(path, "r") as handle:
         group = _hdf5_sample_group(handle, path, h5py)
         for source_id in group.keys():
             sample = group[source_id]
             if "features" not in sample:
                 raise ValueError(f"{path} sample {source_id} missing features dataset")
-            data[source_id] = _as_feature_array(sample["features"][()], source_id=source_id, source_name=str(path))
+            feature_array = _as_feature_array(sample["features"][()], source_id=source_id, source_name=str(path))
+            data[source_id] = {
+                "features": feature_array,
+                "intervals": _as_interval_array(sample["intervals"][()], feature_array.shape[0], source_id=source_id, source_name=str(path))
+                if "intervals" in sample
+                else None,
+            }
     if not data:
         raise ValueError(f"{path} contains no sequence samples")
     return data
@@ -250,6 +421,105 @@ def _as_feature_array(value: Any, *, source_id: str, source_name: str) -> np.nda
     if array.ndim == 1:
         array = array.reshape(1, -1)
     return array.astype(np.float32, copy=False)
+
+
+def _as_interval_array(value: Any, row_count: int, *, source_id: str, source_name: str) -> np.ndarray:
+    array = np.asarray(value, dtype=np.float32)
+    if array.ndim != 2 or int(array.shape[1]) != 2 or int(array.shape[0]) != row_count:
+        raise ValueError(f"{source_name} sample {source_id} intervals must have shape ({row_count}, 2)")
+    if not np.isfinite(array).all():
+        raise ValueError(f"{source_name} sample {source_id} intervals must be finite")
+    return array.astype(np.float32, copy=False)
+
+
+def _validate_segment_args(args: argparse.Namespace) -> None:
+    for name, value in {
+        "text_steps": args.text_steps,
+        "audio_steps": args.audio_steps,
+        "visual_steps": args.visual_steps,
+    }.items():
+        if not isinstance(value, int) or value <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be a positive integer")
+
+
+def _stage_output_paths(dataset_name: str, output_dir: Path) -> dict[str, Path]:
+    return {
+        "splits": output_dir / f"{dataset_name}_splits.json",
+        "text_features": output_dir / f"{dataset_name}_text_features.npy",
+        "audio_features": output_dir / f"{dataset_name}_audio_features.npy",
+        "vision_features": output_dir / f"{dataset_name}_visual_features.npy",
+        "text_mask": output_dir / f"{dataset_name}_text_mask.npy",
+        "audio_mask": output_dir / f"{dataset_name}_audio_mask.npy",
+        "vision_mask": output_dir / f"{dataset_name}_visual_mask.npy",
+        "sentiment_labels": output_dir / f"{dataset_name}_sentiment.npy",
+        "emotion_labels": output_dir / f"{dataset_name}_emotion.npy",
+        "missing_modality_mask": output_dir / f"{dataset_name}_missing_modality_mask.npy",
+        "manifest": output_dir / f"{dataset_name}_stage_input_manifest.json",
+    }
+
+
+def _feature_width(sequence: dict[str, dict[str, np.ndarray | None]], sequence_name: str) -> int:
+    for source_id, record in sequence.items():
+        features = record["features"]
+        if features is None:
+            continue
+        if features.ndim != 2:
+            raise ValueError(f"{sequence_name} sequence {source_id} features must be rank-2")
+        return int(features.shape[1])
+    raise ValueError(f"{sequence_name} sequence contains no feature rows")
+
+
+def _sequence_record_for(
+    sequence: dict[str, dict[str, np.ndarray | None]],
+    source_id: str,
+    *,
+    sequence_name: str,
+) -> dict[str, np.ndarray | None]:
+    if source_id not in sequence:
+        raise ValueError(f"{sequence_name} sequence missing source_id from splits: {source_id}")
+    return sequence[source_id]
+
+
+def _required_intervals(record: dict[str, np.ndarray | None], source_id: str, *, sequence_name: str) -> np.ndarray:
+    intervals = record.get("intervals")
+    if intervals is None:
+        raise ValueError(f"{sequence_name} sequence {source_id} missing intervals required for label interval segmentation")
+    return intervals
+
+
+def _interval_segment(
+    record: dict[str, np.ndarray | None],
+    interval: np.ndarray,
+    *,
+    max_steps: int,
+    feature_dim: int,
+    sequence_name: str,
+    source_id: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    features = record["features"]
+    intervals = record["intervals"]
+    if features is None or intervals is None:
+        raise ValueError(f"{sequence_name} sequence {source_id} missing features or intervals")
+    start, end = float(interval[0]), float(interval[1])
+    if end <= start:
+        raise ValueError(f"label interval for {source_id} must have end > start")
+    overlap = (intervals[:, 0] < end) & (intervals[:, 1] > start)
+    selected = _finite_array(features[overlap])
+    if selected.shape[0] > max_steps:
+        selected = selected[_evenly_spaced_indices(selected.shape[0], max_steps)]
+    output = np.zeros((max_steps, feature_dim), dtype=np.float32)
+    mask = np.zeros((max_steps,), dtype=bool)
+    count = min(max_steps, int(selected.shape[0]))
+    if count:
+        output[:count] = selected[:count]
+        mask[:count] = True
+    return output, mask
+
+
+def _evenly_spaced_indices(length: int, count: int) -> np.ndarray:
+    if count >= length:
+        return np.arange(length, dtype=np.int64)
+    return np.linspace(0, length - 1, count).round().astype(np.int64)
 
 
 def _non_finite_summary(sequence: dict[str, np.ndarray]) -> dict[str, int]:
@@ -347,15 +617,27 @@ def _column_indices(value: str, column_count: int, *, option_name: str) -> list[
 
 
 def _stage_command(args: argparse.Namespace, outputs: dict[str, str]) -> str:
-    return (
+    command = (
         f"python scripts/multimodal/stage_cmu_sentiment_raw.py {args.dataset_name} "
         f"data/raw_multimodal/{args.dataset_name} "
         f"--splits {outputs['splits']} "
         f"--text-features {outputs['text_features']} "
         f"--audio-features {outputs['audio_features']} "
-        f"--visual-features {outputs['visual_features']} "
+        f"--visual-features {outputs['vision_features'] if 'vision_features' in outputs else outputs['visual_features']} "
         f"--sentiment-labels {outputs['sentiment_labels']} "
         f"--emotion-labels {outputs['emotion_labels']} "
+    )
+    if "text_mask" in outputs and "audio_mask" in outputs and "vision_mask" in outputs:
+        command += (
+            f"--text-mask {outputs['text_mask']} "
+            f"--audio-mask {outputs['audio_mask']} "
+            f"--visual-mask {outputs['vision_mask']} "
+        )
+    if "missing_modality_mask" in outputs:
+        command += f"--missing-modality-mask {outputs['missing_modality_mask']} "
+    return (
+        command
+        +
         f"--feature-version text={args.preprocessing_version}:text "
         f"--feature-version audio={args.preprocessing_version}:audio "
         f"--feature-version vision={args.preprocessing_version}:vision "
