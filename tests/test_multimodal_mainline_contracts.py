@@ -600,7 +600,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(payload["missing_image_count"], 3)
         self.assertEqual(payload["feature_shapes"]["text"], [3, "<= 77", "clip_projection_dim"])
         self.assertEqual(payload["feature_shapes"]["region"], [3, 2, "clip_projection_dim"])
-        self.assertEqual(payload["feature_extractor_versions"]["text"], "openai/clip-vit-base-patch32@main:text_projection")
+        self.assertEqual(payload["feature_extractor_versions"]["text"], "openai/clip-vit-large-patch14@main:text_projection")
         self.assertEqual(payload["candidate_region_source"], "coco_gt_box_crop")
 
     def test_refcoco_clip_text_extraction_pads_batches_to_fixed_max_length(self):

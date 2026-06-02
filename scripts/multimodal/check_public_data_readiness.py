@@ -614,7 +614,7 @@ def _append_refcoco_commands(
             "--refs data/raw_multimodal/_downloads/refcoco/extracted/replace_with_refcoco_refs.p "
             "--image-root data/raw_multimodal/_downloads/refcoco/extracted/train2014 "
             "--image-root data/raw_multimodal/_downloads/refcoco/extracted/val2014 "
-            "--device cuda --model openai/clip-vit-base-patch32 --revision main"
+            "--device cuda --model openai/clip-vit-large-patch14 --revision main"
         )
     if phases["stage_records"]["ok"] and phases["aligned_features"]["ok"] and not phases["raw_manifest"]["ok"]:
         mask_args = _refcoco_mask_stage_args(stage_dir)

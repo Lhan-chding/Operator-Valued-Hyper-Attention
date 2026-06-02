@@ -28,7 +28,7 @@ def main() -> int:
     parser.add_argument("--records", type=Path, required=True)
     parser.add_argument("--refs", type=Path, required=True)
     parser.add_argument("--image-root", type=Path, action="append", required=True)
-    parser.add_argument("--model", default="openai/clip-vit-base-patch32")
+    parser.add_argument("--model", default="openai/clip-vit-large-patch14")
     parser.add_argument("--revision", default="main")
     parser.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"))
     parser.add_argument("--dtype", default="float32", choices=("float32", "float16"))
@@ -135,7 +135,7 @@ def extract_refcoco_clip_features(args: argparse.Namespace) -> dict[str, Any]:
             f"--splits {args.splits} --records {args.records} "
             f"--text-features {text_path} --region-features {region_path} "
             f"--text-mask {text_mask_path} --region-mask {region_mask_path} "
-            f"--license-tag refcoco-coco2014 --preprocessing-version {args.dataset_name}-clip-vit-b32-v0.1"
+            f"--license-tag refcoco-coco2014 --preprocessing-version {args.dataset_name}-clip-vit-large-p14-v0.1"
         ),
     }
 
@@ -352,7 +352,7 @@ def _extract_text_features(args: argparse.Namespace, samples, tokenizer, model, 
         for batch in _chunks(samples, args.text_batch_size):
             encoded = tokenizer(
                 [sample["text"] for sample in batch],
-                padding=True,
+                padding="max_length",
                 truncation=True,
                 max_length=args.max_text_length,
                 return_tensors="pt",
