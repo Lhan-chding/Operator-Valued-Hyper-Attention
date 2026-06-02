@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1910,6 +1911,74 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(batch.provenance.original_split, ["val"])
         batch.model_inputs()
 
+    @unittest.skipUnless(TORCH_AVAILABLE, "torch is required for OVHA ablation training")
+    def test_public_main_ovha_ablation_uses_minibatch_validation_protocol(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
+        from scripts.multimodal import run_public_main
+        from scripts.multimodal.run_public_smoke import _load_public_batch
+
+        import torch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            raw_root = tmp_path / "raw"
+            cache_root = tmp_path / "cache"
+            _write_meld_raw_fixture(raw_root, rows_per_split=6)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "multimodal" / "build_cache.py"),
+                    "meld",
+                    str(raw_root),
+                    str(cache_root),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            layout = MultimodalCacheLayout(cache_root, "meld", "v0.1")
+            config = replace(
+                MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_meld_public_main.json"),
+                cache_root=cache_root,
+            )
+            train_batch = _load_public_batch(layout, config, "train", torch.device("cpu"))
+            eval_batch = _load_public_batch(layout, config, "val", torch.device("cpu"))
+
+            with mock.patch.object(run_public_main, "_sample_batch", wraps=run_public_main._sample_batch) as sampler:
+                model, eval_output, summary = run_public_main._train_ovha_ablation(
+                    config,
+                    "ovha_no_lrio",
+                    train_batch=train_batch,
+                    eval_batch=eval_batch,
+                    seed=501,
+                    train_steps=3,
+                    learning_rate=1e-4,
+                    progress_interval=0,
+                    d_model=8,
+                    memory_tokens=2,
+                    batch_size=2,
+                    validation_fraction=0.25,
+                    eval_interval=1,
+                    early_stopping_patience=0,
+                    weight_decay=1e-4,
+                )
+
+        self.assertGreaterEqual(sampler.call_count, 3)
+        sampled_batch_sizes = [call.args[1] for call in sampler.call_args_list]
+        self.assertTrue(all(size == 2 for size in sampled_batch_sizes))
+        self.assertEqual(summary["baseline_training_protocol"], "mini_batch_validation_best_checkpoint")
+        self.assertEqual(summary["baseline_batch_size"], 2)
+        self.assertEqual(summary["baseline_validation_fraction"], 0.25)
+        self.assertTrue(summary["baseline_target_standardized"])
+        self.assertIn("baseline_best_val_task_loss", summary)
+        self.assertEqual(tuple(eval_output.y_hat.shape), tuple(eval_batch.target_y.shape))
+        self.assertEqual(model.training, False)
+
     def test_extract_meld_ffmpeg_features_cli_writes_hash_and_missing_video_features(self):
         import numpy as np
 
@@ -3347,15 +3416,14 @@ def _write_cmu_sequence_json_with_intervals(path: Path, values_by_source_id: dic
     path.write_text(json.dumps(payload, sort_keys=True) + "\n")
 
 
-def _write_meld_raw_fixture(raw_root: Path) -> None:
+def _write_meld_raw_fixture(raw_root: Path, rows_per_split: int = 1) -> None:
     import numpy as np
 
     for folder in ("features", "labels", "metadata"):
         (raw_root / folder).mkdir(parents=True, exist_ok=True)
     split_source_ids = {
-        "train": ["meld-train-1"],
-        "val": ["meld-val-1"],
-        "test": ["meld-test-1"],
+        split: [f"meld-{split}-{index + 1}" for index in range(rows_per_split)]
+        for split in ("train", "val", "test")
     }
     (raw_root / "splits.json").write_text(json.dumps(split_source_ids, sort_keys=True) + "\n")
     speaker_by_split = {"train": "Monica", "val": "Chandler", "test": "Rachel"}
@@ -3389,14 +3457,15 @@ def _write_meld_raw_fixture(raw_root: Path) -> None:
         )
         + "\n"
     )
-    np.save(raw_root / "metadata" / "missing_modality_mask.npy", np.zeros((3, 3), dtype=bool))
+    row_count = rows_per_split * 3
+    np.save(raw_root / "metadata" / "missing_modality_mask.npy", np.zeros((row_count, 3), dtype=bool))
     (raw_root / "metadata" / "corruption_transforms.json").write_text(
         json.dumps({"version": "fixture-meld-corruption-v1"}, sort_keys=True) + "\n"
     )
-    np.save(raw_root / "features" / "text_features.npy", np.arange(3 * 5 * 6, dtype=np.float32).reshape(3, 5, 6))
-    np.save(raw_root / "features" / "audio_features.npy", np.arange(3 * 4 * 3, dtype=np.float32).reshape(3, 4, 3))
-    np.save(raw_root / "features" / "visual_features.npy", np.arange(3 * 2 * 4, dtype=np.float32).reshape(3, 2, 4))
-    np.save(raw_root / "labels" / "emotion.npy", np.eye(7, dtype=np.float32)[:3])
+    np.save(raw_root / "features" / "text_features.npy", np.arange(row_count * 5 * 6, dtype=np.float32).reshape(row_count, 5, 6))
+    np.save(raw_root / "features" / "audio_features.npy", np.arange(row_count * 4 * 3, dtype=np.float32).reshape(row_count, 4, 3))
+    np.save(raw_root / "features" / "visual_features.npy", np.arange(row_count * 2 * 4, dtype=np.float32).reshape(row_count, 2, 4))
+    np.save(raw_root / "labels" / "emotion.npy", np.eye(7, dtype=np.float32)[np.arange(row_count) % 7])
 
 
 def _write_meld_csv_fixture(meld_root: Path) -> None:

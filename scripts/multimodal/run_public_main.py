@@ -377,6 +377,11 @@ def _run_seed(
         progress_interval=progress_interval,
         d_model=int(args.d_model),
         memory_tokens=int(args.memory_tokens),
+        batch_size=int(args.batch_size),
+        validation_fraction=float(args.validation_fraction),
+        eval_interval=int(args.eval_interval),
+        early_stopping_patience=int(args.early_stopping_patience),
+        weight_decay=float(args.weight_decay),
     )
     raw_rows.extend(baseline_rows)
     robustness_rows.extend(baseline_robustness_rows)
@@ -612,6 +617,11 @@ def _baseline_rows(
     progress_interval: int,
     d_model: int,
     memory_tokens: int,
+    batch_size: int,
+    validation_fraction: float,
+    eval_interval: int,
+    early_stopping_patience: int,
+    weight_decay: float,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     robustness_rows: list[dict[str, Any]] = []
@@ -630,6 +640,11 @@ def _baseline_rows(
                 progress_interval=progress_interval,
                 d_model=d_model,
                 memory_tokens=memory_tokens,
+                batch_size=batch_size,
+                validation_fraction=validation_fraction,
+                eval_interval=eval_interval,
+                early_stopping_patience=early_stopping_patience,
+                weight_decay=weight_decay,
             )
             loss = _task_loss(eval_output.y_hat, eval_batch)
             rows.append(
@@ -719,7 +734,21 @@ def _train_ovha_ablation(
     progress_interval: int,
     d_model: int,
     memory_tokens: int,
+    batch_size: int,
+    validation_fraction: float,
+    eval_interval: int,
+    early_stopping_patience: int,
+    weight_decay: float,
 ) -> tuple[MultimodalOVHA, MultimodalOVHAOutput, dict[str, Any]]:
+    fit_batch, val_batch = _split_train_val_batch(
+        train_batch,
+        validation_fraction=validation_fraction,
+        seed=int(seed) + _stable_baseline_seed_offset(baseline_name),
+    )
+    target_mean, target_std = _target_standardizer(fit_batch)
+    fit_batch_std = _standardize_batch_targets(fit_batch, target_mean, target_std)
+    val_batch_std = _standardize_batch_targets(val_batch, target_mean, target_std)
+    eval_batch_std = _standardize_batch_targets(eval_batch, target_mean, target_std)
     field_dims = {name: int(field.x.shape[-1]) for name, field in train_batch.fields.items()}
     torch.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name))
     variant_kwargs = _ovha_variant_kwargs(baseline_name, config.candidate_names)
@@ -735,9 +764,15 @@ def _train_ovha_ablation(
         **variant_kwargs,
     ).to(train_batch.target_y.device)
     initial = _parameter_vector(model)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     max_grad_norm = 0.0
     final_loss = 0.0
+    best_val_loss = float("inf")
+    best_step = 0
+    best_state = _clone_state_dict(model)
+    stale_evals = 0
+    batch_generator = torch.Generator(device=train_batch.target_y.device)
+    batch_generator.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name) + 17)
     model.train()
     started_at = time.perf_counter()
     _print_progress(
@@ -746,17 +781,37 @@ def _train_ovha_ablation(
         model=baseline_name,
         steps=train_steps,
         learning_rate=learning_rate,
-        protocol="internal_ovha_ablation",
+        protocol="mini_batch_validation_best_checkpoint",
     )
     for step in range(1, train_steps + 1):
+        train_step_batch = _sample_batch(fit_batch_std, batch_size, batch_generator)
         optimizer.zero_grad(set_to_none=True)
-        output = model(train_batch)
-        components = _public_loss_components(output, train_batch, config)
+        output = model(train_step_batch)
+        components = _public_loss_components(output, train_step_batch, config)
         total_loss = torch.stack([value for value in components.values()]).sum()
         total_loss.backward()
         max_grad_norm = max(max_grad_norm, _grad_l2_norm(model))
         optimizer.step()
         final_loss = _as_float(total_loss)
+        if _should_validate(step, train_steps, eval_interval):
+            val_loss = _evaluate_task_loss(model, val_batch_std)
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_step = step
+                best_state = _clone_state_dict(model)
+                stale_evals = 0
+            else:
+                stale_evals += 1
+            if early_stopping_patience > 0 and stale_evals >= early_stopping_patience:
+                _print_progress(
+                    "model:early_stop",
+                    seed=seed,
+                    model=baseline_name,
+                    step=step,
+                    best_step=best_step,
+                    best_val_loss=f"{best_val_loss:.6g}",
+                )
+                break
         if _should_log_progress(step, train_steps, progress_interval):
             _print_step_progress(
                 seed=seed,
@@ -774,15 +829,21 @@ def _train_ovha_ablation(
         loss=f"{final_loss:.6g}",
         elapsed=f"{time.perf_counter() - started_at:.1f}s",
     )
+    model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        eval_output = model(eval_batch)
+        eval_output = _destandardize_output(model(eval_batch_std), target_mean, target_std)
     return model, eval_output, {
         "baseline_optimizer_steps": train_steps,
         "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial).item()),
         "baseline_grad_l2_norm": max_grad_norm,
         "baseline_train_loss_final": final_loss,
-        "baseline_training_protocol": "internal_ovha_ablation",
+        "baseline_best_val_task_loss": best_val_loss,
+        "baseline_best_checkpoint_step": best_step,
+        "baseline_training_protocol": "mini_batch_validation_best_checkpoint",
+        "baseline_batch_size": batch_size,
+        "baseline_validation_fraction": validation_fraction,
+        "baseline_target_standardized": True,
         "baseline_variant": {"candidate_names": active_candidate_names, **variant_kwargs},
     }
 
