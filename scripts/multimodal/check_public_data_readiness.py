@@ -617,6 +617,7 @@ def _append_refcoco_commands(
             "--device cuda --model openai/clip-vit-base-patch32 --revision main"
         )
     if phases["stage_records"]["ok"] and phases["aligned_features"]["ok"] and not phases["raw_manifest"]["ok"]:
+        mask_args = _refcoco_mask_stage_args(stage_dir)
         commands.append(
             "python scripts/multimodal/stage_refcoco_raw.py refcoco "
             f"{raw_root} "
@@ -624,10 +625,22 @@ def _append_refcoco_commands(
             f"--records {stage_dir / 'refcoco_phrase_region_records.json'} "
             f"--text-features {stage_dir / 'refcoco_text_features.npy'} "
             f"--region-features {stage_dir / 'refcoco_region_features.npy'} "
+            f"{mask_args}"
             "--license-tag refcoco-coco2014 "
             "--preprocessing-version refcoco-frozen-features-v0.1"
         )
     _append_cache_or_acceptance_command(commands, "refcoco", raw_root, cache_root, controlled_report, phases)
+
+
+def _refcoco_mask_stage_args(stage_dir: Path) -> str:
+    args = []
+    text_mask = stage_dir / "refcoco_text_mask.npy"
+    region_mask = stage_dir / "refcoco_region_mask.npy"
+    if text_mask.exists():
+        args.append(f"--text-mask {text_mask}")
+    if region_mask.exists():
+        args.append(f"--region-mask {region_mask}")
+    return " ".join(args) + (" " if args else "")
 
 
 def _append_cmu_mosei_commands(
