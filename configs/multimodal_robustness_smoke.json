@@ -44,7 +44,7 @@
   "adapter_params_by_candidate": {
     "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
     "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
-    "LRIO": ["rank_logits", "interaction_temperature", "scale", "bias"],
+    "LRIO": ["rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"],
     "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"]
   }
 }

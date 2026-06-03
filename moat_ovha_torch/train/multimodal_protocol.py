@@ -63,7 +63,7 @@ REQUIRED_STAGE_LOSSES = {
 ALLOWED_V1_ADAPTER_PARAMS = {
     "TLEO": ("lengthscale", "local_temperature", "scale", "bias"),
     "SPO": ("prototype_temperature", "prototype_logits_shift", "scale", "bias"),
-    "LRIO": ("rank_logits", "interaction_temperature", "scale", "bias"),
+    "LRIO": ("rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"),
     "CATO": ("alignment_temperature", "transport_scale", "scale", "bias"),
 }
 
@@ -109,6 +109,8 @@ PUBLIC_ALLOWED_LOSSES = (
     "candidate_individual_loss",
     "public_alignment_ce",
     "public_contrastive_retrieval",
+    "spo_prototype_diversity",
+    "router_marginal_utility",
     "weak_rceo_unimodal_disagreement_marked",
     "weak_modality_dropout_consistency_marked",
     "weak_unimodal_entropy_calibration_marked",

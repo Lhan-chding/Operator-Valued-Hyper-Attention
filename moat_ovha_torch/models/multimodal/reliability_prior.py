@@ -53,6 +53,7 @@ class RCEOReliabilityPrior(nn.Module):
         diagnostics = {
             "modality_reliability": modality_reliability.mean(dim=0),
             "modality_reliability_mean": modality_reliability.mean(),
+            "sample_modality_reliability_mean": modality_reliability.mean(dim=-1),
             "modality_names": modality_names,
             "pair_reliability": _diagnostic_pair_map(pair_names, pair_reliability),
             "reliability_bias_norm": bias.norm(dim=-1).mean(),

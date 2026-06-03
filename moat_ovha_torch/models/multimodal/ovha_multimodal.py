@@ -65,6 +65,7 @@ class MultimodalOVHA(nn.Module):
             d_model=d_model,
             candidate_names=candidate_names,
             use_evidence_router=self.use_evidence_router,
+            lrio_pairs=lrio_pairs,
         )
         self.candidate_primitives = make_candidate_bank(
             d_model=d_model,
@@ -103,15 +104,25 @@ class MultimodalOVHA(nn.Module):
         batch_size, q_count = batch.target_y.shape[0], batch.target_y.shape[1]
         assert_stackable(candidate_outputs, batch_size, q_count, self.output_dim)
         candidate_values = stack_candidate_values(candidate_outputs, self.candidate_names)
+        operator_admission_gate = _operator_admission_gate(candidate_outputs, self.candidate_names, candidate_values)
         router_weights = _effective_router_weights(
             router_output.weights,
             router_weight_override,
             self.candidate_names,
             self.router_weight_policy,
+            operator_admission_gate["tensor"],
         )
         y_hat = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
         candidate_losses = _candidate_losses(candidate_outputs, batch.target_y, batch.target_mask)
         raw_router_load_by_candidate = router_output.diagnostics.get("router_load_by_candidate", {})
+        memory_diagnostics = self._memory_differentiation_diagnostics(
+            batch=batch,
+            evidence=evidence,
+            memory_bank=memory_bank,
+            params=params,
+            router_weights=router_weights,
+            candidate_values=candidate_values,
+        )
         diagnostics = {
             **router_output.diagnostics,
             "raw_router_load_by_candidate": raw_router_load_by_candidate,
@@ -125,6 +136,8 @@ class MultimodalOVHA(nn.Module):
             "adapter_params": _adapter_param_diagnostics(params),
             "adapter_params_detail": _adapter_param_details(params),
             "memory_slot_norm": {name: memory_bank[name].norm(dim=-1).mean() for name in self.candidate_names},
+            **memory_diagnostics,
+            "operator_admission_gate": operator_admission_gate["diagnostics"],
             "candidate_diagnostics": _candidate_diagnostics(candidate_outputs, candidate_losses, reliability),
             "stackability_passed": True,
             "reliability": reliability.diagnostics if reliability is not None else {},
@@ -146,12 +159,66 @@ class MultimodalOVHA(nn.Module):
             evidence=evidence,
         )
 
+    def _memory_differentiation_diagnostics(
+        self,
+        *,
+        batch: MultimodalEpisodeBatch,
+        evidence: MultimodalEvidenceBank,
+        memory_bank: dict[str, torch.Tensor],
+        params: dict[str, dict[str, torch.Tensor]],
+        router_weights: torch.Tensor,
+        candidate_values: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        diagnostics = {
+            "memory_slot_orthogonality": _memory_slot_orthogonality(memory_bank, self.candidate_names),
+            "memory_zero_out_delta": torch.zeros((), dtype=candidate_values.dtype, device=candidate_values.device),
+            "memory_swap_delta": torch.zeros((), dtype=candidate_values.dtype, device=candidate_values.device),
+        }
+        if self.training:
+            return diagnostics
+        with torch.no_grad():
+            zero_bank = {name: torch.zeros_like(memory_bank[name]) for name in self.candidate_names}
+            zero_values = self._candidate_values_with_memory(batch, evidence, zero_bank, params)
+            zero_prediction = (router_weights.unsqueeze(-1) * zero_values).sum(dim=-2)
+            full_prediction = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
+            diagnostics["memory_zero_out_delta"] = (full_prediction - zero_prediction).abs().mean()
+            if len(self.candidate_names) > 1:
+                shifted_names = self.candidate_names[1:] + self.candidate_names[:1]
+                swap_bank = {
+                    name: memory_bank[shifted_names[index]]
+                    for index, name in enumerate(self.candidate_names)
+                }
+                swap_values = self._candidate_values_with_memory(batch, evidence, swap_bank, params)
+                swap_prediction = (router_weights.unsqueeze(-1) * swap_values).sum(dim=-2)
+                diagnostics["memory_swap_delta"] = (full_prediction - swap_prediction).abs().mean()
+        return diagnostics
+
+    def _candidate_values_with_memory(
+        self,
+        batch: MultimodalEpisodeBatch,
+        evidence: MultimodalEvidenceBank,
+        memory_bank: dict[str, torch.Tensor],
+        params: dict[str, dict[str, torch.Tensor]],
+    ) -> torch.Tensor:
+        outputs = {
+            name: self.candidate_primitives[name](
+                batch=batch,
+                memory_slot=memory_bank[name],
+                evidence=evidence,
+                params=params[name],
+                output_dim=self.output_dim,
+            )
+            for name in self.candidate_names
+        }
+        return stack_candidate_values(outputs, self.candidate_names)
+
 
 def _effective_router_weights(
     learned_weights: torch.Tensor,
     router_weight_override: torch.Tensor | None,
     candidate_names: tuple[str, ...],
     router_weight_policy: dict[str, str] | None,
+    admission_gate: torch.Tensor | None = None,
 ) -> torch.Tensor:
     weights = (
         learned_weights
@@ -159,18 +226,56 @@ def _effective_router_weights(
         else router_weight_override.to(device=learned_weights.device, dtype=learned_weights.dtype)
     )
     if router_weight_policy is None:
-        return weights
+        return _apply_admission_gate(weights, admission_gate)
     if "only" in router_weight_policy:
         candidate_index = candidate_names.index(router_weight_policy["only"])
         only = torch.zeros_like(weights)
         only[..., candidate_index] = 1.0
-        return only
+        return _apply_admission_gate(only, admission_gate)
     if "drop" in router_weight_policy:
         candidate_index = candidate_names.index(router_weight_policy["drop"])
         kept = weights.clone()
         kept[..., candidate_index] = 0.0
-        return kept / kept.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-    return weights
+        kept = kept / kept.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        return _apply_admission_gate(kept, admission_gate)
+    return _apply_admission_gate(weights, admission_gate)
+
+
+def _apply_admission_gate(weights: torch.Tensor, admission_gate: torch.Tensor | None) -> torch.Tensor:
+    if admission_gate is None:
+        return weights
+    gate = admission_gate.to(dtype=weights.dtype, device=weights.device)
+    gated = weights * gate
+    denom = gated.sum(dim=-1, keepdim=True)
+    fallback = gate / gate.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+    return torch.where(denom > 1e-8, gated / denom.clamp_min(1e-8), fallback)
+
+
+def _operator_admission_gate(
+    candidate_outputs: dict[str, CandidateOutput],
+    candidate_names: tuple[str, ...],
+    candidate_values: torch.Tensor,
+) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
+    gates = []
+    diagnostics = {}
+    batch_size, query_count = candidate_values.shape[0], candidate_values.shape[1]
+    for name in candidate_names:
+        output = candidate_outputs[name]
+        gate = torch.ones(batch_size, query_count, dtype=candidate_values.dtype, device=candidate_values.device)
+        if name == "LRIO":
+            pair_count = output.diagnostics.get("pair_count")
+            if pair_count is not None and float(pair_count.detach().item()) <= 0.0:
+                gate = torch.zeros_like(gate)
+        if name == "CATO":
+            source_gate = output.diagnostics.get("source_gate", {})
+            if isinstance(source_gate, dict) and not source_gate:
+                gate = torch.zeros_like(gate)
+        gates.append(gate)
+        diagnostics[name] = gate.mean()
+    return {
+        "tensor": torch.stack(gates, dim=-1),
+        "diagnostics": diagnostics,
+    }
 
 
 def _router_load_by_candidate(
@@ -232,6 +337,21 @@ def _candidate_losses(
     }
 
 
+def _memory_slot_orthogonality(
+    memory_bank: dict[str, torch.Tensor],
+    candidate_names: tuple[str, ...],
+) -> torch.Tensor:
+    if len(candidate_names) < 2:
+        sample = next(iter(memory_bank.values()))
+        return torch.zeros((), dtype=sample.dtype, device=sample.device)
+    vectors = torch.stack([memory_bank[name].mean(dim=1) for name in candidate_names], dim=1)
+    flattened = vectors.transpose(0, 1).reshape(len(candidate_names), -1)
+    normalized = torch.nn.functional.normalize(flattened, dim=-1)
+    gram = normalized @ normalized.transpose(0, 1)
+    eye = torch.eye(len(candidate_names), dtype=gram.dtype, device=gram.device)
+    return ((gram - eye).square().sum() / max(len(candidate_names) * (len(candidate_names) - 1), 1)).clamp_min(0.0)
+
+
 def _adapter_param_diagnostics(params: dict[str, dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
     diagnostics = {}
     if "TLEO" in params:
@@ -240,6 +360,8 @@ def _adapter_param_diagnostics(params: dict[str, dict[str, torch.Tensor]]) -> di
         diagnostics["SPO_temperature"] = params["SPO"]["prototype_temperature"].mean()
     if "LRIO" in params:
         diagnostics["LRIO_rank_entropy"] = _entropy(params["LRIO"]["rank_logits"])
+        if "rank_logits_by_pair" in params["LRIO"]:
+            diagnostics["LRIO_pair_rank_entropy"] = _entropy(params["LRIO"]["rank_logits_by_pair"])
     if "CATO" in params:
         diagnostics["CATO_alignment_temperature"] = params["CATO"]["alignment_temperature"].mean()
     return diagnostics

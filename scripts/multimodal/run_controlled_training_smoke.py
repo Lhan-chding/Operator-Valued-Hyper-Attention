@@ -672,7 +672,9 @@ def _neutral_adapter_params(params: dict[str, dict[str, torch.Tensor]]) -> dict[
     for name, values in params.items():
         neutral[name] = {}
         for key, value in values.items():
-            if key in {"bias", "prototype_logits_shift", "rank_logits"}:
+            if not hasattr(value, "shape"):
+                neutral[name][key] = value
+            elif key in {"bias", "prototype_logits_shift", "rank_logits", "rank_logits_by_pair"}:
                 neutral[name][key] = torch.zeros_like(value)
             else:
                 neutral[name][key] = torch.ones_like(value)

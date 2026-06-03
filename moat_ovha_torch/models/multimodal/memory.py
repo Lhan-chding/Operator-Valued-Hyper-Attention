@@ -51,6 +51,8 @@ def _candidate_episode_feature(name: str, evidence: MultimodalEvidenceBank) -> t
     if name == "SPO":
         return evidence.prototype_features.mean(dim=1)
     if name == "LRIO":
+        if evidence.pair_features:
+            return torch.stack([feature.mean(dim=1) for feature in evidence.pair_features.values()], dim=0).mean(dim=0)
         return evidence.low_rank_features.mean(dim=1)
     if name == "CATO":
         return evidence.alignment_features.mean(dim=1)

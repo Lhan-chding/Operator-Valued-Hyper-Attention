@@ -453,6 +453,8 @@ def _public_loss_components(
         "candidate_individual_loss": (output.candidate_values - batch.target_y.unsqueeze(-2)).square().mean(),
         "public_alignment_ce": _public_alignment_ce(output.y_hat, batch),
         "public_contrastive_retrieval": output.y_hat.sum() * 0.0,
+        "spo_prototype_diversity": _candidate_diagnostic_tensor(output, "SPO", "prototype_diversity"),
+        "router_marginal_utility": _router_marginal_utility_loss(output),
     }
     return {
         name: available[name] * _public_loss_weight(config, name)
@@ -468,6 +470,34 @@ def _public_loss_weight(config: MultimodalExperimentConfig, loss_name: str) -> f
     if loss_name == "candidate_individual_loss" and bool(metadata.get("diagnostic_only", True)):
         return 0.0
     return float(metadata.get("weight", 1.0))
+
+
+def _candidate_diagnostic_tensor(
+    output: MultimodalOVHAOutput,
+    candidate: str,
+    key: str,
+) -> torch.Tensor:
+    value = output.diagnostics.get("candidate_diagnostics", {}).get(candidate, {}).get(key)
+    if hasattr(value, "to"):
+        return value.to(dtype=output.y_hat.dtype, device=output.y_hat.device)
+    return output.y_hat.sum() * 0.0
+
+
+def _router_marginal_utility_loss(output: MultimodalOVHAOutput) -> torch.Tensor:
+    candidate_loss = output.diagnostics.get("candidate_loss", {})
+    if not isinstance(candidate_loss, dict) or not candidate_loss:
+        return output.y_hat.sum() * 0.0
+    names = tuple(output.candidate_outputs)
+    losses = []
+    for name in names:
+        value = candidate_loss.get(name)
+        if not hasattr(value, "to"):
+            return output.y_hat.sum() * 0.0
+        losses.append(value.to(dtype=output.y_hat.dtype, device=output.y_hat.device))
+    loss_vector = torch.stack(losses)
+    target = torch.softmax(-loss_vector.detach(), dim=0)
+    router_load = output.router_weights.mean(dim=(0, 1)).clamp_min(1e-8)
+    return -(target * router_load.log()).sum()
 
 
 def _public_alignment_ce(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
@@ -1522,30 +1552,17 @@ def _smoke_rceo_calibration(
     prediction: torch.Tensor,
     diagnostics: Any,
 ) -> dict[str, object]:
-    predicted = _model_reliability_mean(diagnostics)
-    if predicted is None:
-        predicted_reliability = 0.0
-        source = "not_applicable_no_model_reliability"
-    else:
-        predicted_reliability = max(0.0, min(1.0, predicted))
-        source = "model_reliability_prior"
-    observed = _bounded_observed_reliability(batch, prediction)
-    ece = abs(predicted_reliability - observed)
+    predicted_values, source = _model_reliability_by_sample(diagnostics, batch, prediction)
+    observed_values = _bounded_observed_reliability_by_sample(batch, prediction)
+    ece, curve = _binned_ece(predicted_values, observed_values, bin_count=10)
     return {
         "ece": ece,
         "expected_calibration_error": ece,
-        "bin_count": 1,
+        "bin_count": 10,
         "source": source,
-        "mean_predicted_reliability": predicted_reliability,
-        "mean_observed_reliability": observed,
-        "calibration_curve": [
-            {
-                "bin": 0,
-                "mean_confidence": predicted_reliability,
-                "observed_accuracy": observed,
-                "count": max(1, int(batch.target_y.shape[0])),
-            }
-        ],
+        "mean_predicted_reliability": _as_float(predicted_values.mean()),
+        "mean_observed_reliability": _as_float(observed_values.mean()),
+        "calibration_curve": curve,
         "condition": "smoke calibration between model RCEO reliability and bounded per-sample performance",
     }
 
@@ -1565,11 +1582,66 @@ def _model_reliability_mean(diagnostics: Any) -> float | None:
 
 
 def _bounded_observed_reliability(batch: MultimodalEpisodeBatch, prediction: torch.Tensor) -> float:
+    return max(0.0, min(1.0, _as_float(_bounded_observed_reliability_by_sample(batch, prediction).mean())))
+
+
+def _bounded_observed_reliability_by_sample(batch: MultimodalEpisodeBatch, prediction: torch.Tensor) -> torch.Tensor:
     target = batch.target_y.to(device=prediction.device, dtype=prediction.dtype)
     mask = batch.target_mask.to(device=prediction.device, dtype=prediction.dtype).unsqueeze(-1)
     per_sample_error = ((prediction - target).square() * mask).sum(dim=(1, 2)) / mask.sum(dim=(1, 2)).clamp_min(1.0)
-    observed = 1.0 / (1.0 + per_sample_error)
-    return max(0.0, min(1.0, _as_float(observed.mean())))
+    return (1.0 / (1.0 + per_sample_error)).clamp(0.0, 1.0)
+
+
+def _model_reliability_by_sample(
+    diagnostics: Any,
+    batch: MultimodalEpisodeBatch,
+    prediction: torch.Tensor,
+) -> tuple[torch.Tensor, str]:
+    batch_size = int(batch.target_y.shape[0])
+    device = prediction.device
+    dtype = prediction.dtype
+    if isinstance(diagnostics, dict):
+        reliability = diagnostics.get("reliability")
+        if isinstance(reliability, dict):
+            sample_values = reliability.get("sample_modality_reliability_mean")
+            if sample_values is not None:
+                values = torch.as_tensor(sample_values, dtype=dtype, device=device).reshape(-1)
+                if values.numel() == batch_size:
+                    return values.clamp(0.0, 1.0), "model_reliability_prior"
+    predicted = _model_reliability_mean(diagnostics)
+    if predicted is None:
+        return torch.zeros(batch_size, dtype=dtype, device=device), "not_applicable_no_model_reliability"
+    return torch.full((batch_size,), max(0.0, min(1.0, predicted)), dtype=dtype, device=device), "model_reliability_prior"
+
+
+def _binned_ece(
+    predicted: torch.Tensor,
+    observed: torch.Tensor,
+    *,
+    bin_count: int,
+) -> tuple[float, list[dict[str, float | int]]]:
+    predicted = predicted.detach().flatten().clamp(0.0, 1.0)
+    observed = observed.detach().flatten().clamp(0.0, 1.0).to(device=predicted.device, dtype=predicted.dtype)
+    total = max(int(predicted.numel()), 1)
+    ece = 0.0
+    curve = []
+    for index in range(bin_count):
+        lower = float(index) / float(bin_count)
+        upper = float(index + 1) / float(bin_count)
+        if index == bin_count - 1:
+            mask = (predicted >= lower) & (predicted <= upper)
+        else:
+            mask = (predicted >= lower) & (predicted < upper)
+        count = int(mask.sum().item())
+        if count > 0:
+            confidence = _as_float(predicted[mask].mean())
+            accuracy = _as_float(observed[mask].mean())
+        else:
+            confidence = 0.0
+            accuracy = 0.0
+        ece += (count / total) * abs(confidence - accuracy)
+        curve.append({"bin": index, "mean_confidence": confidence, "observed_accuracy": accuracy, "count": count})
+    return ece, curve
 
 
 def _probe_router_load_by_candidate(model_name: str) -> dict[str, float]:

@@ -43,7 +43,7 @@ CONTROLLED_FAMILY_ACTIVE_OPERATOR = {
 CONTROLLED_TRUE_ADAPTER_PARAM_KEYS = {
     "TLEO": ("lengthscale", "local_temperature", "scale", "bias"),
     "SPO": ("prototype_temperature", "prototype_logits_shift", "scale", "bias"),
-    "LRIO": ("rank_logits", "interaction_temperature", "scale", "bias"),
+    "LRIO": ("rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"),
     "CATO": ("alignment_temperature", "transport_scale", "scale", "bias"),
 }
 
@@ -248,6 +248,7 @@ class ControlledSyntheticMultimodalAdapter:
         target_y = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
         true_lengthscale = torch.full((batch_size, query_count, 1), 0.16, device=device)
         true_rank_logits = _structured_adapter_logits(torch, batch_size, query_count, 4, device, offset=1, scale=1.5)
+        true_rank_logits_by_pair = _structured_pair_rank_logits(torch, true_rank_logits)
         true_prototype_logits = _structured_adapter_logits(torch, batch_size, query_count, 4, device, offset=0, scale=1.5)
         true_adapter_params = _true_adapter_params(
             torch,
@@ -257,6 +258,7 @@ class ControlledSyntheticMultimodalAdapter:
             device,
             true_lengthscale=true_lengthscale,
             true_rank_logits=true_rank_logits,
+            true_rank_logits_by_pair=true_rank_logits_by_pair,
             true_prototype_logits=true_prototype_logits,
         )
         hidden = {
@@ -428,8 +430,8 @@ def _adapter_param_arrays(np, batches: list[MultimodalEpisodeBatch]) -> dict[str
     mixed_params = batches[-1].hidden["true_adapter_params"]["params_by_operator"]
     for operator, keys in CONTROLLED_TRUE_ADAPTER_PARAM_KEYS.items():
         for key in keys:
-            width = int(mixed_params[operator][key].shape[-1])
-            arrays[f"{operator}__{key}"] = np.full((total_rows, query_count, width), np.nan, dtype=np.float32)
+            tail_shape = tuple(int(dim) for dim in mixed_params[operator][key].shape[2:])
+            arrays[f"{operator}__{key}"] = np.full((total_rows, query_count, *tail_shape), np.nan, dtype=np.float32)
 
     offset = 0
     for batch in batches:
@@ -527,6 +529,7 @@ def _true_adapter_params(
     *,
     true_lengthscale,
     true_rank_logits,
+    true_rank_logits_by_pair,
     true_prototype_logits,
 ):
     keys_by_operator = required_true_adapter_param_keys_for_family(family)
@@ -547,7 +550,9 @@ def _true_adapter_params(
         },
         "LRIO": {
             "rank_logits": true_rank_logits,
+            "rank_logits_by_pair": true_rank_logits_by_pair,
             "interaction_temperature": torch.ones(batch_size, query_count, 1, device=device),
+            "interaction_temperature_by_pair": torch.ones(batch_size, query_count, true_rank_logits_by_pair.shape[-2], 1, device=device),
             "scale": scale,
             "bias": bias,
         },
@@ -566,6 +571,13 @@ def _true_adapter_params(
             for operator, keys in keys_by_operator.items()
         },
     }
+
+
+def _structured_pair_rank_logits(torch, rank_logits):
+    pair_count = 6
+    offsets = torch.linspace(-0.75, 0.75, pair_count, device=rank_logits.device).view(1, 1, pair_count, 1)
+    rank_offsets = torch.linspace(0.5, -0.5, rank_logits.shape[-1], device=rank_logits.device).view(1, 1, 1, -1)
+    return rank_logits.unsqueeze(-2) + offsets * rank_offsets
 
 
 def _alignment_pairs(torch, batch_size: int, query_count: int, token_count: int, device: str):

@@ -1293,7 +1293,13 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(stages["T0"]["optimizer_steps"], 0)
         self.assertEqual(
             stages["T5"]["loss_names_observed"],
-            ["candidate_individual_loss", "public_alignment_ce", "task_loss"],
+            [
+                "candidate_individual_loss",
+                "public_alignment_ce",
+                "router_marginal_utility",
+                "spo_prototype_diversity",
+                "task_loss",
+            ],
         )
         self.assertEqual(len(metrics_rows), 1)
         self.assertEqual(metrics_rows[0]["stage"], "T5")
@@ -3878,7 +3884,7 @@ def _valid_adapter_params() -> dict[str, list[str]]:
     return {
         "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
         "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
-        "LRIO": ["rank_logits", "interaction_temperature", "scale", "bias"],
+        "LRIO": ["rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"],
         "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"],
     }
 

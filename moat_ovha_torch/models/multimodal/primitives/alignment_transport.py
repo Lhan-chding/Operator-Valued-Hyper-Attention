@@ -21,6 +21,9 @@ class CATOPrimitive(MultimodalCandidatePrimitive):
         self.shared_value_proj = nn.Linear(d_model, d_model)
         self.shared_source_gate = nn.Linear(d_model + 1, 1)
         self.transport_proj = nn.Linear(d_model * 3, d_model)
+        self.null_key = nn.Parameter(torch.zeros(d_model))
+        self.null_value = nn.Parameter(torch.zeros(d_model))
+        self.null_logit_bias = nn.Parameter(torch.tensor(-8.0))
         self.norm = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, output_dim)
 
@@ -33,21 +36,30 @@ class CATOPrimitive(MultimodalCandidatePrimitive):
         source_valid = []
         source_token_marginals = {}
         query_token_marginals = {}
+        null_masses = []
         source_names = []
         for source_name, source in evidence.field_features.items():
             source_field = batch.fields[source_name]
             q_proj, k_proj, v_proj, gate_proj = self._modules_for(source_name)
             query = q_proj(evidence.query_features)
             key = k_proj(source)
+            value = v_proj(source)
+            null_key = self.null_key.view(1, 1, -1).expand(source.shape[0], 1, -1)
+            null_value = self.null_value.view(1, 1, -1).expand(source.shape[0], 1, -1)
+            key = torch.cat([key, null_key], dim=1)
+            value = torch.cat([value, null_value], dim=1)
             score = torch.matmul(query, key.transpose(1, 2)) / temperature
-            score = score + _position_bias(batch.query.pos, source_field.pos, dtype=score.dtype, device=score.device)
+            score[..., -1] = score[..., -1] + self.null_logit_bias
+            null_pos = batch.query.pos[:, :1, :].to(dtype=source_field.pos.dtype, device=source_field.pos.device)
+            source_pos = torch.cat([source_field.pos, null_pos], dim=1)
+            score = score + _position_bias(batch.query.pos, source_pos, dtype=score.dtype, device=score.device)
             source_mask = source_field.mask.to(device=score.device)
-            score = score.masked_fill(~source_mask.unsqueeze(1), -1e9)
+            null_mask = torch.ones(source_mask.shape[0], 1, dtype=torch.bool, device=score.device)
+            extended_mask = torch.cat([source_mask, null_mask], dim=1)
+            score = score.masked_fill(~extended_mask.unsqueeze(1), -1e9)
             valid_source = source_mask.any(dim=1)
             transport = torch.softmax(score, dim=-1)
-            transport = torch.where(valid_source.view(-1, 1, 1), transport, torch.zeros_like(transport))
-            transported = torch.matmul(transport, v_proj(source))
-            transported = torch.where(valid_source.view(-1, 1, 1), transported, torch.zeros_like(transported))
+            transported = torch.matmul(transport, value)
             quality = _field_quality(source_field, dtype=transported.dtype, device=transported.device)
             gate_input = torch.cat([transported.mean(dim=1), quality], dim=-1)
             source_gate_logits.append(gate_proj(gate_input).unsqueeze(1))
@@ -55,8 +67,10 @@ class CATOPrimitive(MultimodalCandidatePrimitive):
             source_entropies.append(-(transport * transport.clamp_min(1e-12).log()).sum(dim=-1).mean())
             source_marginal_errors.append(_source_transport_marginal_error(transport, source_mask))
             source_valid.append(valid_source)
-            source_token_marginals[source_name] = transport.mean(dim=(0, 1))
-            query_token_marginals[source_name] = transport.sum(dim=-1).mean()
+            real_transport = transport[..., : source.shape[1]]
+            source_token_marginals[source_name] = real_transport.mean(dim=(0, 1))
+            query_token_marginals[source_name] = real_transport.sum(dim=-1).mean()
+            null_masses.append(transport[..., -1].mean())
             source_names.append(source_name)
         if transported_sources:
             transported_stack = torch.stack(transported_sources, dim=-2)
@@ -109,6 +123,16 @@ class CATOPrimitive(MultimodalCandidatePrimitive):
             "source_token_marginal": source_token_marginals,
             "query_token_marginal": query_token_marginals,
             "null_mass": (
+                torch.stack(null_masses).mean()
+                if null_masses
+                else torch.ones((), dtype=value.dtype, device=value.device)
+            ),
+            "learned_null_mass": (
+                torch.stack(null_masses).mean()
+                if null_masses
+                else torch.ones((), dtype=value.dtype, device=value.device)
+            ),
+            "invalid_source_rate": (
                 torch.stack([(~valid).to(dtype=value.dtype).mean() for valid in source_valid]).mean()
                 if source_valid
                 else torch.ones((), dtype=value.dtype, device=value.device)
@@ -152,10 +176,12 @@ def _top_k_alignment(source_token_marginals: dict[str, torch.Tensor]) -> torch.T
 
 def _source_transport_marginal_error(transport: torch.Tensor, source_mask: torch.Tensor) -> torch.Tensor:
     row_error = (transport.sum(dim=-1) - 1.0).abs().mean()
+    real_transport = transport[..., : source_mask.shape[-1]]
     valid_count = source_mask.to(dtype=transport.dtype, device=transport.device).sum(dim=-1).clamp_min(1.0)
     target_col = source_mask.to(dtype=transport.dtype, device=transport.device) / valid_count.unsqueeze(-1)
-    observed_col = transport.mean(dim=1)
-    return row_error + (observed_col - target_col).abs().mean()
+    observed_col = real_transport.mean(dim=1)
+    null_mass = transport[..., -1].mean()
+    return row_error + (observed_col - target_col).abs().mean() + 0.1 * null_mass
 
 
 def _transport_scale_error(transport_scale: torch.Tensor | None, device: torch.device) -> torch.Tensor:

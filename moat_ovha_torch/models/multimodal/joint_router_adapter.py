@@ -13,6 +13,7 @@ class MultimodalJointRouterAdapter(nn.Module):
         d_model: int,
         candidate_names: tuple[str, ...] = MULTIMODAL_CANDIDATE_NAMES,
         use_evidence_router: bool = True,
+        lrio_pairs: tuple[tuple[str, str], ...] | None = None,
     ):
         super().__init__()
         self.router = MultimodalRelationRouter(
@@ -20,7 +21,11 @@ class MultimodalJointRouterAdapter(nn.Module):
             candidate_names=candidate_names,
             use_evidence_router=use_evidence_router,
         )
-        self.hyper_adapter = MultimodalHyperAdapter(d_model=d_model, candidate_names=candidate_names)
+        self.hyper_adapter = MultimodalHyperAdapter(
+            d_model=d_model,
+            candidate_names=candidate_names,
+            lrio_pairs=lrio_pairs,
+        )
 
     def forward(self, memory_bank, evidence, reliability):
         router_output = self.router(memory_bank, evidence, reliability)

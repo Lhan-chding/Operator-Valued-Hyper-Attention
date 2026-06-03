@@ -390,7 +390,7 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
             output = model(_batch(torch))
 
         lrio = output.diagnostics["candidate_diagnostics"]["LRIO"]
-        self.assertIn("rank_logits_by_pair", output.diagnostics["adapter_params_detail"]["LRIO"])
+        self.assertIn("rank_logits_by_pair_mean", output.diagnostics["adapter_params_detail"]["LRIO"])
         self.assertLess(
             float(lrio["pair_rank_entropy"]["text__audio"]),
             float(lrio["pair_rank_entropy"]["text__vision"]),
@@ -438,8 +438,8 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
 
         self.assertIn("spo_prototype_diversity", components)
         self.assertIn("router_marginal_utility", components)
-        self.assertGreater(float(components["spo_prototype_diversity"]), 0.0)
-        self.assertGreaterEqual(float(components["router_marginal_utility"]), 0.0)
+        self.assertGreater(float(components["spo_prototype_diversity"].detach()), 0.0)
+        self.assertGreaterEqual(float(components["router_marginal_utility"].detach()), 0.0)
 
     def test_operator_admission_and_memory_differentiation_diagnostics(self):
         import torch

@@ -403,7 +403,7 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
         from moat_ovha_torch.train.multimodal_protocol import validate_training_protocol
 
         params = _valid_adapter_params()
-        params["LRIO"] = ["rank_logits", "scale", "bias"]
+        params["LRIO"] = ["rank_logits", "rank_logits_by_pair", "scale", "bias"]
         params["SPO"] = list(params["SPO"]) + ["scale"]
         report = validate_training_protocol(
             {
@@ -477,7 +477,7 @@ def _valid_adapter_params() -> dict[str, list[str]]:
     return {
         "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
         "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
-        "LRIO": ["rank_logits", "interaction_temperature", "scale", "bias"],
+        "LRIO": ["rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"],
         "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"],
     }
 

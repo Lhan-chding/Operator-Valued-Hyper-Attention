@@ -27,18 +27,24 @@
   "allow_hidden_losses": false,
   "losses_by_stage": {
     "T0": ["cache_validation"],
-    "T5": ["task_loss", "candidate_individual_loss"]
+    "T5": ["task_loss", "candidate_individual_loss", "spo_prototype_diversity", "router_marginal_utility"]
   },
   "loss_metadata": {
     "candidate_individual_loss": {
       "weight": 0.0,
       "diagnostic_only": true
+    },
+    "spo_prototype_diversity": {
+      "weight": 0.001
+    },
+    "router_marginal_utility": {
+      "weight": 0.01
     }
   },
   "adapter_params_by_candidate": {
     "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
     "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
-    "LRIO": ["rank_logits", "interaction_temperature", "scale", "bias"],
+    "LRIO": ["rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"],
     "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"]
   }
 }

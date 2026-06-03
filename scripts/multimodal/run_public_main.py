@@ -1715,30 +1715,17 @@ def _rceo_calibration(
     prediction: torch.Tensor,
     diagnostics: Any,
 ) -> dict[str, Any]:
-    predicted = _model_reliability_mean(diagnostics)
-    observed = _bounded_observed_reliability(batch, prediction)
-    if predicted is None:
-        predicted_reliability = 0.0
-        source = "not_applicable_no_model_reliability"
-    else:
-        predicted_reliability = max(0.0, min(1.0, predicted))
-        source = "model_reliability_prior"
-    ece = abs(predicted_reliability - observed)
+    predicted_values, source = _model_reliability_by_sample(diagnostics, batch, prediction)
+    observed_values = _bounded_observed_reliability_by_sample(batch, prediction)
+    ece, curve = _binned_ece(predicted_values, observed_values, bin_count=10)
     return {
         "ece": ece,
         "expected_calibration_error": ece,
-        "bin_count": 1,
+        "bin_count": 10,
         "source": source,
-        "mean_predicted_reliability": predicted_reliability,
-        "mean_observed_reliability": observed,
-        "calibration_curve": [
-            {
-                "bin": 0,
-                "mean_confidence": predicted_reliability,
-                "observed_accuracy": observed,
-                "count": max(1, int(batch.target_y.shape[0])),
-            }
-        ],
+        "mean_predicted_reliability": _as_float(predicted_values.mean()),
+        "mean_observed_reliability": _as_float(observed_values.mean()),
+        "calibration_curve": curve,
         "condition": "public main reliability calibration between model RCEO reliability and bounded per-sample performance",
     }
 
@@ -1760,11 +1747,66 @@ def _model_reliability_mean(diagnostics: Any) -> float | None:
 
 
 def _bounded_observed_reliability(batch: MultimodalEpisodeBatch, prediction: torch.Tensor) -> float:
+    return max(0.0, min(1.0, _as_float(_bounded_observed_reliability_by_sample(batch, prediction).mean())))
+
+
+def _bounded_observed_reliability_by_sample(batch: MultimodalEpisodeBatch, prediction: torch.Tensor) -> torch.Tensor:
     error = (prediction - batch.target_y.to(device=prediction.device, dtype=prediction.dtype)).square()
     mask = batch.target_mask.to(device=prediction.device, dtype=prediction.dtype).unsqueeze(-1)
     per_sample_error = (error * mask).sum(dim=(1, 2)) / mask.sum(dim=(1, 2)).clamp_min(1.0)
-    observed = 1.0 / (1.0 + per_sample_error)
-    return max(0.0, min(1.0, _as_float(observed.mean())))
+    return (1.0 / (1.0 + per_sample_error)).clamp(0.0, 1.0)
+
+
+def _model_reliability_by_sample(
+    diagnostics: Any,
+    batch: MultimodalEpisodeBatch,
+    prediction: torch.Tensor,
+) -> tuple[torch.Tensor, str]:
+    batch_size = int(batch.target_y.shape[0])
+    device = prediction.device
+    dtype = prediction.dtype
+    if isinstance(diagnostics, dict):
+        reliability = diagnostics.get("reliability")
+        if isinstance(reliability, dict):
+            sample_values = reliability.get("sample_modality_reliability_mean")
+            if sample_values is not None:
+                values = torch.as_tensor(sample_values, dtype=dtype, device=device).reshape(-1)
+                if values.numel() == batch_size:
+                    return values.clamp(0.0, 1.0), "model_reliability_prior"
+    predicted = _model_reliability_mean(diagnostics)
+    if predicted is None:
+        return torch.zeros(batch_size, dtype=dtype, device=device), "not_applicable_no_model_reliability"
+    return torch.full((batch_size,), max(0.0, min(1.0, predicted)), dtype=dtype, device=device), "model_reliability_prior"
+
+
+def _binned_ece(
+    predicted: torch.Tensor,
+    observed: torch.Tensor,
+    *,
+    bin_count: int,
+) -> tuple[float, list[dict[str, float | int]]]:
+    predicted = predicted.detach().flatten().clamp(0.0, 1.0)
+    observed = observed.detach().flatten().clamp(0.0, 1.0).to(device=predicted.device, dtype=predicted.dtype)
+    total = max(int(predicted.numel()), 1)
+    ece = 0.0
+    curve = []
+    for index in range(bin_count):
+        lower = float(index) / float(bin_count)
+        upper = float(index + 1) / float(bin_count)
+        if index == bin_count - 1:
+            mask = (predicted >= lower) & (predicted <= upper)
+        else:
+            mask = (predicted >= lower) & (predicted < upper)
+        count = int(mask.sum().item())
+        if count > 0:
+            confidence = _as_float(predicted[mask].mean())
+            accuracy = _as_float(observed[mask].mean())
+        else:
+            confidence = 0.0
+            accuracy = 0.0
+        ece += (count / total) * abs(confidence - accuracy)
+        curve.append({"bin": index, "mean_confidence": confidence, "observed_accuracy": accuracy, "count": count})
+    return ece, curve
 
 
 def _validate_main_config_scope(path: Path, config: MultimodalExperimentConfig) -> None:

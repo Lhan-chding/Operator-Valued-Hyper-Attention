@@ -34,6 +34,7 @@ class LRIOPrimitive(MultimodalCandidatePrimitive):
         self.trunk = nn.ModuleDict({_pair_key(pair): nn.Linear(d_model * 2, rank_count * d_model) for pair in self.pairs})
         self.pair_gate = nn.ModuleDict({_pair_key(pair): nn.Linear(d_model * 2, 1) for pair in self.pairs})
         self.memory_proj = nn.Linear(d_model, d_model)
+        self.pair_evidence_scale = nn.Parameter(torch.zeros(()))
         self.norm = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, output_dim)
 
@@ -46,10 +47,12 @@ class LRIOPrimitive(MultimodalCandidatePrimitive):
         pair_gates = []
         active_pair_names = []
         pair_rank_entropies = {}
+        pair_admission_gate = {}
         pair_interaction_strength = {}
         rank_logits_by_pair = _rank_logits_by_pair(params, len(self.pairs))
         temperature_by_pair = _temperature_by_pair(params, len(self.pairs))
         reliability_by_pair = _pair_reliability_by_key(params, self.pairs, pooled, evidence.query_features)
+        evidence_pair_features = evidence.pair_features or {}
         for pair in self.pairs:
             pair_index = self.pairs.index(pair)
             left_name, right_name = pair
@@ -70,13 +73,19 @@ class LRIOPrimitive(MultimodalCandidatePrimitive):
             temperature = temperature_by_pair[:, :, pair_index, :].clamp_min(1e-4)
             rank_weights = torch.softmax(rank_logits / temperature, dim=-1)
             interaction = (rank_weights.unsqueeze(-1) * (branch * trunk)).sum(dim=-2)
+            pair_evidence = evidence_pair_features.get(key)
+            if pair_evidence is not None:
+                interaction = interaction + self.pair_evidence_scale * pair_evidence
             gate_input = torch.cat([left, right], dim=-1)
             learned_gate = self.pair_gate[key](gate_input).unsqueeze(1)
-            reliability_gate = reliability_by_pair[key].clamp_min(1e-6).log().view(left.shape[0], 1, 1)
+            reliability = reliability_by_pair[key]
+            admission = (reliability > 0.0).to(dtype=left.dtype, device=left.device)
+            reliability_gate = reliability.clamp_min(1e-6).log().view(left.shape[0], 1, 1)
             pair_gates.append(learned_gate + reliability_gate)
             pair_features.append(interaction)
             active_pair_names.append(key)
             pair_rank_entropies[key] = _entropy(rank_logits)
+            pair_admission_gate[key] = admission.mean()
             pair_interaction_strength[key] = interaction.norm(dim=-1).mean()
         if pair_features:
             pair_stack = torch.stack(pair_features, dim=-2)
@@ -100,6 +109,7 @@ class LRIOPrimitive(MultimodalCandidatePrimitive):
             "configured_pair_count": torch.as_tensor(float(len(self.pairs)), dtype=value.dtype, device=value.device),
             "active_pair_names": tuple(active_pair_names),
             "pair_load": pair_load,
+            "pair_admission_gate": pair_admission_gate,
             "pair_reliability": {
                 key: reliability_by_pair[key].mean()
                 for key in active_pair_names
@@ -132,14 +142,26 @@ def _pair_key(pair: tuple[str, str]) -> str:
 
 def _rank_logits_by_pair(params: dict[str, torch.Tensor], pair_count: int) -> torch.Tensor:
     if "rank_logits_by_pair" in params:
-        return params["rank_logits_by_pair"]
+        pair_logits = params["rank_logits_by_pair"]
+        global_logits = params["rank_logits"].unsqueeze(-2).expand(*params["rank_logits"].shape[:-1], pair_count, params["rank_logits"].shape[-1])
+        if pair_logits.shape[-2] == pair_count:
+            return global_logits + pair_logits
+        return global_logits
     rank_logits = params["rank_logits"]
     return rank_logits.unsqueeze(-2).expand(*rank_logits.shape[:-1], pair_count, rank_logits.shape[-1])
 
 
 def _temperature_by_pair(params: dict[str, torch.Tensor], pair_count: int) -> torch.Tensor:
     if "interaction_temperature_by_pair" in params:
-        return params["interaction_temperature_by_pair"]
+        pair_temperature = params["interaction_temperature_by_pair"]
+        global_temperature = params["interaction_temperature"].unsqueeze(-2).expand(
+            *params["interaction_temperature"].shape[:-1],
+            pair_count,
+            params["interaction_temperature"].shape[-1],
+        )
+        if pair_temperature.shape[-2] == pair_count:
+            return global_temperature + pair_temperature
+        return global_temperature
     temperature = params["interaction_temperature"]
     return temperature.unsqueeze(-2).expand(*temperature.shape[:-1], pair_count, temperature.shape[-1])
 
