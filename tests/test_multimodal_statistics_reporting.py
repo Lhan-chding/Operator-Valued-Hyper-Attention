@@ -589,7 +589,7 @@ def _lower_is_better_sentiment_rows():
         "ovha_no_lrio": (0.54, 0.53, 0.55),
         "ovha_no_spo": (0.50, 0.49, 0.51),
         "ovha_no_rceo": (0.55, 0.54, 0.56),
-        "ovha_no_evidence_router": (0.56, 0.55, 0.57),
+        "ovha_with_evidence_router": (0.56, 0.55, 0.57),
     }
     rows = []
     models = ("ovha_full", "cross_attention_transformer", *baseline_names_for_task("sentiment_emotion"))
@@ -641,7 +641,15 @@ def _region_public_metrics(score: float) -> dict[str, object]:
 def _sentiment_public_metrics(score: float) -> dict[str, object]:
     return {
         "mae": score,
+        "mse_loss": score * score,
+        "l1_loss": score,
         "pearson_correlation": 0.62,
+        "acc7": 0.42,
+        "acc5": 0.48,
+        "acc2_excl0": 0.70,
+        "f1_excl0": 0.68,
+        "acc2_nonneg": 0.72,
+        "f1_nonneg": 0.69,
         "accuracy": 0.70,
         "f1": 0.68,
         "missing_modality_performance_drop": 0.04,

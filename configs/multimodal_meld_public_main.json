@@ -18,7 +18,7 @@
     "ovha_no_lrio",
     "ovha_no_spo",
     "ovha_no_rceo",
-    "ovha_no_evidence_router"
+    "ovha_with_evidence_router"
   ],
   "eval_splits": ["val", "test"],
   "eval_episode_count": 4096,

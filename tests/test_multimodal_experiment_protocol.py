@@ -204,7 +204,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(region, {"text_only", "region_only", "concat_fusion", "cato_only", "ovha_no_cato", "ovha_no_rceo", "ovha_no_evidence_router"})
 
         sentiment = set(baseline_names_for_task("sentiment_emotion"))
-        self.assertEqual(sentiment, {"text_only", "audio_only", "vision_only", "concat_fusion", "ovha_no_lrio", "ovha_no_spo", "ovha_no_rceo", "ovha_no_evidence_router"})
+        self.assertEqual(sentiment, {"text_only", "audio_only", "vision_only", "concat_fusion", "ovha_no_lrio", "ovha_no_spo", "ovha_no_rceo", "ovha_with_evidence_router"})
         self.assertNotIn("GroundingDINO", region)
         self.assertNotIn("MISA", sentiment)
         self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "concat_fusion"), "same_feature_sanity_probe")
@@ -216,7 +216,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         )
         self.assertEqual(
             set(ovha_ablation_names_for_task("sentiment_emotion")),
-            {"ovha_no_lrio", "ovha_no_spo", "ovha_no_rceo", "ovha_no_evidence_router"},
+            {"ovha_no_lrio", "ovha_no_spo", "ovha_no_rceo", "ovha_with_evidence_router"},
         )
         self.assertTrue({"MDETR", "GLIP", "GroundingDINO", "GroundingDINO-1.5"}.issubset(set(external_reference_names_for_task("phrase_region_grounding"))))
         self.assertTrue({"TFN", "LMF", "MulT", "MISA", "MAG-BERT", "Self-MM"}.issubset(set(external_reference_names_for_task("sentiment_emotion"))))
@@ -1011,6 +1011,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_spo", ("SPO", "LRIO")), {"candidate_names": ("LRIO",)})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_rceo"), {"use_reliability_prior": False})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_evidence_router"), {"use_evidence_router": False})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_with_evidence_router"), {"use_evidence_router": True})
         with self.assertRaisesRegex(ValueError, "unknown OVHA ablation baseline"):
             module._ovha_variant_kwargs("concat_fusion")
 
@@ -1421,9 +1422,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             smoke_raw["public_metrics_scope"],
             "sentiment_emotion_smoke_real_metrics_not_topconf_main_table",
         )
-        self.assertIn("audio_missing_smoke", smoke_raw["public_metrics"]["router_load_by_corruption_type"])
+        self.assertIn("clean", smoke_raw["public_metrics"]["router_load_by_corruption_type"])
         self.assertEqual(
-            set(smoke_raw["public_metrics"]["router_load_by_corruption_type"]["audio_missing_smoke"]),
+            set(smoke_raw["public_metrics"]["router_load_by_corruption_type"]["clean"]),
             {"TLEO", "SPO", "LRIO", "CATO"},
         )
         self.assertGreaterEqual(smoke_raw["public_metrics"]["rceo_reliability_calibration"]["bin_count"], 1)
@@ -1435,15 +1436,15 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 baseline_row["public_metrics_scope"],
                 "sentiment_emotion_smoke_real_metrics_not_topconf_main_table",
             )
-            self.assertIn("audio_missing_smoke", baseline_row["public_metrics"]["router_load_by_corruption_type"])
+            self.assertIn("clean", baseline_row["public_metrics"]["router_load_by_corruption_type"])
         self.assertEqual(len(smoke_robustness_rows), 2 * (1 + len(payload["baselines"])))
         ovha_robustness = [row for row in smoke_robustness_rows if row["model"] == "ovha_full"]
-        self.assertEqual({row["corruption_type"] for row in ovha_robustness}, {"clean_smoke", "audio_missing_smoke"})
-        corrupted = next(row for row in ovha_robustness if row["corruption_type"] == "audio_missing_smoke")
+        self.assertEqual({row["corruption_type"] for row in ovha_robustness}, {"clean_smoke", "missing_modality_smoke"})
+        corrupted = next(row for row in ovha_robustness if row["corruption_type"] == "missing_modality_smoke")
         self.assertEqual(corrupted["artifact_type"], "public_smoke_robustness_row")
         self.assertEqual(corrupted["evidence_scope"], "smoke_robustness_preview_only_not_topconf_gate")
         self.assertTrue(corrupted["not_topconf_main_table"])
-        self.assertEqual(corrupted["missing_modalities"], ["audio"])
+        self.assertEqual(corrupted["missing_modalities"], ["modality"])
         self.assertGreater(corrupted["corruption_strength"], 0.0)
         self.assertEqual(set(corrupted["router_load_by_candidate"]), {"TLEO", "SPO", "LRIO", "CATO"})
         self.assertEqual(set(corrupted["candidate_loss"]), {"TLEO", "SPO", "LRIO", "CATO"})
@@ -1459,7 +1460,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(smoke_robustness_summary["full_model"], "ovha_full")
         self.assertEqual(smoke_robustness_summary["baseline_model"], "concat_fusion")
         self.assertFalse(smoke_robustness_summary["required_stress_coverage"]["passed"])
-        self.assertIn("missing_audio", smoke_robustness_summary["required_stress_coverage"]["observed"])
+        self.assertNotIn("missing_audio", smoke_robustness_summary["required_stress_coverage"]["observed"])
         self.assertGreaterEqual(smoke_robustness_summary["rceo_reliability_calibration"]["bin_count"], 1)
         self.assertIn(
             "not valid top-conference robustness evidence",
@@ -4308,7 +4309,15 @@ def _public_metrics_for_task(task: str) -> dict[str, object]:
     if task == "sentiment_emotion":
         return {
             "mae": 0.3,
+            "mse_loss": 0.12,
+            "l1_loss": 0.3,
             "pearson_correlation": 0.7,
+            "acc7": 0.42,
+            "acc5": 0.48,
+            "acc2_excl0": 0.74,
+            "f1_excl0": 0.73,
+            "acc2_nonneg": 0.75,
+            "f1_nonneg": 0.74,
             "accuracy": 0.74,
             "f1": 0.73,
             "missing_modality_performance_drop": 0.08,
@@ -4350,7 +4359,7 @@ def _gate_models_for_task(task: str) -> tuple[str, ...]:
             "ovha_no_lrio",
             "ovha_no_spo",
             "ovha_no_rceo",
-            "ovha_no_evidence_router",
+            "ovha_with_evidence_router",
         )
     return (
         "ovha_full",
@@ -4377,7 +4386,7 @@ def _gate_score_for_model(task: str, model: str, *, full_score: float, baseline_
             "ovha_no_lrio": 0.70,
             "ovha_no_spo": 0.71,
             "ovha_no_rceo": 0.68,
-            "ovha_no_evidence_router": 0.69,
+            "ovha_with_evidence_router": 0.69,
         }.get(model, 0.71)
     return {
         "cato_only": 0.71,

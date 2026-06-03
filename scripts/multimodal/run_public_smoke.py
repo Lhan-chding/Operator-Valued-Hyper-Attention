@@ -33,6 +33,7 @@ from moat_ovha_torch.eval.multimodal_statistics import (
     validate_public_summary,
 )
 from moat_ovha_torch.eval.multimodal_diagnostics import summarize_diagnostic_rows
+from moat_ovha_torch.eval.mosei_standard_metrics import mosei_standard_metrics
 from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 from moat_ovha_torch.models.multimodal.baselines import assert_same_feature_baseline_policy
 from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
@@ -1103,7 +1104,12 @@ def _robustness_corruption_type(row: dict[str, object]) -> str:
     if isinstance(metrics, dict):
         loads = metrics.get("router_load_by_corruption_type")
         if isinstance(loads, dict) and loads:
-            return str(next(iter(loads)))
+            corruption_type = str(next(iter(loads)))
+            if corruption_type != "clean":
+                return corruption_type
+        missing_drop = metrics.get("missing_modality_performance_drop")
+        if missing_drop is not None and _as_float(missing_drop) > 0.0:
+            return "missing_modality_smoke"
     return "smoke_corruption"
 
 
@@ -1587,19 +1593,25 @@ def _sentiment_smoke_metrics(
     router_load_by_candidate: Any,
     diagnostics: Any,
 ) -> dict[str, object]:
-    mae = _as_float((prediction - batch.target_y).abs().mean())
-    pearson = _pearson_correlation(prediction, batch.target_y, batch.target_mask)
-    accuracy, f1 = _binary_sign_accuracy_f1(prediction, batch.target_y, batch.target_mask)
+    standard = mosei_standard_metrics(prediction, batch.target_y, batch.target_mask)
     missing_drop = _missing_modality_fraction(batch)
     metrics = {
-        "mae": max(0.0, mae),
-        "pearson_correlation": pearson,
-        "accuracy": accuracy,
-        "f1": f1,
+        "mae": max(0.0, standard["mae"]),
+        "mse_loss": max(0.0, standard["mse_loss"]),
+        "l1_loss": max(0.0, standard["l1_loss"]),
+        "pearson_correlation": standard["pearson_correlation"],
+        "acc7": standard["acc7"],
+        "acc5": standard["acc5"],
+        "acc2_excl0": standard["acc2_excl0"],
+        "f1_excl0": standard["f1_excl0"],
+        "acc2_nonneg": standard["acc2_nonneg"],
+        "f1_nonneg": standard["f1_nonneg"],
+        "accuracy": standard["acc2_excl0"],
+        "f1": standard["f1_excl0"],
         "missing_modality_performance_drop": missing_drop,
         "corruption_robustness_auc": max(0.0, min(1.0, 1.0 - missing_drop)),
         "router_load_by_corruption_type": {
-            _missing_corruption_key(batch): _complete_candidate_probability_map(router_load_by_candidate)
+            "clean": _complete_candidate_probability_map(router_load_by_candidate)
         },
         "lrio_rank_entropy": _candidate_diagnostic_metric(diagnostics, "LRIO", "rank_entropy"),
         "spo_prototype_entropy": _candidate_diagnostic_metric(diagnostics, "SPO", "prototype_entropy"),

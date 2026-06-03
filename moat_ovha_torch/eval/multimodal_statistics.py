@@ -21,7 +21,15 @@ REGION_TEXT_REQUIRED_PUBLIC_METRICS = (
 )
 SENTIMENT_REQUIRED_PUBLIC_METRICS = (
     "mae",
+    "mse_loss",
+    "l1_loss",
     "pearson_correlation",
+    "acc7",
+    "acc5",
+    "acc2_excl0",
+    "f1_excl0",
+    "acc2_nonneg",
+    "f1_nonneg",
     "accuracy",
     "f1",
     "missing_modality_performance_drop",
@@ -57,6 +65,12 @@ PUBLIC_PROBABILITY_METRICS = frozenset(
         "null_unmatched_rate",
         "accuracy",
         "f1",
+        "acc7",
+        "acc5",
+        "acc2_excl0",
+        "f1_excl0",
+        "acc2_nonneg",
+        "f1_nonneg",
         "missing_modality_performance_drop",
         "corruption_robustness_auc",
     }
@@ -66,6 +80,8 @@ PUBLIC_NON_NEGATIVE_METRICS = frozenset(
         "alignment_entropy",
         "cato_candidate_loss",
         "mae",
+        "mse_loss",
+        "l1_loss",
         "lrio_rank_entropy",
         "spo_prototype_entropy",
     }

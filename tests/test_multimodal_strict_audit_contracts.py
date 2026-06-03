@@ -21,6 +21,38 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
                     [["text", "audio"], ["text", "vision"]],
                 )
 
+    def test_cmu_public_main_uses_reverse_evidence_router_ablation_not_duplicate(self):
+        payload = json.loads((ROOT / "configs" / "multimodal_cmu_mosei_public_main.json").read_text())
+
+        self.assertFalse(payload["use_evidence_router"])
+        self.assertNotIn("ovha_no_evidence_router", payload["baseline_names"])
+        self.assertIn("ovha_with_evidence_router", payload["baseline_names"])
+
+    def test_mosei_standard_metrics_match_mult_exclude_zero_binary_protocol(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for MOSEI metric tensor checks")
+        import torch
+
+        from moat_ovha_torch.eval.mosei_standard_metrics import mosei_standard_metrics
+
+        prediction = torch.tensor([[[-0.2]], [[0.7]], [[0.3]], [[-0.1]]])
+        target = torch.tensor([[[-1.0]], [[0.0]], [[1.0]], [[0.0]]])
+        mask = torch.ones(4, 1, dtype=torch.bool)
+
+        metrics = mosei_standard_metrics(prediction, target, mask)
+
+        self.assertEqual(metrics["acc2_excl0"], 1.0)
+        self.assertEqual(metrics["f1_excl0"], 1.0)
+        self.assertEqual(metrics["acc2_nonneg"], 0.75)
+        self.assertLess(metrics["f1_nonneg"], 1.0)
+
+    def test_public_main_runner_exposes_official_selection_split_contract(self):
+        source = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()
+
+        self.assertIn("--selection-split", source)
+        self.assertIn('"official_val_selection_best_checkpoint"', source)
+        self.assertNotIn("_split_train_val_batch(\n        train_batch,", source)
+
     def test_multimodal_primitives_are_not_shared_linear_head_stubs(self):
         tleo = (ROOT / "moat_ovha_torch" / "models" / "multimodal" / "primitives" / "typed_local_evidence.py").read_text()
         lrio = (ROOT / "moat_ovha_torch" / "models" / "multimodal" / "primitives" / "low_rank_interaction.py").read_text()

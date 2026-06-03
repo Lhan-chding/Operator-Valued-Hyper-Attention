@@ -21,6 +21,7 @@ from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
 from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256, validate_cache_layout
 from moat_ovha_torch.data.multimodal.typed_batch import MultimodalEpisodeBatch, SupervisionBank, TokenField
 from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
+from moat_ovha_torch.eval.mosei_standard_metrics import mosei_standard_metrics
 from moat_ovha_torch.eval.multimodal_robustness import DEFAULT_REQUIRED_STRESS_TARGETS
 from moat_ovha_torch.eval.multimodal_statistics import (
     REGION_TEXT_REQUIRED_PUBLIC_METRICS,
@@ -69,6 +70,7 @@ def main() -> int:
     parser.add_argument("--train-steps", type=int, required=True)
     parser.add_argument("--baseline-train-steps", type=int, required=True)
     parser.add_argument("--train-split", default="train")
+    parser.add_argument("--selection-split", default="val")
     parser.add_argument("--eval-split", default="test")
     parser.add_argument("--d-model", type=int, default=64)
     parser.add_argument("--memory-tokens", type=int, default=4)
@@ -125,7 +127,7 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     assert_same_feature_baseline_policy(config)
 
     layout = MultimodalCacheLayout(config.cache_root, config.dataset_name, config.cache_version)
-    cache_report = validate_cache_layout(layout, splits=(args.train_split, args.eval_split))
+    cache_report = validate_cache_layout(layout, splits=tuple(dict.fromkeys((args.train_split, args.selection_split, args.eval_split))))
     if not cache_report.ok:
         return _failure_payload(config, cache_report.errors, cache_report.warnings), 2
 
@@ -195,6 +197,7 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "dataset": config.dataset_name,
         "task": config.task_type,
         "train_split": args.train_split,
+        "selection_split": args.selection_split,
         "eval_split": args.eval_split,
         "seeds": list(selected_seeds),
         "seed_count": len(selected_seeds),
@@ -242,15 +245,11 @@ def _run_seed(
     _print_progress("seed:start", seed=seed)
     host_device = torch.device("cpu")
     train_batch = _load_public_batch(layout, config, args.train_split, host_device)
+    selection_batch = _load_public_batch(layout, config, args.selection_split, host_device)
     eval_batch = _load_public_batch(layout, config, args.eval_split, host_device)
-    fit_batch, val_batch = _split_train_val_batch(
-        train_batch,
-        validation_fraction=float(args.validation_fraction),
-        seed=seed,
-    )
-    target_mean, target_std = _target_standardizer(fit_batch)
-    fit_batch_std = _standardize_batch_targets(fit_batch, target_mean, target_std)
-    val_batch_std = _standardize_batch_targets(val_batch, target_mean, target_std)
+    target_mean, target_std = _target_standardizer(train_batch)
+    fit_batch_std = _standardize_batch_targets(train_batch, target_mean, target_std)
+    val_batch_std = _standardize_batch_targets(selection_batch, target_mean, target_std)
     eval_batch_std = _standardize_batch_targets(eval_batch, target_mean, target_std)
     field_dims = {name: int(field.x.shape[-1]) for name, field in train_batch.fields.items()}
     model = MultimodalOVHA(
@@ -347,6 +346,7 @@ def _run_seed(
             target_mean.to(device=device),
             target_std.to(device=device),
         )
+        eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std_device, eval_batch)
         eval_output = _move_ovha_output_to_device(eval_output, torch.device("cpu"))
     elapsed = time.perf_counter() - seed_started_at
     hardware = _hardware_metadata(device, elapsed)
@@ -387,6 +387,7 @@ def _run_seed(
     baseline_rows, baseline_robustness_rows, baseline_summaries = _baseline_rows(
         config,
         train_batch=train_batch,
+        selection_batch=selection_batch,
         eval_batch=eval_batch,
         seed=seed,
         baseline_train_steps=int(args.baseline_train_steps),
@@ -423,8 +424,9 @@ def _run_seed(
             "ovha_best_val_task_loss": best_val_loss,
             "ovha_best_checkpoint_step": best_step,
             "ovha_training_protocol": "mini_batch_validation_best_checkpoint",
+            "ovha_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
             "ovha_batch_size": int(args.batch_size),
-            "ovha_validation_fraction": float(args.validation_fraction),
+            "ovha_selection_split": args.selection_split,
             "ovha_target_standardized": True,
             "baseline_count": len(baseline_rows),
             "baseline_summaries": baseline_summaries,
@@ -721,6 +723,102 @@ def _destandardize_output(
     )
 
 
+def _with_raw_space_candidate_diagnostics(
+    output: MultimodalOVHAOutput,
+    standardized_batch: MultimodalEpisodeBatch,
+    raw_batch: MultimodalEpisodeBatch,
+) -> MultimodalOVHAOutput:
+    candidate_names = tuple(output.candidate_outputs)
+    raw_losses = _candidate_losses_from_values(output.candidate_values, candidate_names, raw_batch)
+    standardized_losses = output.diagnostics.get("candidate_loss", {})
+    diagnostics = {
+        **output.diagnostics,
+        "standardized_candidate_loss": standardized_losses,
+        "raw_candidate_loss": raw_losses,
+        "candidate_loss": raw_losses,
+        "raw_candidate_value_stats": _candidate_value_stats_from_values(output.candidate_values, candidate_names),
+    }
+    if "candidate_value_stats" in output.diagnostics:
+        diagnostics["standardized_candidate_value_stats"] = output.diagnostics["candidate_value_stats"]
+    candidate_diagnostics = output.diagnostics.get("candidate_diagnostics")
+    if isinstance(candidate_diagnostics, dict):
+        diagnostics["candidate_diagnostics"] = {
+            name: _raw_candidate_diagnostic_entry(candidate_diagnostics.get(name, {}), name, raw_losses, standardized_losses)
+            for name in candidate_diagnostics
+        }
+    if "candidate_loss_by_sample" in output.diagnostics:
+        diagnostics["standardized_candidate_loss_by_sample"] = output.diagnostics["candidate_loss_by_sample"]
+        diagnostics["raw_candidate_loss_by_sample"] = _candidate_losses_by_sample_from_values(
+            output.candidate_values,
+            candidate_names,
+            raw_batch,
+        )
+    diagnostics["target_space"] = {
+        "prediction": "raw",
+        "candidate_values": "raw",
+        "candidate_loss": "raw",
+        "standardized_reference_available": True,
+        "standardized_target_mean": _as_float(standardized_batch.target_y.mean()),
+    }
+    return replace(output, diagnostics=diagnostics)
+
+
+def _raw_candidate_diagnostic_entry(
+    values: Any,
+    name: str,
+    raw_losses: dict[str, torch.Tensor],
+    standardized_losses: Any,
+) -> dict[str, Any]:
+    entry = dict(values) if isinstance(values, dict) else {}
+    if name in raw_losses:
+        entry["raw_candidate_loss"] = raw_losses[name]
+        entry["candidate_loss"] = raw_losses[name]
+    if isinstance(standardized_losses, dict) and name in standardized_losses:
+        entry["standardized_candidate_loss"] = standardized_losses[name]
+    return entry
+
+
+def _candidate_losses_from_values(
+    candidate_values: torch.Tensor,
+    candidate_names: tuple[str, ...],
+    batch: MultimodalEpisodeBatch,
+) -> dict[str, torch.Tensor]:
+    mask = batch.target_mask.to(device=candidate_values.device, dtype=candidate_values.dtype).unsqueeze(-1)
+    truth = batch.target_y.to(device=candidate_values.device, dtype=candidate_values.dtype).unsqueeze(-2)
+    losses: dict[str, torch.Tensor] = {}
+    for index, name in enumerate(candidate_names):
+        error = (candidate_values[..., index, :] - truth[..., 0, :]).square()
+        losses[name] = (error * mask).sum() / mask.sum().clamp_min(1.0)
+    return losses
+
+
+def _candidate_losses_by_sample_from_values(
+    candidate_values: torch.Tensor,
+    candidate_names: tuple[str, ...],
+    batch: MultimodalEpisodeBatch,
+) -> dict[str, torch.Tensor]:
+    mask = batch.target_mask.to(device=candidate_values.device, dtype=candidate_values.dtype)
+    truth = batch.target_y.to(device=candidate_values.device, dtype=candidate_values.dtype)
+    losses: dict[str, torch.Tensor] = {}
+    for index, name in enumerate(candidate_names):
+        error = (candidate_values[..., index, :] - truth).square().mean(dim=-1)
+        losses[name] = (error * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
+    return losses
+
+
+def _candidate_value_stats_from_values(
+    candidate_values: torch.Tensor,
+    candidate_names: tuple[str, ...],
+) -> dict[str, dict[str, torch.Tensor]]:
+    return {
+        name: {
+            "mean": candidate_values[..., index, :].mean(),
+            "std": candidate_values[..., index, :].std(unbiased=False),
+        }
+        for index, name in enumerate(candidate_names)
+    }
+
+
 def _destandardize_prediction(
     prediction: torch.Tensor,
     target_mean: torch.Tensor,
@@ -764,6 +862,7 @@ def _baseline_rows(
     config: MultimodalExperimentConfig,
     *,
     train_batch: MultimodalEpisodeBatch,
+    selection_batch: MultimodalEpisodeBatch,
     eval_batch: MultimodalEpisodeBatch,
     seed: int,
     baseline_train_steps: int,
@@ -791,6 +890,7 @@ def _baseline_rows(
                 str(baseline_name),
                 train_batch=train_batch,
                 eval_batch=eval_batch,
+                selection_batch=selection_batch,
                 seed=seed,
                 train_steps=baseline_train_steps,
                 learning_rate=learning_rate,
@@ -841,6 +941,7 @@ def _baseline_rows(
         model, summary = _train_linear_baseline(
             str(baseline_name),
             train_batch=train_batch,
+            selection_batch=selection_batch,
             seed=seed,
             train_steps=baseline_train_steps,
             learning_rate=learning_rate,
@@ -907,6 +1008,7 @@ def _train_ovha_ablation(
     *,
     train_batch: MultimodalEpisodeBatch,
     eval_batch: MultimodalEpisodeBatch,
+    selection_batch: MultimodalEpisodeBatch | None = None,
     seed: int,
     train_steps: int,
     learning_rate: float,
@@ -921,14 +1023,10 @@ def _train_ovha_ablation(
     device: torch.device | None = None,
 ) -> tuple[MultimodalOVHA, MultimodalOVHAOutput, dict[str, Any]]:
     device = device or train_batch.target_y.device
-    fit_batch, val_batch = _split_train_val_batch(
-        train_batch,
-        validation_fraction=validation_fraction,
-        seed=int(seed),
-    )
-    target_mean, target_std = _target_standardizer(fit_batch)
-    fit_batch_std = _standardize_batch_targets(fit_batch, target_mean, target_std)
-    val_batch_std = _standardize_batch_targets(val_batch, target_mean, target_std)
+    selection_batch = selection_batch or train_batch
+    target_mean, target_std = _target_standardizer(train_batch)
+    fit_batch_std = _standardize_batch_targets(train_batch, target_mean, target_std)
+    val_batch_std = _standardize_batch_targets(selection_batch, target_mean, target_std)
     eval_batch_std = _standardize_batch_targets(eval_batch, target_mean, target_std)
     field_dims = {name: int(field.x.shape[-1]) for name, field in train_batch.fields.items()}
     torch.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name))
@@ -1029,6 +1127,7 @@ def _train_ovha_ablation(
             target_mean.to(device=device),
             target_std.to(device=device),
         )
+        eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std_device, eval_batch)
         eval_output = _move_ovha_output_to_device(eval_output, torch.device("cpu"))
     return model, eval_output, {
         "baseline_optimizer_steps": train_steps,
@@ -1038,8 +1137,10 @@ def _train_ovha_ablation(
         "baseline_best_val_task_loss": best_val_loss,
         "baseline_best_checkpoint_step": best_step,
         "baseline_training_protocol": "mini_batch_validation_best_checkpoint",
+        "baseline_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
         "baseline_batch_size": batch_size,
         "baseline_validation_fraction": validation_fraction,
+        "baseline_selection_split": selection_batch.split,
         "baseline_target_standardized": True,
         "baseline_variant": {"candidate_names": active_candidate_names, **variant_kwargs},
     }
@@ -1053,6 +1154,8 @@ def _ovha_variant_kwargs(
         return {"use_reliability_prior": False}
     if baseline_name == "ovha_no_evidence_router":
         return {"use_evidence_router": False}
+    if baseline_name == "ovha_with_evidence_router":
+        return {"use_evidence_router": True}
     if baseline_name == "cato_only":
         return {"candidate_names": ("CATO",)}
     if baseline_name == "ovha_no_cato":
@@ -1075,6 +1178,7 @@ def _train_linear_baseline(
     baseline_name: str,
     *,
     train_batch: MultimodalEpisodeBatch,
+    selection_batch: MultimodalEpisodeBatch,
     seed: int,
     train_steps: int,
     learning_rate: float,
@@ -1086,14 +1190,9 @@ def _train_linear_baseline(
     weight_decay: float,
     device: torch.device,
 ) -> tuple[torch.nn.Linear, dict[str, Any]]:
-    fit_batch, val_batch = _split_train_val_batch(
-        train_batch,
-        validation_fraction=validation_fraction,
-        seed=int(seed),
-    )
-    target_mean, target_std = _target_standardizer(fit_batch)
-    fit_batch_std = _standardize_batch_targets(fit_batch, target_mean, target_std)
-    val_batch_std = _standardize_batch_targets(val_batch, target_mean, target_std)
+    target_mean, target_std = _target_standardizer(train_batch)
+    fit_batch_std = _standardize_batch_targets(train_batch, target_mean, target_std)
+    val_batch_std = _standardize_batch_targets(selection_batch, target_mean, target_std)
     input_probe = _move_batch_to_device(
         _slice_batch(fit_batch_std, torch.arange(0, 1, device=fit_batch_std.target_y.device)),
         device,
@@ -1186,8 +1285,10 @@ def _train_linear_baseline(
         "baseline_best_val_task_loss": best_val_loss,
         "baseline_best_checkpoint_step": best_step,
         "baseline_training_protocol": "mini_batch_validation_best_checkpoint",
+        "baseline_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
         "baseline_batch_size": batch_size,
         "baseline_validation_fraction": validation_fraction,
+        "baseline_selection_split": selection_batch.split,
         "baseline_target_standardized": True,
         "baseline_weight_decay": weight_decay,
         "_target_mean": target_mean,
@@ -1224,6 +1325,7 @@ def _raw_metric_row(
     model_protocol: str,
     diagnostics: Any,
 ) -> dict[str, Any]:
+    standard = mosei_standard_metrics(prediction, batch.target_y, batch.target_mask) if _is_sentiment_task(config.task_type) else {}
     return {
         "artifact_type": "public_main_raw_metric",
         "evidence_scope": "public_main_table",
@@ -1233,8 +1335,10 @@ def _raw_metric_row(
         "stage": "T5_eval",
         "split": batch.split,
         "seed": seed,
-        "metric_name": "heldout_task_loss",
+        "metric_name": "mse_loss" if _is_sentiment_task(config.task_type) else "heldout_task_loss",
         "score": score,
+        "mse_loss": standard.get("mse_loss", score),
+        "l1_loss": standard.get("l1_loss"),
         "higher_is_better": False,
         "parameter_count": parameter_count,
         "training_steps": training_steps,
@@ -1287,20 +1391,25 @@ def _public_main_metrics(
         }
         return {name: metrics[name] for name in REGION_TEXT_REQUIRED_PUBLIC_METRICS}
     if _is_sentiment_task(config.task_type):
-        mae = _as_float((prediction - batch.target_y).abs().mean())
-        pearson = _pearson_correlation(prediction, batch.target_y, batch.target_mask)
-        accuracy, f1 = _binary_sign_accuracy_f1(prediction, batch.target_y, batch.target_mask)
+        standard = mosei_standard_metrics(prediction, batch.target_y, batch.target_mask)
         missing_drop = _missing_modality_fraction(batch)
-        corruption_key = _missing_corruption_key(batch)
         metrics = {
-            "mae": max(0.0, mae),
-            "pearson_correlation": pearson,
-            "accuracy": accuracy,
-            "f1": f1,
+            "mae": max(0.0, standard["mae"]),
+            "mse_loss": max(0.0, standard["mse_loss"]),
+            "l1_loss": max(0.0, standard["l1_loss"]),
+            "pearson_correlation": standard["pearson_correlation"],
+            "acc7": standard["acc7"],
+            "acc5": standard["acc5"],
+            "acc2_excl0": standard["acc2_excl0"],
+            "f1_excl0": standard["f1_excl0"],
+            "acc2_nonneg": standard["acc2_nonneg"],
+            "f1_nonneg": standard["f1_nonneg"],
+            "accuracy": standard["acc2_excl0"],
+            "f1": standard["f1_excl0"],
             "missing_modality_performance_drop": missing_drop,
             "corruption_robustness_auc": max(0.0, min(1.0, 1.0 - missing_drop)),
             "router_load_by_corruption_type": {
-                corruption_key: _complete_candidate_probability_map(router_load_by_candidate)
+                "clean": _complete_candidate_probability_map(router_load_by_candidate)
             },
             "lrio_rank_entropy": _candidate_diagnostic_metric(diagnostics, "LRIO", "rank_entropy"),
             "spo_prototype_entropy": _candidate_diagnostic_metric(diagnostics, "SPO", "prototype_entropy"),
@@ -1339,6 +1448,7 @@ def _ovha_robustness_rows(
             output = model(model_batch)
             if target_mean is not None and target_std is not None:
                 output = _destandardize_output(output, target_mean.to(device=device), target_std.to(device=device))
+                output = _with_raw_space_candidate_diagnostics(output, model_batch, corrupted_device)
             loss = _task_loss(output.y_hat, corrupted_device)
         rows.append(
             _robustness_row(

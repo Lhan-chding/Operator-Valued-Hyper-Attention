@@ -1934,7 +1934,7 @@ def _required_baselines_for_task(task: str) -> tuple[str, ...]:
             "ovha_no_lrio",
             "ovha_no_spo",
             "ovha_no_rceo",
-            "ovha_no_evidence_router",
+            "ovha_with_evidence_router",
         )
     return ()
 
