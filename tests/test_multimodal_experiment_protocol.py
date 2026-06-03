@@ -163,6 +163,22 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     self.assertIn(alignment_loss, config.losses_by_stage["T5"])
                     self.assertTrue(config.require_public_alignment_labels)
 
+    def test_cmu_tanso_public_main_config_is_admission_run_not_original_table_overwrite(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+
+        path = ROOT / "configs" / "multimodal_cmu_mosei_tanso_public_main.json"
+        config = MultimodalExperimentConfig.from_file(path)
+
+        self.assertEqual(config.candidate_names, ("SPO", "LRIO", "TANSO"))
+        self.assertEqual(config.base_candidate, "SPO")
+        self.assertEqual(config.residual_candidates, ("LRIO", "TANSO"))
+        self.assertIn("cmu_mosei_tanso_main", str(config.output_dir))
+        self.assertIn("TANSO", config.adapter_params_by_candidate)
+        self.assertNotEqual(
+            config.output_dir,
+            MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_main.json").output_dir,
+        )
+
     def test_region_text_public_alignment_ce_requires_declared_alignment_labels(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
 
