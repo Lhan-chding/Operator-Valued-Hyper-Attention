@@ -572,6 +572,41 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertGreater(float(components["spo_prototype_diversity"].detach()), 0.0)
         self.assertGreaterEqual(float(components["router_marginal_utility"].detach()), 0.0)
 
+    def test_sentiment_public_diagnostics_include_candidate_gate_and_residual_oracles(self):
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+        from scripts.multimodal.run_public_smoke import _public_training_diagnostics_row
+
+        torch.manual_seed(49)
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_main.json")
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=config.candidate_names,
+            use_evidence_router=config.use_evidence_router,
+            lrio_pairs=config.lrio_pairs,
+            composition_mode=config.composition_mode,
+            base_candidate=config.base_candidate,
+            residual_candidates=config.residual_candidates,
+        )
+
+        with torch.no_grad():
+            output = model(_batch(torch))
+        row = _public_training_diagnostics_row(output, config, _batch(torch), step=1, seed=301)
+        public = row["public_diagnostics"]
+
+        self.assertIn("candidate_oracle_selection", public)
+        self.assertIn("gate_sweep", public)
+        self.assertIn("residual_oracle", public)
+        self.assertIn("full_minus_oracle_min_loss", public["candidate_oracle_selection"])
+        self.assertIn("best_alpha", public["gate_sweep"])
+        self.assertIn("best_gamma", public["residual_oracle"])
+
     def test_router_marginal_utility_uses_per_sample_candidate_losses(self):
         import torch
         from types import SimpleNamespace
