@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
+from dataclasses import fields as dataclass_fields, is_dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -239,8 +239,9 @@ def _run_seed(
     seed_started_at = time.perf_counter()
     torch.manual_seed(seed)
     _print_progress("seed:start", seed=seed)
-    train_batch = _load_public_batch(layout, config, args.train_split, device)
-    eval_batch = _load_public_batch(layout, config, args.eval_split, device)
+    host_device = torch.device("cpu")
+    train_batch = _load_public_batch(layout, config, args.train_split, host_device)
+    eval_batch = _load_public_batch(layout, config, args.eval_split, host_device)
     fit_batch, val_batch = _split_train_val_batch(
         train_batch,
         validation_fraction=float(args.validation_fraction),
@@ -268,7 +269,7 @@ def _run_seed(
     best_step = 0
     best_state = _clone_state_dict(model)
     stale_evals = 0
-    batch_generator = torch.Generator(device=device)
+    batch_generator = torch.Generator(device=fit_batch_std.target_y.device)
     batch_generator.manual_seed(int(seed) + 17)
     model.train()
     train_started_at = time.perf_counter()
@@ -280,7 +281,10 @@ def _run_seed(
         learning_rate=float(args.learning_rate),
     )
     for step in range(1, int(args.train_steps) + 1):
-        train_step_batch = _sample_batch(fit_batch_std, int(args.batch_size), batch_generator)
+        train_step_batch = _move_batch_to_device(
+            _sample_batch(fit_batch_std, int(args.batch_size), batch_generator),
+            device,
+        )
         optimizer.zero_grad(set_to_none=True)
         output = model(train_step_batch)
         components = _public_loss_components(output, train_step_batch, config)
@@ -290,7 +294,12 @@ def _run_seed(
         optimizer.step()
         final_loss = _as_float(total_loss)
         if _should_validate(step, int(args.train_steps), int(args.eval_interval)):
-            val_loss = _evaluate_task_loss(model, val_batch_std)
+            val_loss = _evaluate_task_loss_on_device(
+                model,
+                val_batch_std,
+                device,
+                batch_size=_eval_batch_size(int(args.batch_size)),
+            )
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 best_step = step
@@ -329,7 +338,13 @@ def _run_seed(
     model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        eval_output = _destandardize_output(model(eval_batch_std), target_mean, target_std)
+        eval_batch_std_device = _move_batch_to_device(eval_batch_std, device)
+        eval_output = _destandardize_output(
+            model(eval_batch_std_device),
+            target_mean.to(device=device),
+            target_std.to(device=device),
+        )
+        eval_output = _move_ovha_output_to_device(eval_output, torch.device("cpu"))
     elapsed = time.perf_counter() - seed_started_at
     hardware = _hardware_metadata(device, elapsed)
     raw_rows = [
@@ -363,6 +378,7 @@ def _run_seed(
         raw_metric_path=raw_metrics_path,
         target_mean=target_mean,
         target_std=target_std,
+        device=device,
     )
 
     baseline_rows, baseline_robustness_rows, baseline_summaries = _baseline_rows(
@@ -382,6 +398,7 @@ def _run_seed(
         eval_interval=int(args.eval_interval),
         early_stopping_patience=int(args.early_stopping_patience),
         weight_decay=float(args.weight_decay),
+        device=device,
     )
     raw_rows.extend(baseline_rows)
     robustness_rows.extend(baseline_robustness_rows)
@@ -494,6 +511,72 @@ def _slice_batch(batch: MultimodalEpisodeBatch, indices: torch.Tensor) -> Multim
     )
 
 
+def _move_batch_to_device(batch: MultimodalEpisodeBatch, device: torch.device) -> MultimodalEpisodeBatch:
+    fields = {
+        name: replace(
+            field,
+            x=_move_nested_to_device(field.x, device),
+            pos=_move_nested_to_device(field.pos, device),
+            mask=_move_nested_to_device(field.mask, device),
+            quality=_move_nested_to_device(field.quality, device),
+        )
+        for name, field in batch.fields.items()
+    }
+    query = replace(
+        batch.query,
+        x=_move_nested_to_device(batch.query.x, device),
+        pos=_move_nested_to_device(batch.query.pos, device),
+        query_type=_move_nested_to_device(batch.query.query_type, device),
+        mask=_move_nested_to_device(batch.query.mask, device),
+    )
+    supervision = replace(
+        batch.supervision,
+        task_label=_move_nested_to_device(batch.supervision.task_label, device),
+        alignment_pairs=_move_nested_to_device(batch.supervision.alignment_pairs, device),
+        alignment_weights=_move_nested_to_device(batch.supervision.alignment_weights, device),
+        bbox_targets=_move_nested_to_device(batch.supervision.bbox_targets, device),
+        region_targets=_move_nested_to_device(batch.supervision.region_targets, device),
+        timestamp_targets=_move_nested_to_device(batch.supervision.timestamp_targets, device),
+        modality_missing_mask=_move_nested_to_device(batch.supervision.modality_missing_mask, device),
+        corruption_metadata=_move_nested_to_device(batch.supervision.corruption_metadata, device),
+        weak_labels=_move_nested_to_device(batch.supervision.weak_labels, device),
+        weak_label_confidence=_move_nested_to_device(batch.supervision.weak_label_confidence, device),
+    )
+    return replace(
+        batch,
+        fields=fields,
+        query=query,
+        target_y=_move_nested_to_device(batch.target_y, device),
+        target_mask=_move_nested_to_device(batch.target_mask, device),
+        supervision=supervision,
+        hidden=_move_nested_to_device(batch.hidden, device),
+    )
+
+
+def _move_ovha_output_to_device(output: MultimodalOVHAOutput, device: torch.device) -> MultimodalOVHAOutput:
+    return _move_nested_to_device(output, device)
+
+
+def _move_nested_to_device(value: Any, device: torch.device) -> Any:
+    if torch.is_tensor(value):
+        return value.to(device=device)
+    if isinstance(value, dict):
+        return {key: _move_nested_to_device(item, device) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_move_nested_to_device(item, device) for item in value)
+    if isinstance(value, list):
+        return [_move_nested_to_device(item, device) for item in value]
+    if is_dataclass(value) and not isinstance(value, type):
+        return replace(
+            value,
+            **{
+                field.name: _move_nested_to_device(getattr(value, field.name), device)
+                for field in dataclass_fields(value)
+            },
+        )
+    return value
+
+
 def _slice_optional_tensor(value: Any, indices: torch.Tensor) -> Any:
     if value is None or not hasattr(value, "index_select"):
         return value
@@ -524,6 +607,38 @@ def _evaluate_task_loss(model: MultimodalOVHA, batch: MultimodalEpisodeBatch) ->
     if was_training:
         model.train()
     return _as_float(loss)
+
+
+def _evaluate_task_loss_on_device(
+    model: MultimodalOVHA,
+    batch: MultimodalEpisodeBatch,
+    device: torch.device,
+    *,
+    batch_size: int,
+) -> float:
+    total = int(batch.target_y.shape[0])
+    if total <= 0:
+        return 0.0
+    was_training = model.training
+    model.eval()
+    weighted_loss = 0.0
+    total_weight = 0.0
+    with torch.no_grad():
+        for start in range(0, total, max(1, int(batch_size))):
+            stop = min(total, start + max(1, int(batch_size)))
+            indices = torch.arange(start, stop, device=batch.target_y.device)
+            chunk = _move_batch_to_device(_slice_batch(batch, indices), device)
+            loss = _task_loss(model(chunk).y_hat, chunk)
+            weight = float(chunk.target_mask.to(dtype=torch.float32).sum().detach().cpu())
+            weighted_loss += _as_float(loss) * weight
+            total_weight += weight
+    if was_training:
+        model.train()
+    return weighted_loss / max(1.0, total_weight)
+
+
+def _eval_batch_size(train_batch_size: int) -> int:
+    return max(1, int(train_batch_size) * 8)
 
 
 def _should_validate(step: int, train_steps: int, eval_interval: int) -> bool:
@@ -622,6 +737,7 @@ def _baseline_rows(
     eval_interval: int,
     early_stopping_patience: int,
     weight_decay: float,
+    device: torch.device,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     robustness_rows: list[dict[str, Any]] = []
@@ -645,6 +761,7 @@ def _baseline_rows(
                 eval_interval=eval_interval,
                 early_stopping_patience=early_stopping_patience,
                 weight_decay=weight_decay,
+                device=device,
             )
             loss = _task_loss(eval_output.y_hat, eval_batch)
             rows.append(
@@ -673,6 +790,7 @@ def _baseline_rows(
                     seed=seed,
                     raw_metric_path=raw_metrics_path,
                     model_name=str(baseline_name),
+                    device=device,
                 )
             )
             summaries.append({**summary, "model": str(baseline_name)})
@@ -685,10 +803,14 @@ def _baseline_rows(
             train_steps=baseline_train_steps,
             learning_rate=learning_rate,
             progress_interval=progress_interval,
+            batch_size=batch_size,
+            device=device,
         )
         with torch.no_grad():
-            eval_prediction = _baseline_prediction(str(baseline_name), model, eval_batch)
-            loss = _task_loss(eval_prediction, eval_batch)
+            eval_batch_device = _move_batch_to_device(eval_batch, device)
+            eval_prediction = _baseline_prediction(str(baseline_name), model, eval_batch_device)
+            loss = _task_loss(eval_prediction, eval_batch_device)
+            eval_prediction = eval_prediction.detach().cpu()
         router_load = _probe_router_load_by_candidate(str(baseline_name))
         rows.append(
             _raw_metric_row(
@@ -716,6 +838,7 @@ def _baseline_rows(
                 batch=eval_batch,
                 seed=seed,
                 raw_metric_path=raw_metrics_path,
+                device=device,
             )
         )
         summaries.append({**summary, "model": str(baseline_name)})
@@ -739,7 +862,9 @@ def _train_ovha_ablation(
     eval_interval: int,
     early_stopping_patience: int,
     weight_decay: float,
+    device: torch.device | None = None,
 ) -> tuple[MultimodalOVHA, MultimodalOVHAOutput, dict[str, Any]]:
+    device = device or train_batch.target_y.device
     fit_batch, val_batch = _split_train_val_batch(
         train_batch,
         validation_fraction=validation_fraction,
@@ -762,7 +887,7 @@ def _train_ovha_ablation(
         candidate_names=active_candidate_names,
         lrio_pairs=config.lrio_pairs or None,
         **variant_kwargs,
-    ).to(train_batch.target_y.device)
+    ).to(device)
     initial = _parameter_vector(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     max_grad_norm = 0.0
@@ -771,7 +896,7 @@ def _train_ovha_ablation(
     best_step = 0
     best_state = _clone_state_dict(model)
     stale_evals = 0
-    batch_generator = torch.Generator(device=train_batch.target_y.device)
+    batch_generator = torch.Generator(device=fit_batch_std.target_y.device)
     batch_generator.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name) + 17)
     model.train()
     started_at = time.perf_counter()
@@ -784,7 +909,7 @@ def _train_ovha_ablation(
         protocol="mini_batch_validation_best_checkpoint",
     )
     for step in range(1, train_steps + 1):
-        train_step_batch = _sample_batch(fit_batch_std, batch_size, batch_generator)
+        train_step_batch = _move_batch_to_device(_sample_batch(fit_batch_std, batch_size, batch_generator), device)
         optimizer.zero_grad(set_to_none=True)
         output = model(train_step_batch)
         components = _public_loss_components(output, train_step_batch, config)
@@ -794,7 +919,12 @@ def _train_ovha_ablation(
         optimizer.step()
         final_loss = _as_float(total_loss)
         if _should_validate(step, train_steps, eval_interval):
-            val_loss = _evaluate_task_loss(model, val_batch_std)
+            val_loss = _evaluate_task_loss_on_device(
+                model,
+                val_batch_std,
+                device,
+                batch_size=_eval_batch_size(batch_size),
+            )
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 best_step = step
@@ -832,7 +962,13 @@ def _train_ovha_ablation(
     model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        eval_output = _destandardize_output(model(eval_batch_std), target_mean, target_std)
+        eval_batch_std_device = _move_batch_to_device(eval_batch_std, device)
+        eval_output = _destandardize_output(
+            model(eval_batch_std_device),
+            target_mean.to(device=device),
+            target_std.to(device=device),
+        )
+        eval_output = _move_ovha_output_to_device(eval_output, torch.device("cpu"))
     return model, eval_output, {
         "baseline_optimizer_steps": train_steps,
         "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial).item()),
@@ -882,12 +1018,18 @@ def _train_linear_baseline(
     train_steps: int,
     learning_rate: float,
     progress_interval: int,
+    batch_size: int,
+    device: torch.device,
 ) -> tuple[torch.nn.Linear, dict[str, Any]]:
-    train_inputs = _same_feature_probe_inputs(baseline_name, train_batch)
+    input_probe = _move_batch_to_device(
+        _slice_batch(train_batch, torch.arange(0, 1, device=train_batch.target_y.device)),
+        device,
+    )
+    train_inputs = _same_feature_probe_inputs(baseline_name, input_probe)
     target_dim = int(train_batch.target_y.shape[-1])
-    generator = torch.Generator(device=train_inputs.device)
+    generator = torch.Generator(device=device)
     generator.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name))
-    model = torch.nn.Linear(int(train_inputs.shape[-1]), target_dim).to(train_inputs.device)
+    model = torch.nn.Linear(int(train_inputs.shape[-1]), target_dim).to(device)
     with torch.no_grad():
         model.weight.uniform_(-0.02, 0.02, generator=generator)
         model.bias.uniform_(-0.02, 0.02, generator=generator)
@@ -904,10 +1046,13 @@ def _train_linear_baseline(
         steps=train_steps,
         learning_rate=learning_rate,
     )
+    batch_generator = torch.Generator(device=train_batch.target_y.device)
+    batch_generator.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name) + 19)
     for step in range(1, train_steps + 1):
+        train_step_batch = _move_batch_to_device(_sample_batch(train_batch, batch_size, batch_generator), device)
         optimizer.zero_grad(set_to_none=True)
-        prediction = _baseline_prediction(baseline_name, model, train_batch)
-        loss = _task_loss(prediction, train_batch)
+        prediction = _baseline_prediction(baseline_name, model, train_step_batch)
+        loss = _task_loss(prediction, train_step_batch)
         loss.backward()
         max_grad_norm = max(max_grad_norm, _linear_grad_l2_norm(model))
         optimizer.step()
@@ -934,6 +1079,8 @@ def _train_linear_baseline(
         "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_linear_parameter_vector(model) - initial).item()),
         "baseline_grad_l2_norm": max_grad_norm,
         "baseline_train_loss_final": final_loss,
+        "baseline_training_protocol": "mini_batch",
+        "baseline_batch_size": batch_size,
     }
 
 
@@ -1059,21 +1206,26 @@ def _ovha_robustness_rows(
     model_name: str = "ovha_full",
     target_mean: torch.Tensor | None = None,
     target_std: torch.Tensor | None = None,
+    device: torch.device | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    device = device or next(model.parameters()).device
     model.eval()
     for corruption_type in ("clean", *DEFAULT_REQUIRED_STRESS_TARGETS):
         corrupted = _corrupted_batch(batch, corruption_type)
-        model_batch = (
-            _standardize_batch_targets(corrupted, target_mean, target_std)
-            if target_mean is not None and target_std is not None
-            else corrupted
-        )
+        corrupted_device = _move_batch_to_device(corrupted, device)
+        model_batch = corrupted_device
+        if target_mean is not None and target_std is not None:
+            model_batch = _standardize_batch_targets(
+                corrupted_device,
+                target_mean.to(device=device),
+                target_std.to(device=device),
+            )
         with torch.no_grad():
             output = model(model_batch)
             if target_mean is not None and target_std is not None:
-                output = _destandardize_output(output, target_mean, target_std)
-            loss = _task_loss(output.y_hat, corrupted)
+                output = _destandardize_output(output, target_mean.to(device=device), target_std.to(device=device))
+            loss = _task_loss(output.y_hat, corrupted_device)
         rows.append(
             _robustness_row(
                 config,
@@ -1098,13 +1250,15 @@ def _baseline_robustness_rows(
     batch: MultimodalEpisodeBatch,
     seed: int,
     raw_metric_path: Path,
+    device: torch.device,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for corruption_type in ("clean", *DEFAULT_REQUIRED_STRESS_TARGETS):
         corrupted = _corrupted_batch(batch, corruption_type)
+        corrupted_device = _move_batch_to_device(corrupted, device)
         with torch.no_grad():
-            prediction = _baseline_prediction(baseline_name, model, corrupted)
-            loss = _task_loss(prediction, corrupted)
+            prediction = _baseline_prediction(baseline_name, model, corrupted_device)
+            loss = _task_loss(prediction, corrupted_device)
         rows.append(
             _robustness_row(
                 config,
