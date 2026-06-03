@@ -412,6 +412,137 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertIn("pair_feature_count", evidence.diagnostics)
         self.assertFalse(torch.allclose(evidence.pair_features["text__audio"], evidence.pair_features["text__vision"]))
 
+    def test_configured_lrio_pair_filter_blocks_audio_vision_from_evidence_memory_and_adapter(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(42)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("SPO", "LRIO"),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+        )
+
+        with torch.no_grad():
+            output = model(_batch(torch))
+
+        evidence = output.evidence
+        self.assertEqual(set(evidence.pair_features), {"text__audio", "text__vision"})
+        self.assertNotIn("audio__vision", evidence.pair_features)
+        self.assertEqual(float(evidence.diagnostics["configured_pair_feature_count"]), 2.0)
+        self.assertEqual(float(evidence.diagnostics["all_pair_feature_count"]), 3.0)
+
+        lrio = output.diagnostics["candidate_diagnostics"]["LRIO"]
+        self.assertEqual(set(lrio["active_pair_names"]), {"text__audio", "text__vision"})
+        self.assertNotIn("audio__vision", output.diagnostics["adapter_params_detail"]["LRIO"])
+
+    def test_lrio_output_invariant_to_batch_companions(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(44)
+        base = _batch(torch)
+        batch_a = _batch_with_first_sample_companions(torch, base, companion_seed=101)
+        batch_b = _batch_with_first_sample_companions(torch, base, companion_seed=202)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("LRIO",),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+        )
+
+        with torch.no_grad():
+            value_a = model(batch_a).candidate_outputs["LRIO"].value[0]
+            value_b = model(batch_b).candidate_outputs["LRIO"].value[0]
+
+        self.assertTrue(
+            torch.allclose(value_a, value_b, atol=1e-6),
+            "LRIO output for a sample must not depend on unrelated batch companions",
+        )
+
+    def test_rceo_clean_all_present_logit_bias_is_zero(self):
+        import torch
+
+        from dataclasses import replace
+
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceEncoder
+        from moat_ovha_torch.models.multimodal.reliability_prior import RCEOReliabilityPrior
+
+        batch = _batch(torch)
+        clean_fields = {
+            name: replace(field, quality=torch.ones(field.x.shape[0], 1))
+            for name, field in batch.fields.items()
+        }
+        clean_batch = replace(batch, fields=clean_fields)
+        encoder = MultimodalEvidenceEncoder(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            d_model=10,
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+        )
+        prior = RCEOReliabilityPrior(
+            d_model=10,
+            candidate_names=("SPO", "LRIO"),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+        )
+
+        reliability = prior(clean_batch, encoder(clean_batch))
+
+        self.assertTrue(torch.allclose(reliability.operator_logit_bias, torch.zeros_like(reliability.operator_logit_bias), atol=1e-7))
+        self.assertEqual(float(reliability.diagnostics["operator_logit_bias_norm"]), 0.0)
+
+    def test_base_plus_residual_composition_uses_spo_base_and_lrio_delta(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(45)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("SPO", "LRIO"),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+            composition_mode="base_plus_residual",
+            base_candidate="SPO",
+            residual_candidates=("LRIO",),
+        )
+
+        with torch.no_grad():
+            output = model(_batch(torch))
+
+        spo = output.candidate_outputs["SPO"].value
+        lrio_delta = output.candidate_outputs["LRIO"].value
+        lrio_gate = torch.sigmoid(output.router_logits[..., 1:2])
+        expected = spo + lrio_gate * lrio_delta
+
+        self.assertTrue(torch.allclose(output.y_hat, expected, atol=1e-6))
+        self.assertTrue(torch.allclose(output.candidate_values[..., 1, :], spo + lrio_delta, atol=1e-6))
+        self.assertEqual(output.diagnostics["composition"]["mode"], "base_plus_residual")
+
+    def test_cmu_configs_disable_evidence_router_and_use_residual_composition(self):
+        import json
+
+        for name in ("multimodal_cmu_mosei_public_main.json", "multimodal_cmu_mosei_public_smoke.json"):
+            with self.subTest(config=name):
+                payload = json.loads((ROOT / "configs" / name).read_text())
+
+                self.assertFalse(payload["use_evidence_router"])
+                self.assertEqual(payload["composition_mode"], "base_plus_residual")
+                self.assertEqual(payload["base_candidate"], "SPO")
+                self.assertEqual(payload["residual_candidates"], ["LRIO"])
+
     def test_public_cmu_t5_uses_spo_diversity_and_router_utility_losses(self):
         import torch
 
@@ -754,6 +885,52 @@ def _batch(torch, *, task_type: str = "sentiment_regression"):
             pseudo_label_version={},
         ),
         hidden={"true_active_operator": torch.zeros(batch_size, query_count, dtype=torch.long)},
+    )
+
+
+def _batch_with_first_sample_companions(torch, base, *, companion_seed: int):
+    from dataclasses import replace
+
+    companion = _batch(torch)
+    generator = torch.Generator()
+    generator.manual_seed(companion_seed)
+    fields = {}
+    for name, field in base.fields.items():
+        replacement = base.fields[name].x.clone()
+        replacement[1:] = torch.randn(
+            replacement[1:].shape,
+            generator=generator,
+            dtype=replacement.dtype,
+            device=replacement.device,
+        )
+        companion_field = companion.fields[name]
+        fields[name] = replace(
+            field,
+            x=replacement,
+            pos=torch.cat([field.pos[:1], companion_field.pos[1:]], dim=0),
+            mask=torch.cat([field.mask[:1], companion_field.mask[1:]], dim=0),
+            quality=torch.cat([field.quality[:1], companion_field.quality[1:]], dim=0),
+        )
+    query = replace(
+        base.query,
+        x=torch.cat([base.query.x[:1], companion.query.x[1:]], dim=0),
+        pos=torch.cat([base.query.pos[:1], companion.query.pos[1:]], dim=0),
+        query_type=torch.cat([base.query.query_type[:1], companion.query.query_type[1:]], dim=0),
+        mask=torch.cat([base.query.mask[:1], companion.query.mask[1:]], dim=0),
+    )
+    return replace(
+        base,
+        fields=fields,
+        query=query,
+        target_y=torch.cat([base.target_y[:1], companion.target_y[1:]], dim=0),
+        target_mask=torch.cat([base.target_mask[:1], companion.target_mask[1:]], dim=0),
+        provenance=replace(
+            base.provenance,
+            source_id=[base.provenance.source_id[0], *companion.provenance.source_id[1:]],
+            original_split=[base.provenance.original_split[0], *companion.provenance.original_split[1:]],
+            raw_ref=[base.provenance.raw_ref[0], *companion.provenance.raw_ref[1:]],
+            license_tag=[base.provenance.license_tag[0], *companion.provenance.license_tag[1:]],
+        ),
     )
 
 
