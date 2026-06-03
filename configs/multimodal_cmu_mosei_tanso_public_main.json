@@ -1,0 +1,53 @@
+{
+  "name": "multimodal_cmu_mosei_tanso_public_main",
+  "dataset_name": "cmu_mosei",
+  "task_type": "sentiment_emotion",
+  "cache_version": "v0.1",
+  "cache_root": "data/multimodal_cache",
+  "output_dir": "outputs/multimodal/cmu_mosei_tanso_main",
+  "seeds": [301, 302, 303, 304, 305],
+  "main_table_seed_policy": "five_seed_default",
+  "training_stages": ["T0", "T5"],
+  "candidate_names": ["SPO", "LRIO", "TANSO"],
+  "lrio_pairs": [["text", "audio"], ["text", "vision"]],
+  "use_evidence_router": false,
+  "composition_mode": "base_plus_residual",
+  "base_candidate": "SPO",
+  "residual_candidates": ["LRIO", "TANSO"],
+  "baseline_names": [
+    "text_only",
+    "audio_only",
+    "vision_only",
+    "concat_fusion",
+    "ovha_no_lrio",
+    "ovha_no_spo",
+    "ovha_no_rceo",
+    "ovha_with_evidence_router"
+  ],
+  "eval_splits": ["val", "test"],
+  "eval_episode_count": 4096,
+  "enforce_same_features_for_baselines": true,
+  "fail_on_missing_cache_artifact": true,
+  "allow_hidden_losses": false,
+  "losses_by_stage": {
+    "T0": ["cache_validation"],
+    "T5": ["task_loss", "candidate_individual_loss", "spo_prototype_diversity", "router_marginal_utility"]
+  },
+  "loss_metadata": {
+    "candidate_individual_loss": {
+      "weight": 0.0,
+      "diagnostic_only": true
+    },
+    "spo_prototype_diversity": {
+      "weight": 0.001
+    },
+    "router_marginal_utility": {
+      "weight": 0.01
+    }
+  },
+  "adapter_params_by_candidate": {
+    "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
+    "LRIO": ["rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"],
+    "TANSO": ["audio_shift_scale", "vision_shift_scale", "shift_temperature", "scale", "bias"]
+  }
+}
