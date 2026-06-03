@@ -298,6 +298,52 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertTrue({"external_reference", "external_reproduction"}.issubset(evidence_types))
         self.assertIn("same-feature", payload["policy"])
 
+    def test_mosei_standard_metric_cli_recomputes_external_reproduction_arrays(self):
+        if importlib.util.find_spec("torch") is None or importlib.util.find_spec("numpy") is None:
+            self.skipTest("torch and numpy are required for MOSEI metric CLI")
+        import numpy as np
+
+        tmp_path = Path(tempfile.mkdtemp())
+        pred_path = tmp_path / "mult_predictions.npy"
+        truth_path = tmp_path / "mult_truths.npy"
+        output_path = tmp_path / "mult_standard_metrics.jsonl"
+        np.save(pred_path, np.array([[-1.2], [0.2], [1.1], [2.6], [0.0]], dtype=np.float32))
+        np.save(truth_path, np.array([[-1.0], [0.0], [1.0], [3.0], [-0.2]], dtype=np.float32))
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "multimodal" / "recompute_mosei_standard_metrics.py"),
+                "--predictions",
+                str(pred_path),
+                "--truths",
+                str(truth_path),
+                "--model",
+                "MulT",
+                "--seed",
+                "1",
+                "--split",
+                "test",
+                "--output-jsonl",
+                str(output_path),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["model"], "MulT")
+        self.assertEqual(payload["seed"], 1)
+        self.assertEqual(payload["metrics"]["acc2_excl0"], 1.0)
+        self.assertAlmostEqual(payload["metrics"]["mae"], 0.22, places=6)
+        rows = [json.loads(line) for line in output_path.read_text().splitlines() if line.strip()]
+        self.assertEqual(rows[0]["artifact_type"], "external_mosei_standard_metric")
+        self.assertEqual(rows[0]["metrics"]["f1_excl0"], 1.0)
+
     def test_controlled_baselines_include_router_decomposition_ablations(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
         from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
