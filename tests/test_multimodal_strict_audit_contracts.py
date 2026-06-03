@@ -525,6 +525,20 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "LRIO diagnostics contain unconfigured modality pairs"):
             _public_training_diagnostics_row(output, config, batch, 0, 301)
 
+    def test_cache_root_override_preserves_lrio_pair_contract(self):
+        from pathlib import Path
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_smoke import _replace_cache_root
+
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_main.json")
+        overridden = _replace_cache_root(config, Path("data/alternate_cache"))
+
+        self.assertEqual(overridden.cache_root, Path("data/alternate_cache"))
+        self.assertEqual(overridden.lrio_pairs, config.lrio_pairs)
+        self.assertEqual(overridden.adapter_params_by_candidate, config.adapter_params_by_candidate)
+        self.assertEqual(overridden.loss_metadata, config.loss_metadata)
+
     def test_sentiment_public_batch_uses_neutral_query_not_text_mean(self):
         import torch
 

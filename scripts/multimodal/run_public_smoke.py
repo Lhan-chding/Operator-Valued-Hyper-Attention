@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import math
 from pathlib import Path
@@ -1800,28 +1801,7 @@ def _json_ready(value: Any) -> Any:
 
 
 def _replace_cache_root(config: MultimodalExperimentConfig, cache_root: Path) -> MultimodalExperimentConfig:
-    return MultimodalExperimentConfig(
-        name=config.name,
-        dataset_name=config.dataset_name,
-        task_type=config.task_type,
-        cache_version=config.cache_version,
-        cache_root=cache_root,
-        output_dir=config.output_dir,
-        seeds=config.seeds,
-        training_stages=config.training_stages,
-        candidate_names=config.candidate_names,
-        baseline_names=config.baseline_names,
-        eval_splits=config.eval_splits,
-        eval_episode_count=config.eval_episode_count,
-        enforce_same_features_for_baselines=config.enforce_same_features_for_baselines,
-        fail_on_missing_cache_artifact=config.fail_on_missing_cache_artifact,
-        allow_hidden_losses=config.allow_hidden_losses,
-        require_public_alignment_labels=config.require_public_alignment_labels,
-        robustness_corruptions=config.robustness_corruptions,
-        losses_by_stage=config.losses_by_stage,
-        loss_metadata=config.loss_metadata,
-        adapter_params_by_candidate=config.adapter_params_by_candidate,
-    )
+    return replace(config, cache_root=cache_root)
 
 
 if __name__ == "__main__":
