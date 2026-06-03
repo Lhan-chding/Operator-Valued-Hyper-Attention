@@ -47,7 +47,8 @@ class RCEOReliabilityPrior(nn.Module):
         pair_names, pair_reliability = _pair_reliability(modality_names, modality_reliability, self.lrio_pairs)
         reliability_mean = modality_reliability.mean(dim=-1, keepdim=True)
         reliability_query = reliability_mean.unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1)
-        features = torch.cat([evidence.query_features, reliability_query], dim=-1)
+        reliability_only_context = torch.zeros_like(evidence.query_features)
+        features = torch.cat([reliability_only_context, reliability_query], dim=-1)
         bias = self.bias_head(features)
         diagnostics = {
             "modality_reliability": modality_reliability.mean(dim=0),
@@ -57,6 +58,7 @@ class RCEOReliabilityPrior(nn.Module):
             "reliability_bias_norm": bias.norm(dim=-1).mean(),
             "operator_logit_bias_norm": bias.norm(dim=-1).mean(),
             "evidence_conditioned_bias_norm": torch.zeros((), dtype=bias.dtype, device=bias.device),
+            "query_semantic_conditioned": False,
             "rceo_is_pure_reliability_prior": True,
             "corruption_response": (1.0 - modality_reliability).clamp_min(0.0).mean(),
         }

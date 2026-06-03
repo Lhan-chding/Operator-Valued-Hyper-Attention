@@ -28,6 +28,7 @@ class TLEOPrimitive(MultimodalCandidatePrimitive):
         local_values = []
         local_entropies = []
         source_gate_logits = []
+        source_valid = []
         source_names = []
         lengthscale = params["lengthscale"].clamp_min(1e-4)
         temperature = params["local_temperature"].clamp_min(1e-4)
@@ -44,18 +45,28 @@ class TLEOPrimitive(MultimodalCandidatePrimitive):
                 lengthscale,
                 temperature,
             )
-            logits = logits.masked_fill(~field.mask.to(device=logits.device).unsqueeze(1), -1e9)
+            valid_source = field.mask.to(device=logits.device).any(dim=1)
+            token_mask = field.mask.to(device=logits.device).unsqueeze(1)
+            logits = logits.masked_fill(~token_mask, -1e9)
             weights = torch.softmax(logits, dim=-1)
+            weights = torch.where(valid_source.view(-1, 1, 1), weights, torch.zeros_like(weights))
             value = torch.matmul(weights, v_proj(projected_tokens))
+            value = torch.where(valid_source.view(-1, 1, 1), value, torch.zeros_like(value))
             quality = _field_quality(field, dtype=value.dtype, device=value.device)
             gate_input = torch.cat([value.mean(dim=1), quality], dim=-1)
             source_gate_logits.append(gate_proj(gate_input).unsqueeze(1))
             local_values.append(value)
             local_entropies.append(-(weights * weights.clamp_min(1e-12).log()).sum(dim=-1).mean())
+            source_valid.append(valid_source)
             source_names.append(name)
         if local_values:
             local_stack = torch.stack(local_values, dim=-2)
-            source_gates = torch.softmax(torch.cat(source_gate_logits, dim=-1), dim=-1).unsqueeze(-1)
+            valid_stack = torch.stack(source_valid, dim=-1)
+            gate_logits = torch.cat(source_gate_logits, dim=-1).masked_fill(~valid_stack.unsqueeze(1), -1e9)
+            source_gates = torch.softmax(gate_logits, dim=-1)
+            source_gates = source_gates * valid_stack.unsqueeze(1).to(dtype=source_gates.dtype)
+            source_gates = source_gates / source_gates.sum(dim=-1, keepdim=True).clamp_min(1.0)
+            source_gates = source_gates.unsqueeze(-1)
             local_feature = (source_gates * local_stack).sum(dim=-2)
         else:
             source_gates = torch.zeros(1, device=evidence.query_features.device)
@@ -72,6 +83,10 @@ class TLEOPrimitive(MultimodalCandidatePrimitive):
             "modality_kernel_names": tuple(source_names),
             "modality_gate": {
                 name: source_gates[..., index, 0].mean()
+                for index, name in enumerate(source_names)
+            } if local_values else {},
+            "valid_source_rate": {
+                name: source_valid[index].to(dtype=value.dtype).mean()
                 for index, name in enumerate(source_names)
             } if local_values else {},
             "candidate": self.name,

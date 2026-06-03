@@ -30,6 +30,9 @@ class CATOPrimitive(MultimodalCandidatePrimitive):
         source_gate_logits = []
         source_entropies = []
         source_marginal_errors = []
+        source_valid = []
+        source_token_marginals = {}
+        query_token_marginals = {}
         source_names = []
         for source_name, source in evidence.field_features.items():
             source_field = batch.fields[source_name]
@@ -40,18 +43,29 @@ class CATOPrimitive(MultimodalCandidatePrimitive):
             score = score + _position_bias(batch.query.pos, source_field.pos, dtype=score.dtype, device=score.device)
             source_mask = source_field.mask.to(device=score.device)
             score = score.masked_fill(~source_mask.unsqueeze(1), -1e9)
+            valid_source = source_mask.any(dim=1)
             transport = torch.softmax(score, dim=-1)
+            transport = torch.where(valid_source.view(-1, 1, 1), transport, torch.zeros_like(transport))
             transported = torch.matmul(transport, v_proj(source))
+            transported = torch.where(valid_source.view(-1, 1, 1), transported, torch.zeros_like(transported))
             quality = _field_quality(source_field, dtype=transported.dtype, device=transported.device)
             gate_input = torch.cat([transported.mean(dim=1), quality], dim=-1)
             source_gate_logits.append(gate_proj(gate_input).unsqueeze(1))
             transported_sources.append(transported)
             source_entropies.append(-(transport * transport.clamp_min(1e-12).log()).sum(dim=-1).mean())
             source_marginal_errors.append(_source_transport_marginal_error(transport, source_mask))
+            source_valid.append(valid_source)
+            source_token_marginals[source_name] = transport.mean(dim=(0, 1))
+            query_token_marginals[source_name] = transport.sum(dim=-1).mean()
             source_names.append(source_name)
         if transported_sources:
             transported_stack = torch.stack(transported_sources, dim=-2)
-            source_gates = torch.softmax(torch.cat(source_gate_logits, dim=-1), dim=-1).unsqueeze(-1)
+            valid_stack = torch.stack(source_valid, dim=-1)
+            gate_logits = torch.cat(source_gate_logits, dim=-1).masked_fill(~valid_stack.unsqueeze(1), -1e9)
+            source_gates = torch.softmax(gate_logits, dim=-1)
+            source_gates = source_gates * valid_stack.unsqueeze(1).to(dtype=source_gates.dtype)
+            source_gates = source_gates / source_gates.sum(dim=-1, keepdim=True).clamp_min(1.0)
+            source_gates = source_gates.unsqueeze(-1)
             transported = (source_gates * transported_stack).sum(dim=-2)
         else:
             source_gates = torch.zeros(1, device=evidence.query_features.device)
@@ -73,7 +87,9 @@ class CATOPrimitive(MultimodalCandidatePrimitive):
         value = apply_scale_bias(self.head(feature), params)
         diagnostics = {
             "alignment_entropy": torch.stack(source_entropies).mean() if source_entropies else evidence.alignment_entropy,
-            "top_k_alignment": _top_k_alignment(source_gates.squeeze(-1)) if transported_sources else torch.zeros((), device=value.device),
+            "token_alignment_entropy": torch.stack(source_entropies).mean() if source_entropies else evidence.alignment_entropy,
+            "top_k_alignment": _top_k_alignment(source_token_marginals) if transported_sources else torch.zeros((), device=value.device),
+            "source_top_k_gate": _top_k_source_gate(source_gates.squeeze(-1)) if transported_sources else torch.zeros((), device=value.device),
             "transport_marginal_error": (
                 torch.stack(source_marginal_errors).mean() + _transport_scale_error(params.get("transport_scale"), value.device)
                 if source_marginal_errors
@@ -86,6 +102,17 @@ class CATOPrimitive(MultimodalCandidatePrimitive):
                 name: source_gates[..., index, 0].mean()
                 for index, name in enumerate(source_names)
             } if transported_sources else {},
+            "valid_source_rate": {
+                name: source_valid[index].to(dtype=value.dtype).mean()
+                for index, name in enumerate(source_names)
+            } if transported_sources else {},
+            "source_token_marginal": source_token_marginals,
+            "query_token_marginal": query_token_marginals,
+            "null_mass": (
+                torch.stack([(~valid).to(dtype=value.dtype).mean() for valid in source_valid]).mean()
+                if source_valid
+                else torch.ones((), dtype=value.dtype, device=value.device)
+            ),
             "candidate": self.name,
         }
         return CandidateOutput(value=value, feature=feature, diagnostics=diagnostics)
@@ -105,9 +132,22 @@ def _position_bias(query_pos: torch.Tensor, source_pos: torch.Tensor, *, dtype: 
     return -((q_pos.unsqueeze(2) - s_pos.unsqueeze(1)).square().sum(dim=-1))
 
 
-def _top_k_alignment(transport: torch.Tensor) -> torch.Tensor:
+def _top_k_source_gate(transport: torch.Tensor) -> torch.Tensor:
     k = min(2, transport.shape[-1])
     return torch.topk(transport, k=k, dim=-1).indices.to(dtype=torch.float32).mean()
+
+
+def _top_k_alignment(source_token_marginals: dict[str, torch.Tensor]) -> torch.Tensor:
+    if not source_token_marginals:
+        return torch.zeros(())
+    values = []
+    for marginal in source_token_marginals.values():
+        if marginal.numel() == 0:
+            continue
+        values.append(marginal.argmax(dim=-1).to(dtype=torch.float32).mean())
+    if not values:
+        return torch.zeros(())
+    return torch.stack(values).mean()
 
 
 def _source_transport_marginal_error(transport: torch.Tensor, source_mask: torch.Tensor) -> torch.Tensor:

@@ -182,6 +182,134 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(reliability.pair_reliability, expected))
 
+    def test_rceo_prior_ignores_query_semantic_features(self):
+        import torch
+
+        from dataclasses import replace
+
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceEncoder
+        from moat_ovha_torch.models.multimodal.reliability_prior import RCEOReliabilityPrior
+
+        torch.manual_seed(23)
+        batch = _batch(torch)
+        encoder = MultimodalEvidenceEncoder(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            d_model=10,
+        )
+        evidence = encoder(batch)
+        shifted = replace(evidence, query_features=evidence.query_features + 100.0)
+        prior = RCEOReliabilityPrior(d_model=10, candidate_names=("SPO", "LRIO"))
+
+        reliability = prior(batch, evidence)
+        shifted_reliability = prior(batch, shifted)
+
+        self.assertTrue(torch.allclose(reliability.operator_logit_bias, shifted_reliability.operator_logit_bias, atol=1e-6))
+        self.assertTrue(torch.allclose(reliability.features, shifted_reliability.features, atol=1e-6))
+
+    def test_spo_diagnostics_include_prototype_diversity_and_collapse_warning(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(29)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("SPO",),
+        )
+
+        with torch.no_grad():
+            output = model(_batch(torch))
+
+        spo = output.diagnostics["candidate_diagnostics"]["SPO"]
+        self.assertIn("prototype_diversity", spo)
+        self.assertIn("prototype_collapse_warning", spo)
+        self.assertGreaterEqual(float(spo["prototype_diversity"]), 0.0)
+        self.assertIn(bool(spo["prototype_collapse_warning"]), (False, True))
+
+    def test_tleo_all_masked_source_has_zero_gate_and_no_nan(self):
+        import torch
+
+        from dataclasses import replace
+
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceEncoder
+        from moat_ovha_torch.models.multimodal.primitives.typed_local_evidence import TLEOPrimitive
+
+        batch = _batch(torch)
+        text = batch.fields["text"]
+        masked = replace(
+            batch,
+            fields={
+                "text": replace(
+                    text,
+                    x=torch.zeros_like(text.x),
+                    mask=torch.zeros_like(text.mask),
+                    quality=torch.zeros(text.x.shape[0], 1),
+                )
+            },
+        )
+        encoder = MultimodalEvidenceEncoder(field_dims={"text": 5}, query_dim=6, d_model=8)
+        evidence = encoder(masked)
+        primitive = TLEOPrimitive(d_model=8, output_dim=1, modalities=("text",))
+        params = {
+            "lengthscale": torch.ones(3, 2, 1),
+            "local_temperature": torch.ones(3, 2, 1),
+            "scale": torch.ones(3, 2, 1),
+            "bias": torch.zeros(3, 2, 1),
+        }
+
+        output = primitive(masked, torch.zeros(3, 2, 8), evidence, params, output_dim=1)
+
+        self.assertFalse(torch.isnan(output.value).any())
+        self.assertFalse(torch.isnan(output.feature).any())
+        self.assertAlmostEqual(float(output.diagnostics["modality_gate"]["text"].detach()), 0.0, places=6)
+        self.assertAlmostEqual(float(output.diagnostics["valid_source_rate"]["text"].detach()), 0.0, places=6)
+
+    def test_cato_all_masked_source_has_zero_gate_and_token_alignment_diagnostics(self):
+        import torch
+
+        from dataclasses import replace
+
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceEncoder
+        from moat_ovha_torch.models.multimodal.primitives.alignment_transport import CATOPrimitive
+
+        batch = _batch(torch)
+        vision = batch.fields["vision"]
+        masked = replace(
+            batch,
+            fields={
+                "vision": replace(
+                    vision,
+                    x=torch.zeros_like(vision.x),
+                    mask=torch.zeros_like(vision.mask),
+                    quality=torch.zeros(vision.x.shape[0], 1),
+                )
+            },
+        )
+        encoder = MultimodalEvidenceEncoder(field_dims={"vision": 3}, query_dim=6, d_model=8)
+        evidence = encoder(masked)
+        primitive = CATOPrimitive(d_model=8, output_dim=1, modalities=("vision",))
+        params = {
+            "alignment_temperature": torch.ones(3, 2, 1),
+            "transport_scale": torch.ones(3, 2, 1),
+            "scale": torch.ones(3, 2, 1),
+            "bias": torch.zeros(3, 2, 1),
+        }
+
+        output = primitive(masked, torch.zeros(3, 2, 8), evidence, params, output_dim=1)
+
+        self.assertFalse(torch.isnan(output.value).any())
+        self.assertAlmostEqual(float(output.diagnostics["source_gate"]["vision"].detach()), 0.0, places=6)
+        self.assertAlmostEqual(float(output.diagnostics["valid_source_rate"]["vision"].detach()), 0.0, places=6)
+        self.assertIn("token_alignment_entropy", output.diagnostics)
+        self.assertIn("source_token_marginal", output.diagnostics)
+        self.assertIn("query_token_marginal", output.diagnostics)
+        self.assertAlmostEqual(float(output.diagnostics["null_mass"].detach()), 1.0, places=6)
+
     def test_lrio_diagnostics_include_pair_load_reliability_and_rank_entropy(self):
         import torch
 

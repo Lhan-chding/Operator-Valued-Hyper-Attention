@@ -34,6 +34,9 @@ class SPOPrimitive(MultimodalCandidatePrimitive):
             "top_prototype": _top_index(logits, value.device),
             "prototype_temperature": params.get("prototype_temperature"),
             "prototype_usage": weights.mean(dim=(0, 1)),
+            "prototype_diversity": _prototype_diversity(self.prototypes),
+            "prototype_collapse_warning": weights.mean(dim=(0, 1)).max() > 0.85,
+            "prototype_logits_shift_norm": shift.norm(dim=-1).mean(),
             "candidate": self.name,
         }
         return CandidateOutput(value=value, feature=feature, diagnostics=diagnostics)
@@ -48,3 +51,10 @@ def _top_index(logits: torch.Tensor | None, device: torch.device) -> torch.Tenso
     if logits is None:
         return torch.zeros((), device=device)
     return logits.argmax(dim=-1).to(dtype=torch.float32).mean()
+
+
+def _prototype_diversity(prototypes: torch.Tensor) -> torch.Tensor:
+    normalized = torch.nn.functional.normalize(prototypes, dim=-1)
+    gram = normalized @ normalized.transpose(0, 1)
+    identity = torch.eye(gram.shape[0], dtype=gram.dtype, device=gram.device)
+    return (gram - identity).square().mean()
