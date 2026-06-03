@@ -46,6 +46,23 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertEqual(metrics["acc2_nonneg"], 0.75)
         self.assertLess(metrics["f1_nonneg"], 1.0)
 
+    def test_mosei_standard_metrics_accept_flat_single_target_tensors(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for MOSEI metric tensor checks")
+        import torch
+
+        from moat_ovha_torch.eval.mosei_standard_metrics import mosei_standard_metrics
+
+        prediction = torch.tensor([[-1.2], [0.2], [1.1], [2.6], [0.0]])
+        target = torch.tensor([[-1.0], [0.0], [1.0], [3.0], [-0.2]])
+        mask = torch.ones_like(target, dtype=torch.bool)
+
+        metrics = mosei_standard_metrics(prediction, target, mask)
+
+        self.assertEqual(metrics["acc2_excl0"], 1.0)
+        self.assertEqual(metrics["acc5"], 0.8)
+        self.assertAlmostEqual(metrics["mae"], 0.18, places=6)
+
     def test_public_main_runner_exposes_official_selection_split_contract(self):
         source = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()
 
