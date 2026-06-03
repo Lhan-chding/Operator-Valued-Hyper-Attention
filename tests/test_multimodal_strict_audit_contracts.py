@@ -441,6 +441,38 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertGreater(float(components["spo_prototype_diversity"].detach()), 0.0)
         self.assertGreaterEqual(float(components["router_marginal_utility"].detach()), 0.0)
 
+    def test_router_marginal_utility_uses_per_sample_candidate_losses(self):
+        import torch
+        from types import SimpleNamespace
+
+        from scripts.multimodal.run_public_smoke import _router_marginal_utility_loss
+
+        candidate_outputs = {"SPO": object(), "LRIO": object()}
+        diagnostics = {
+            "candidate_loss": {"SPO": torch.tensor(5.0), "LRIO": torch.tensor(5.0)},
+            "candidate_loss_by_sample": {
+                "SPO": torch.tensor([[0.0, 10.0]]),
+                "LRIO": torch.tensor([[10.0, 0.0]]),
+            },
+        }
+        aligned = SimpleNamespace(
+            y_hat=torch.zeros(1, 2, 1),
+            candidate_outputs=candidate_outputs,
+            diagnostics=diagnostics,
+            router_weights=torch.tensor([[[0.99, 0.01], [0.01, 0.99]]]),
+        )
+        uniform = SimpleNamespace(
+            y_hat=torch.zeros(1, 2, 1),
+            candidate_outputs=candidate_outputs,
+            diagnostics=diagnostics,
+            router_weights=torch.full((1, 2, 2), 0.5),
+        )
+
+        self.assertLess(
+            float(_router_marginal_utility_loss(aligned).detach()),
+            float(_router_marginal_utility_loss(uniform).detach()),
+        )
+
     def test_operator_admission_and_memory_differentiation_diagnostics(self):
         import torch
 

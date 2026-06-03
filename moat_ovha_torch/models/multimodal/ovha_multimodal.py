@@ -132,6 +132,7 @@ class MultimodalOVHA(nn.Module):
                 for key, value in router_output.logit_parts.items()
             },
             "candidate_loss": candidate_losses,
+            "candidate_loss_by_sample": _candidate_losses_by_sample(candidate_outputs, batch.target_y, batch.target_mask),
             "candidate_value_stats": _candidate_value_stats(candidate_outputs),
             "adapter_params": _adapter_param_diagnostics(params),
             "adapter_params_detail": _adapter_param_details(params),
@@ -333,6 +334,19 @@ def _candidate_losses(
     denom = mask.sum().clamp_min(1.0)
     return {
         name: ((output.value - target_y).square() * mask).sum() / denom
+        for name, output in candidate_outputs.items()
+    }
+
+
+def _candidate_losses_by_sample(
+    candidate_outputs: dict[str, CandidateOutput],
+    target_y: torch.Tensor,
+    target_mask: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    mask = target_mask.to(dtype=target_y.dtype, device=target_y.device).unsqueeze(-1)
+    denom = mask.sum(dim=-1).clamp_min(1.0)
+    return {
+        name: ((output.value - target_y).square() * mask).sum(dim=-1) / denom
         for name, output in candidate_outputs.items()
     }
 

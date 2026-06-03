@@ -485,6 +485,21 @@ def _candidate_diagnostic_tensor(
 
 
 def _router_marginal_utility_loss(output: MultimodalOVHAOutput) -> torch.Tensor:
+    sample_candidate_loss = output.diagnostics.get("candidate_loss_by_sample", {})
+    if isinstance(sample_candidate_loss, dict) and sample_candidate_loss:
+        names = tuple(output.candidate_outputs)
+        losses = []
+        for name in names:
+            value = sample_candidate_loss.get(name)
+            if not hasattr(value, "to"):
+                losses = []
+                break
+            losses.append(value.to(dtype=output.y_hat.dtype, device=output.y_hat.device))
+        if losses:
+            loss_matrix = torch.stack(losses, dim=-1)
+            target = torch.softmax(-loss_matrix.detach(), dim=-1)
+            router_weights = output.router_weights.clamp_min(1e-8)
+            return -(target * router_weights.log()).sum(dim=-1).mean()
     candidate_loss = output.diagnostics.get("candidate_loss", {})
     if not isinstance(candidate_loss, dict) or not candidate_loss:
         return output.y_hat.sum() * 0.0
