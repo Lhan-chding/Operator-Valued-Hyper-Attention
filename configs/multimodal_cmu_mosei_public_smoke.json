@@ -8,7 +8,7 @@
   "seeds": [301, 302, 303],
   "training_stages": ["T0", "T5"],
   "candidate_names": ["SPO", "LRIO"],
-  "lrio_pairs": [["text", "audio"], ["text", "vision"], ["audio", "vision"]],
+  "lrio_pairs": [["text", "audio"], ["text", "vision"]],
   "baseline_names": [
     "text_only",
     "audio_only",

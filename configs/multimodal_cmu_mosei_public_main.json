@@ -9,7 +9,7 @@
   "main_table_seed_policy": "five_seed_default",
   "training_stages": ["T0", "T5"],
   "candidate_names": ["SPO", "LRIO"],
-  "lrio_pairs": [["text", "audio"], ["text", "vision"], ["audio", "vision"]],
+  "lrio_pairs": [["text", "audio"], ["text", "vision"]],
   "baseline_names": [
     "text_only",
     "audio_only",

@@ -355,9 +355,12 @@ def _bootstrap_ci95(deltas: list[float]) -> tuple[float, float]:
         return (0.0, 0.0)
     if len(deltas) == 1:
         return (deltas[0], deltas[0])
+    import random
+
+    rng = random.Random(1729)
     means = []
-    for start in range(len(deltas)):
-        sample = [deltas[(start + offset) % len(deltas)] for offset in range(len(deltas))]
+    for _ in range(10000):
+        sample = [deltas[rng.randrange(len(deltas))] for _ in deltas]
         means.append(_mean(sample))
     means = sorted(means)
     low_index = int(0.025 * (len(means) - 1))

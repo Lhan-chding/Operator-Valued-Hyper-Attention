@@ -136,10 +136,12 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 self.assertEqual(config.training_stages, ("T0", "T5"))
                 if dataset in {"cmu_mosei", "meld"}:
                     self.assertEqual(config.candidate_names, ("SPO", "LRIO"))
-                    self.assertEqual(
-                        config.lrio_pairs,
-                        (("text", "audio"), ("text", "vision"), ("audio", "vision")),
+                    expected_lrio_pairs = (
+                        (("text", "audio"), ("text", "vision"))
+                        if dataset == "cmu_mosei"
+                        else (("text", "audio"), ("text", "vision"), ("audio", "vision"))
                     )
+                    self.assertEqual(config.lrio_pairs, expected_lrio_pairs)
                 else:
                     self.assertEqual(config.candidate_names, ("TLEO", "SPO", "LRIO", "CATO"))
                 self.assertGreaterEqual(len(config.seeds), 5)
@@ -1400,7 +1402,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(len(eval_diagnostics), 1)
         public_diagnostics = eval_diagnostics[0]["public_diagnostics"]
         self.assertIn("lrio_rank_entropy_by_modality_pair", public_diagnostics)
-        self.assertIn("spo_prototype_load_by_emotion_class", public_diagnostics)
+        self.assertIn("spo_prototype_usage", public_diagnostics)
+        self.assertIn("heuristic_debug", public_diagnostics)
+        self.assertIn("omitted_spo_prototype_load_by_emotion_class", public_diagnostics["heuristic_debug"])
         self.assertIn("rceo_reliability_shift_under_missing_noisy_modality", public_diagnostics)
         self.assertIn("router_load_by_condition", public_diagnostics)
         self.assertEqual(len(smoke_raw_rows), 1)
@@ -1409,7 +1413,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(set(smoke_raw["public_metrics"]), set(SENTIMENT_REQUIRED_PUBLIC_METRICS))
         self.assertEqual(
             smoke_raw["public_metrics_scope"],
-            "sentiment_emotion_smoke_proxy_not_topconf_main_table",
+            "sentiment_emotion_smoke_real_metrics_not_topconf_main_table",
         )
         self.assertIn("audio_missing_smoke", smoke_raw["public_metrics"]["router_load_by_corruption_type"])
         self.assertEqual(
@@ -1423,7 +1427,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             self.assertEqual(set(baseline_row["public_metrics"]), set(SENTIMENT_REQUIRED_PUBLIC_METRICS))
             self.assertEqual(
                 baseline_row["public_metrics_scope"],
-                "sentiment_emotion_smoke_proxy_not_topconf_main_table",
+                "sentiment_emotion_smoke_real_metrics_not_topconf_main_table",
             )
             self.assertIn("audio_missing_smoke", baseline_row["public_metrics"]["router_load_by_corruption_type"])
         self.assertEqual(len(smoke_robustness_rows), 2 * (1 + len(payload["baselines"])))
@@ -1688,9 +1692,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(set(smoke_raw["public_metrics"]), set(REGION_TEXT_REQUIRED_PUBLIC_METRICS))
         self.assertEqual(
             smoke_raw["public_metrics_scope"],
-            "region_text_smoke_proxy_not_topconf_main_table",
+            "region_text_smoke_real_metrics_not_topconf_main_table",
         )
-        self.assertIn("public metric inventory uses smoke proxies", smoke_raw["evidence_limitations"])
+        self.assertIn("public metric inventory uses smoke-scale real metrics", smoke_raw["evidence_limitations"])
         self.assertEqual(len(smoke_baseline_rows), len(payload["baselines"]))
         baseline_models = {row["model"] for row in smoke_baseline_rows}
         self.assertEqual(baseline_models, set(payload["baselines"]))
@@ -1718,10 +1722,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             self.assertEqual(set(row["public_metrics"]), set(REGION_TEXT_REQUIRED_PUBLIC_METRICS))
             self.assertEqual(
                 row["public_metrics_scope"],
-                "region_text_smoke_proxy_not_topconf_main_table",
+                "region_text_smoke_real_metrics_not_topconf_main_table",
             )
             self.assertIn("not a trained strong baseline", row["evidence_limitations"])
-            self.assertIn("public metric inventory uses smoke proxies", row["evidence_limitations"])
+            self.assertIn("public metric inventory uses smoke-scale real metrics", row["evidence_limitations"])
         self.assertEqual(smoke_statistics_preview["artifact_type"], "public_smoke_statistics_preview")
         self.assertEqual(
             smoke_statistics_preview["evidence_scope"],

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -17,7 +18,7 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
                 self.assertEqual(payload["candidate_names"], ["SPO", "LRIO"])
                 self.assertEqual(
                     payload["lrio_pairs"],
-                    [["text", "audio"], ["text", "vision"], ["audio", "vision"]],
+                    [["text", "audio"], ["text", "vision"]],
                 )
 
     def test_multimodal_primitives_are_not_shared_linear_head_stubs(self):
@@ -143,6 +144,183 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
             "RCEO must not reintroduce candidate evidence logits when router evidence is disabled",
         )
 
+    def test_lrio_preserves_ordered_pair_direction(self):
+        from moat_ovha_torch.models.multimodal.primitives.low_rank_interaction import LRIOPrimitive
+
+        primitive = LRIOPrimitive(d_model=8, output_dim=1, pairs=(("text", "audio"), ("audio", "text")))
+
+        self.assertEqual(primitive.pairs, (("text", "audio"), ("audio", "text")))
+        self.assertIn("text__audio", primitive.branch)
+        self.assertIn("audio__text", primitive.branch)
+
+    def test_rceo_exposes_pair_reliability_for_lrio_pairs(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceEncoder
+        from moat_ovha_torch.models.multimodal.reliability_prior import RCEOReliabilityPrior
+
+        batch = _batch(torch)
+        encoder = MultimodalEvidenceEncoder(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            d_model=10,
+        )
+        reliability = RCEOReliabilityPrior(
+            d_model=10,
+            candidate_names=("SPO", "LRIO"),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+        )(batch, encoder(batch))
+
+        self.assertEqual(reliability.pair_names, ("text__audio", "text__vision"))
+        self.assertEqual(tuple(reliability.pair_reliability.shape), (3, 2))
+        expected = torch.stack(
+            [
+                reliability.modality_reliability[:, 0] * reliability.modality_reliability[:, 1],
+                reliability.modality_reliability[:, 0] * reliability.modality_reliability[:, 2],
+            ],
+            dim=-1,
+        )
+        self.assertTrue(torch.allclose(reliability.pair_reliability, expected))
+
+    def test_lrio_diagnostics_include_pair_load_reliability_and_rank_entropy(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(17)
+        batch = _batch(torch)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("SPO", "LRIO"),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+        )
+
+        with torch.no_grad():
+            output = model(batch)
+
+        lrio = output.diagnostics["candidate_diagnostics"]["LRIO"]
+        self.assertEqual(set(lrio["pair_load"]), {"text__audio", "text__vision"})
+        self.assertEqual(set(lrio["pair_reliability"]), {"text__audio", "text__vision"})
+        self.assertEqual(set(lrio["pair_rank_entropy"]), {"text__audio", "text__vision"})
+        self.assertGreaterEqual(lrio["pair_reliability"]["text__audio"], 0.0)
+        self.assertLessEqual(lrio["pair_reliability"]["text__audio"], 1.0)
+
+    def test_sentiment_public_batch_uses_neutral_query_not_text_mean(self):
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
+        from scripts.multimodal.run_public_smoke import _load_public_batch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = _write_public_cache_fixture(Path(tmp), task_type="sentiment_regression")
+            config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_smoke.json")
+
+            batch = _load_public_batch(layout, config, "train", torch.device("cpu"))
+
+        text_mean = batch.fields["text"].x.mean(dim=1, keepdim=True).expand_as(batch.query.x)
+        self.assertTrue(torch.all(batch.query.x == 0.0))
+        self.assertFalse(torch.allclose(batch.query.x, text_mean))
+
+    def test_public_main_sentiment_metrics_use_model_diagnostics_not_router_proxy(self):
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_main import _public_main_metrics
+
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_main.json")
+        batch = _batch(torch)
+        prediction = batch.target_y.clone()
+        diagnostics = {
+            "candidate_diagnostics": {
+                "LRIO": {"rank_entropy": torch.tensor(0.42)},
+                "SPO": {"prototype_entropy": torch.tensor(0.73)},
+            },
+            "reliability": {"modality_reliability_mean": torch.tensor(0.66)},
+        }
+
+        metrics = _public_main_metrics(
+            config,
+            batch,
+            prediction=prediction,
+            router_load_by_candidate={"SPO": 0.95, "LRIO": 0.05},
+            router_entropy=torch.tensor(0.0),
+            candidate_loss={},
+            diagnostics=diagnostics,
+        )
+
+        self.assertAlmostEqual(metrics["lrio_rank_entropy"], 0.42, places=5)
+        self.assertAlmostEqual(metrics["spo_prototype_entropy"], 0.73, places=5)
+        self.assertAlmostEqual(metrics["rceo_reliability_calibration"]["mean_predicted_reliability"], 0.66, places=5)
+        self.assertEqual(metrics["rceo_reliability_calibration"]["source"], "model_reliability_prior")
+
+    def test_robustness_row_uses_model_reliability_not_corruption_strength_proxy(self):
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_main import _robustness_row
+
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_main.json")
+        row = _robustness_row(
+            config,
+            _batch(torch),
+            model_name="ovha_full",
+            seed=201,
+            raw_metric_path=Path("raw_metrics.jsonl"),
+            corruption_type="audio_noise",
+            score=0.8,
+            router_load_by_candidate={"SPO": 0.5, "LRIO": 0.5},
+            candidate_loss={},
+            model_reliability=0.33,
+        )
+
+        self.assertAlmostEqual(row["rceo_reliability"], 0.33)
+        self.assertNotEqual(row["rceo_reliability"], 1.0 - row["corruption_strength"])
+
+    def test_diagnostic_validator_respects_active_candidate_subset(self):
+        from moat_ovha_torch.eval.multimodal_diagnostics import validate_diagnostic_row
+
+        row = {
+            "active_candidate_names": ["SPO", "LRIO"],
+            "router_entropy": 0.5,
+            "router_load_by_candidate": {"SPO": 0.6, "LRIO": 0.4},
+            "router_memory_logit_norm": 0.1,
+            "router_evidence_logit_norm": 0.2,
+            "router_reliability_logit_norm": 0.3,
+            "router_logit_parts": {"memory": 0.0, "evidence": 0.0, "reliability": 0.0},
+            "candidate_loss": {"SPO": 0.2, "LRIO": 0.3},
+            "adapter_params": {"SPO_temperature": 1.0, "LRIO_rank_entropy": 0.5},
+            "memory_slot_norm": {"SPO": 1.1, "LRIO": 1.2},
+            "candidate_diagnostics": {
+                "SPO": {
+                    "prototype_entropy": 0.5,
+                    "top_prototype": 1.0,
+                    "prototype_temperature": 1.0,
+                    "candidate_loss": 0.2,
+                },
+                "LRIO": {
+                    "rank_entropy": 0.6,
+                    "rank_top_k": 1.0,
+                    "pair_interaction_strength": 0.4,
+                    "candidate_loss": 0.3,
+                },
+                "RCEO": {
+                    "modality_reliability": 0.8,
+                    "reliability_bias_norm": 0.1,
+                    "corruption_response": 0.2,
+                },
+            },
+            "stackability_passed": True,
+        }
+
+        report = validate_diagnostic_row(row)
+
+        self.assertTrue(report.ok, report.errors)
+
 
 def _batch(torch, *, task_type: str = "sentiment_regression"):
     from moat_ovha_torch.data.multimodal.typed_batch import (
@@ -215,6 +393,78 @@ def _batch(torch, *, task_type: str = "sentiment_regression"):
         ),
         hidden={"true_active_operator": torch.zeros(batch_size, query_count, dtype=torch.long)},
     )
+
+
+def _write_public_cache_fixture(root: Path, *, task_type: str):
+    import numpy as np
+
+    from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout
+
+    layout = MultimodalCacheLayout(root, "cmu_mosei", "unit")
+    cache_root = layout.root
+    for directory in ("token_fields", "positions", "masks", "supervision", "provenance"):
+        (cache_root / directory).mkdir(parents=True, exist_ok=True)
+
+    batch_size = 3
+    specs = {
+        "text": (4, 6),
+        "audio": (3, 5),
+        "vision": (2, 4),
+    }
+    manifest: dict[str, dict[str, str]] = {}
+    for offset, (modality, (token_count, dim)) in enumerate(specs.items(), start=1):
+        x = np.arange(batch_size * token_count * dim, dtype=np.float32).reshape(batch_size, token_count, dim) + offset
+        pos = np.linspace(0.0, 1.0, token_count, dtype=np.float32).reshape(1, token_count, 1).repeat(batch_size, axis=0)
+        mask = np.ones((batch_size, token_count), dtype=bool)
+        x_path = f"token_fields/{modality}_x_train.npy"
+        pos_path = f"positions/{modality}_pos_train.npy"
+        mask_path = f"masks/{modality}_mask_train.npy"
+        np.save(cache_root / x_path, x)
+        np.save(cache_root / pos_path, pos)
+        np.save(cache_root / mask_path, mask)
+        manifest[modality] = {"x": x_path, "pos": pos_path, "mask": mask_path}
+
+    np.save(cache_root / "supervision" / "task_labels_train.npy", np.array([[-1.0], [0.0], [1.0]], dtype=np.float32))
+    np.save(cache_root / "supervision" / "missing_modality_mask_train.npy", np.zeros((batch_size, 3), dtype=np.float32))
+    (cache_root / "token_fields" / "manifest_train.json").write_text(json.dumps(manifest, sort_keys=True))
+    (cache_root / "data_card.json").write_text(
+        json.dumps(
+            {
+                "dataset_name": "cmu_mosei",
+                "cache_version": "unit",
+                "modalities": ["text", "audio", "vision"],
+                "tasks": [task_type],
+                "operator_supervision": {
+                    "TLEO": "not used",
+                    "SPO": "semantic prototype",
+                    "LRIO": "paired modality interaction",
+                    "CATO": "not used",
+                    "RCEO": "reliability",
+                },
+                "leakage_controls": {"hidden_metadata_excluded": True},
+            },
+            sort_keys=True,
+        )
+    )
+    records = [
+        {
+            "source_id": f"sample_{index}",
+            "split": "train",
+            "original_split": "train",
+            "raw_ref": f"raw_{index}",
+            "license_tag": "unit-test",
+            "preprocessing_version": "unit-test",
+        }
+        for index in range(batch_size)
+    ]
+    (cache_root / "provenance" / "sample_records_train.jsonl").write_text(
+        "\n".join(json.dumps(record, sort_keys=True) for record in records) + "\n"
+    )
+    (cache_root / "provenance" / "feature_versions.json").write_text(
+        json.dumps({"text": "unit", "audio": "unit", "vision": "unit"}, sort_keys=True)
+    )
+    (cache_root / "provenance" / "pseudo_label_versions.json").write_text(json.dumps({"version": "none"}))
+    return layout
 
 
 if __name__ == "__main__":

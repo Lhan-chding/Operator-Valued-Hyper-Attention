@@ -56,7 +56,11 @@ class MultimodalOVHA(nn.Module):
         self.router_weight_policy = _validated_router_weight_policy(router_weight_policy, candidate_names)
         self.evidence_encoder = MultimodalEvidenceEncoder(field_dims=field_dims, query_dim=query_dim, d_model=d_model)
         self.memory_encoder = MultimodalOperatorMemory(d_model=d_model, memory_tokens=memory_tokens, candidate_names=candidate_names)
-        self.reliability_prior = RCEOReliabilityPrior(d_model=d_model, candidate_names=candidate_names) if use_reliability_prior else None
+        self.reliability_prior = (
+            RCEOReliabilityPrior(d_model=d_model, candidate_names=candidate_names, lrio_pairs=lrio_pairs or ())
+            if use_reliability_prior
+            else None
+        )
         self.joint_router_adapter = MultimodalJointRouterAdapter(
             d_model=d_model,
             candidate_names=candidate_names,
@@ -80,6 +84,12 @@ class MultimodalOVHA(nn.Module):
         memory_bank = self.memory_encoder(evidence.global_features, evidence)
         reliability = self.reliability_prior(batch, evidence) if self.reliability_prior is not None else None
         router_output, params = self.joint_router_adapter(memory_bank, evidence, reliability)
+        if reliability is not None and "LRIO" in params:
+            params["LRIO"] = {
+                **params["LRIO"],
+                "pair_reliability": reliability.pair_reliability,
+                "pair_names": reliability.pair_names,
+            }
 
         candidate_outputs: dict[str, CandidateOutput] = {}
         for name in self.candidate_names:
@@ -237,7 +247,11 @@ def _adapter_param_diagnostics(params: dict[str, dict[str, torch.Tensor]]) -> di
 
 def _adapter_param_details(params: dict[str, dict[str, torch.Tensor]]) -> dict[str, dict[str, torch.Tensor]]:
     return {
-        name: {f"{key}_mean": tensor.mean() for key, tensor in values.items()}
+        name: {
+            f"{key}_mean": tensor.mean()
+            for key, tensor in values.items()
+            if hasattr(tensor, "mean")
+        }
         for name, values in params.items()
     }
 

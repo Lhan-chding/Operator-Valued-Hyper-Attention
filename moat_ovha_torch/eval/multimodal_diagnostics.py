@@ -55,6 +55,7 @@ def required_diagnostic_keys() -> tuple[str, ...]:
 def validate_diagnostic_row(row: dict[str, Any]) -> DiagnosticValidationReport:
     errors = [f"missing diagnostic key: {key}" for key in REQUIRED_DIAGNOSTIC_KEYS if key not in row]
     warnings: list[str] = []
+    active_candidates = _active_candidate_names(row)
     if "stackability_passed" in row and row.get("stackability_passed") is not True:
         errors.append("stackability_passed must be true")
     if "router_entropy" in row and _finite_float(row.get("router_entropy")) is None:
@@ -67,21 +68,21 @@ def validate_diagnostic_row(row: dict[str, Any]) -> DiagnosticValidationReport:
             errors.append(f"{key} must be finite non-negative")
     load = row.get("router_load_by_candidate")
     if isinstance(load, dict):
-        for name in MULTIMODAL_CANDIDATE_NAMES:
+        for name in active_candidates:
             if name not in load:
                 errors.append(f"router_load_by_candidate missing {name}")
-        _validate_probability_map(load, "router_load_by_candidate", MULTIMODAL_CANDIDATE_NAMES, errors)
+        _validate_probability_map(load, "router_load_by_candidate", active_candidates, errors)
     elif "router_load_by_candidate" in row:
         errors.append("router_load_by_candidate must be an object keyed by candidate")
     _require_nested_keys(row, "router_logit_parts", REQUIRED_ROUTER_LOGIT_PARTS, errors)
-    _require_nested_keys(row, "candidate_loss", MULTIMODAL_CANDIDATE_NAMES, errors)
-    _require_nested_keys(row, "adapter_params", REQUIRED_ADAPTER_PARAM_KEYS, errors)
-    _require_nested_keys(row, "memory_slot_norm", MULTIMODAL_CANDIDATE_NAMES, errors)
+    _require_nested_keys(row, "candidate_loss", active_candidates, errors)
+    _require_nested_keys(row, "adapter_params", _adapter_param_keys(active_candidates), errors)
+    _require_nested_keys(row, "memory_slot_norm", active_candidates, errors)
     _validate_finite_map(row.get("router_logit_parts"), "router_logit_parts", REQUIRED_ROUTER_LOGIT_PARTS, errors)
-    _validate_non_negative_map(row.get("candidate_loss"), "candidate_loss", MULTIMODAL_CANDIDATE_NAMES, errors)
-    _validate_finite_map(row.get("adapter_params"), "adapter_params", REQUIRED_ADAPTER_PARAM_KEYS, errors)
-    _validate_non_negative_map(row.get("memory_slot_norm"), "memory_slot_norm", MULTIMODAL_CANDIDATE_NAMES, errors)
-    _validate_candidate_diagnostics(row, errors)
+    _validate_non_negative_map(row.get("candidate_loss"), "candidate_loss", active_candidates, errors)
+    _validate_finite_map(row.get("adapter_params"), "adapter_params", _adapter_param_keys(active_candidates), errors)
+    _validate_non_negative_map(row.get("memory_slot_norm"), "memory_slot_norm", active_candidates, errors)
+    _validate_candidate_diagnostics(row, active_candidates, errors)
     return DiagnosticValidationReport(ok=not errors, errors=errors, warnings=warnings)
 
 
@@ -105,12 +106,33 @@ def _require_nested_keys(row: dict[str, Any], parent: str, keys: tuple[str, ...]
             errors.append(f"{parent} missing {key}")
 
 
-def _validate_candidate_diagnostics(row: dict[str, Any], errors: list[str]) -> None:
+def _active_candidate_names(row: dict[str, Any]) -> tuple[str, ...]:
+    raw = row.get("active_candidate_names", row.get("candidate_names"))
+    if isinstance(raw, (list, tuple)) and raw:
+        active = tuple(str(name) for name in raw if str(name) in MULTIMODAL_CANDIDATE_NAMES)
+        if active:
+            return active
+    return MULTIMODAL_CANDIDATE_NAMES
+
+
+def _adapter_param_keys(active_candidates: tuple[str, ...]) -> tuple[str, ...]:
+    by_candidate = {
+        "TLEO": "TLEO_lengthscale",
+        "SPO": "SPO_temperature",
+        "LRIO": "LRIO_rank_entropy",
+        "CATO": "CATO_alignment_temperature",
+    }
+    return tuple(by_candidate[name] for name in active_candidates if name in by_candidate)
+
+
+def _validate_candidate_diagnostics(row: dict[str, Any], active_candidates: tuple[str, ...], errors: list[str]) -> None:
     diagnostics = row.get("candidate_diagnostics")
     if not isinstance(diagnostics, dict):
         errors.append("candidate_diagnostics must be an object keyed by candidate/support module")
         return
-    for candidate, keys in CANDIDATE_DIAGNOSTIC_KEYS.items():
+    required = (*active_candidates, "RCEO")
+    for candidate in required:
+        keys = CANDIDATE_DIAGNOSTIC_KEYS[candidate]
         candidate_values = diagnostics.get(candidate)
         if not isinstance(candidate_values, dict):
             errors.append(f"candidate_diagnostics missing {candidate}")

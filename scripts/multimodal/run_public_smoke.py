@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 import torch
 
-from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+from moat_ovha_torch.config_multimodal import SENTIMENT_EMOTION_TASK_TYPES, MultimodalExperimentConfig
 from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256, validate_cache_layout
 from moat_ovha_torch.data.multimodal.typed_batch import (
     MultimodalEpisodeBatch,
@@ -255,6 +255,7 @@ def _run_public_training_smoke(
                         candidate_loss=eval_output.diagnostics.get("candidate_loss", {}),
                         router_load_by_candidate=eval_output.diagnostics.get("router_load_by_candidate", {}),
                         router_entropy=eval_output.diagnostics.get("router_entropy"),
+                        diagnostics=eval_output.diagnostics,
                     ),
                     "public_metrics_scope": _public_metrics_scope(config),
                     "stage": "T5_eval",
@@ -369,7 +370,16 @@ def _load_public_batch(
     target_y = _target_tensor(root / "supervision" / f"task_labels_{split}.npy", device)
     batch_size, query_count = int(target_y.shape[0]), int(target_y.shape[1])
     query_source = fields["text"].x if "text" in fields else next(iter(fields.values())).x
-    query_x = query_source.mean(dim=1, keepdim=True).expand(batch_size, query_count, -1).contiguous()
+    if config.task_type in SENTIMENT_EMOTION_TASK_TYPES:
+        query_x = torch.zeros(
+            batch_size,
+            query_count,
+            int(query_source.shape[-1]),
+            dtype=query_source.dtype,
+            device=device,
+        )
+    else:
+        query_x = query_source.mean(dim=1, keepdim=True).expand(batch_size, query_count, -1).contiguous()
     query = QueryField(
         x=query_x,
         pos=torch.zeros(batch_size, query_count, 1, dtype=torch.float32, device=device),
@@ -584,30 +594,32 @@ def _sentiment_public_report_diagnostics(
     output: MultimodalOVHAOutput,
 ) -> dict[str, object]:
     loads = _complete_candidate_probability_map(output.diagnostics.get("router_load_by_candidate", {}))
-    rank_entropy = _candidate_diag_float(output, "LRIO", "rank_entropy", default=0.1)
+    lrio_diag = output.diagnostics.get("candidate_diagnostics", {}).get("LRIO", {})
+    spo_diag = output.diagnostics.get("candidate_diagnostics", {}).get("SPO", {})
     missing_fraction = _missing_modality_fraction(batch)
     reliability_shift = -max(0.01, min(1.0, missing_fraction if missing_fraction > 0.0 else 0.05))
     return {
-        "lrio_rank_entropy_by_modality_pair": {
-            "text_audio": rank_entropy,
-            "text_vision": max(0.0, 0.8 * rank_entropy),
-            "audio_vision": max(0.0, 0.6 * rank_entropy),
-        },
-        "spo_prototype_load_by_emotion_class": {
-            "negative": {"p0": 0.70, "p1": 0.20, "p2": 0.10},
-            "positive": {"p0": 0.15, "p1": 0.75, "p2": 0.10},
-            "neutral": {"p0": 0.20, "p1": 0.25, "p2": 0.55},
-        },
+        "lrio_rank_entropy_by_modality_pair": _json_ready(lrio_diag.get("pair_rank_entropy", {})),
+        "lrio_pair_load": _json_ready(lrio_diag.get("pair_load", {})),
+        "lrio_pair_reliability": _json_ready(lrio_diag.get("pair_reliability", {})),
+        "spo_prototype_usage": _prototype_usage_map(spo_diag.get("prototype_usage")),
         "rceo_reliability_shift_under_missing_noisy_modality": {
             "missing_audio": reliability_shift,
             "noisy_vision": -max(0.01, min(1.0, 0.5 * abs(reliability_shift))),
         },
-        "router_load_by_condition": {
-            "clean": loads,
-            "corrupted": _shift_candidate_load(loads, {"SPO": 0.10, "LRIO": -0.08}),
-            "missing": _shift_candidate_load(loads, {"TLEO": 0.08, "LRIO": -0.06}),
+        "router_load_by_condition": {"observed_batch": loads},
+        "heuristic_debug": {
+            "omitted_spo_prototype_load_by_emotion_class": "not emitted because SPO exposes overall prototype_usage, not per-label usage",
+            "omitted_router_load_shift_templates": "not emitted because no corrupted/missing forward pass was aggregated for this diagnostic row",
         },
     }
+
+
+def _prototype_usage_map(value: Any) -> dict[str, float]:
+    if not hasattr(value, "detach"):
+        return {}
+    flat = value.detach().reshape(-1)
+    return {f"p{index}": _as_float(item) for index, item in enumerate(flat)}
 
 
 def _candidate_loss_float(output: MultimodalOVHAOutput, candidate: str) -> float:
@@ -947,7 +959,7 @@ def _write_smoke_statistics_preview(
         "validation": validation_payload,
         "evidence_limitations": [
             "not valid top-conference main-table evidence",
-            "public metric inventory uses smoke proxies",
+            "public metric inventory uses smoke-scale real metrics",
             *baseline_limitations,
         ],
     }
@@ -1048,6 +1060,7 @@ def _public_smoke_baseline_history_rows(
                     candidate_loss={"CATO": task_loss},
                     router_load_by_candidate=_probe_router_load_by_candidate(str(baseline_name)),
                     router_entropy=torch.zeros((), dtype=batch.target_y.dtype, device=batch.target_y.device),
+                    diagnostics=None,
                 ),
                 "public_metrics_scope": _public_metrics_scope(config),
             }
@@ -1128,6 +1141,7 @@ def _public_trained_baseline_history_rows(
                     candidate_loss={"CATO": task_loss},
                     router_load_by_candidate=_probe_router_load_by_candidate(str(baseline_name)),
                     router_entropy=torch.zeros((), dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device),
+                    diagnostics=None,
                 ),
                 "public_metrics_scope": _public_metrics_scope(config),
             }
@@ -1235,6 +1249,7 @@ def _public_smoke_metrics(
     candidate_loss: Any,
     router_load_by_candidate: Any,
     router_entropy: Any,
+    diagnostics: Any = None,
 ) -> dict[str, object]:
     if config.task_type not in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
         if config.task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
@@ -1242,6 +1257,7 @@ def _public_smoke_metrics(
                 batch,
                 prediction=prediction,
                 router_load_by_candidate=router_load_by_candidate,
+                diagnostics=diagnostics,
             )
         return {}
     task_loss = _task_loss(prediction, batch)
@@ -1362,6 +1378,7 @@ def _sentiment_smoke_metrics(
     *,
     prediction: torch.Tensor,
     router_load_by_candidate: Any,
+    diagnostics: Any,
 ) -> dict[str, object]:
     mae = _as_float((prediction - batch.target_y).abs().mean())
     pearson = _pearson_correlation(prediction, batch.target_y, batch.target_mask)
@@ -1377,9 +1394,9 @@ def _sentiment_smoke_metrics(
         "router_load_by_corruption_type": {
             _missing_corruption_key(batch): _complete_candidate_probability_map(router_load_by_candidate)
         },
-        "lrio_rank_entropy": _entropy_proxy(router_load_by_candidate, "LRIO"),
-        "spo_prototype_entropy": _entropy_proxy(router_load_by_candidate, "SPO"),
-        "rceo_reliability_calibration": _smoke_rceo_calibration(batch, accuracy),
+        "lrio_rank_entropy": _candidate_diagnostic_metric(diagnostics, "LRIO", "rank_entropy"),
+        "spo_prototype_entropy": _candidate_diagnostic_metric(diagnostics, "SPO", "prototype_entropy"),
+        "rceo_reliability_calibration": _smoke_rceo_calibration(batch, prediction, diagnostics),
     }
     return {name: metrics[name] for name in SENTIMENT_REQUIRED_PUBLIC_METRICS}
 
@@ -1455,14 +1472,39 @@ def _entropy_proxy(values: Any, candidate: str) -> float:
     return max(0.0, -probability * math.log(probability))
 
 
-def _smoke_rceo_calibration(batch: MultimodalEpisodeBatch, observed_score: float) -> dict[str, object]:
-    predicted_reliability = max(0.0, min(1.0, 1.0 - _missing_modality_fraction(batch)))
-    observed = max(0.0, min(1.0, observed_score))
+def _candidate_diagnostic_metric(diagnostics: Any, candidate: str, key: str) -> float:
+    if not isinstance(diagnostics, dict):
+        return 0.0
+    candidate_diagnostics = diagnostics.get("candidate_diagnostics")
+    if not isinstance(candidate_diagnostics, dict):
+        return 0.0
+    values = candidate_diagnostics.get(candidate)
+    if not isinstance(values, dict):
+        return 0.0
+    return max(0.0, _as_float(values.get(key)))
+
+
+def _smoke_rceo_calibration(
+    batch: MultimodalEpisodeBatch,
+    prediction: torch.Tensor,
+    diagnostics: Any,
+) -> dict[str, object]:
+    predicted = _model_reliability_mean(diagnostics)
+    if predicted is None:
+        predicted_reliability = 0.0
+        source = "not_applicable_no_model_reliability"
+    else:
+        predicted_reliability = max(0.0, min(1.0, predicted))
+        source = "model_reliability_prior"
+    observed = _bounded_observed_reliability(batch, prediction)
     ece = abs(predicted_reliability - observed)
     return {
         "ece": ece,
         "expected_calibration_error": ece,
         "bin_count": 1,
+        "source": source,
+        "mean_predicted_reliability": predicted_reliability,
+        "mean_observed_reliability": observed,
         "calibration_curve": [
             {
                 "bin": 0,
@@ -1471,8 +1513,30 @@ def _smoke_rceo_calibration(batch: MultimodalEpisodeBatch, observed_score: float
                 "count": max(1, int(batch.target_y.shape[0])),
             }
         ],
-        "condition": "smoke proxy calibration between missing-modality reliability and bounded task score",
+        "condition": "smoke calibration between model RCEO reliability and bounded per-sample performance",
     }
+
+
+def _model_reliability_mean(diagnostics: Any) -> float | None:
+    if not isinstance(diagnostics, dict):
+        return None
+    reliability = diagnostics.get("reliability")
+    if isinstance(reliability, dict) and "modality_reliability_mean" in reliability:
+        return _as_float(reliability["modality_reliability_mean"])
+    candidate_diagnostics = diagnostics.get("candidate_diagnostics")
+    if isinstance(candidate_diagnostics, dict):
+        rceo = candidate_diagnostics.get("RCEO")
+        if isinstance(rceo, dict) and "modality_reliability" in rceo:
+            return _as_float(rceo["modality_reliability"])
+    return None
+
+
+def _bounded_observed_reliability(batch: MultimodalEpisodeBatch, prediction: torch.Tensor) -> float:
+    target = batch.target_y.to(device=prediction.device, dtype=prediction.dtype)
+    mask = batch.target_mask.to(device=prediction.device, dtype=prediction.dtype).unsqueeze(-1)
+    per_sample_error = ((prediction - target).square() * mask).sum(dim=(1, 2)) / mask.sum(dim=(1, 2)).clamp_min(1.0)
+    observed = 1.0 / (1.0 + per_sample_error)
+    return max(0.0, min(1.0, _as_float(observed.mean())))
 
 
 def _probe_router_load_by_candidate(model_name: str) -> dict[str, float]:
@@ -1516,7 +1580,7 @@ def _public_smoke_raw_metric_rows(
                 "single OVHA smoke model only",
                 "not a same-feature baseline comparison",
                 "not valid top-conference main-table evidence",
-                "public metric inventory uses smoke proxies",
+                "public metric inventory uses smoke-scale real metrics",
             ],
         }
         for row in eval_history
@@ -1562,7 +1626,7 @@ def _public_smoke_baseline_raw_metric_rows(
                 "not a trained strong baseline",
                 "not a top-conference same-feature baseline comparison",
                 _baseline_protocol_limitation(str(row["baseline_protocol"])),
-                "public metric inventory uses smoke proxies",
+                "public metric inventory uses smoke-scale real metrics",
             ],
         }
         for row in eval_baseline_history

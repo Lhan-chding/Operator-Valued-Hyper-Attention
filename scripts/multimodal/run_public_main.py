@@ -637,6 +637,35 @@ def _evaluate_task_loss_on_device(
     return weighted_loss / max(1.0, total_weight)
 
 
+def _evaluate_linear_task_loss_on_device(
+    baseline_name: str,
+    model: torch.nn.Linear,
+    batch: MultimodalEpisodeBatch,
+    device: torch.device,
+    *,
+    batch_size: int,
+) -> float:
+    total = int(batch.target_y.shape[0])
+    if total <= 0:
+        return 0.0
+    was_training = model.training
+    model.eval()
+    weighted_loss = 0.0
+    total_weight = 0.0
+    with torch.no_grad():
+        for start in range(0, total, max(1, int(batch_size))):
+            stop = min(total, start + max(1, int(batch_size)))
+            indices = torch.arange(start, stop, device=batch.target_y.device)
+            chunk = _move_batch_to_device(_slice_batch(batch, indices), device)
+            loss = _task_loss(_baseline_prediction(baseline_name, model, chunk), chunk)
+            weight = float(chunk.target_mask.to(dtype=torch.float32).sum().detach().cpu())
+            weighted_loss += _as_float(loss) * weight
+            total_weight += weight
+    if was_training:
+        model.train()
+    return weighted_loss / max(1.0, total_weight)
+
+
 def _eval_batch_size(train_batch_size: int) -> int:
     return max(1, int(train_batch_size) * 8)
 
@@ -689,6 +718,14 @@ def _destandardize_output(
     )
 
 
+def _destandardize_prediction(
+    prediction: torch.Tensor,
+    target_mean: torch.Tensor,
+    target_std: torch.Tensor,
+) -> torch.Tensor:
+    return prediction * target_std + target_mean
+
+
 def _ovha_raw_metric_row(
     config: MultimodalExperimentConfig,
     batch: MultimodalEpisodeBatch,
@@ -715,6 +752,7 @@ def _ovha_raw_metric_row(
         router_load_by_candidate=output.diagnostics.get("router_load_by_candidate", {}),
         router_entropy=output.diagnostics.get("router_entropy"),
         candidate_loss=output.diagnostics.get("candidate_loss", {}),
+        diagnostics=output.diagnostics,
         model_protocol="operator_valued_hyper_attention_public_main",
     )
 
@@ -779,6 +817,7 @@ def _baseline_rows(
                     router_load_by_candidate=eval_output.diagnostics.get("router_load_by_candidate", {}),
                     router_entropy=eval_output.diagnostics.get("router_entropy"),
                     candidate_loss=eval_output.diagnostics.get("candidate_loss", {}),
+                    diagnostics=eval_output.diagnostics,
                     model_protocol=f"{baseline_protocol}_public_main_v1",
                 )
             )
@@ -804,12 +843,23 @@ def _baseline_rows(
             learning_rate=learning_rate,
             progress_interval=progress_interval,
             batch_size=batch_size,
+            validation_fraction=validation_fraction,
+            eval_interval=eval_interval,
+            early_stopping_patience=early_stopping_patience,
+            weight_decay=weight_decay,
             device=device,
         )
+        target_mean = summary.pop("_target_mean")
+        target_std = summary.pop("_target_std")
         with torch.no_grad():
-            eval_batch_device = _move_batch_to_device(eval_batch, device)
-            eval_prediction = _baseline_prediction(str(baseline_name), model, eval_batch_device)
-            loss = _task_loss(eval_prediction, eval_batch_device)
+            eval_batch_std = _standardize_batch_targets(eval_batch, target_mean, target_std)
+            eval_batch_device = _move_batch_to_device(eval_batch_std, device)
+            eval_prediction = _destandardize_prediction(
+                _baseline_prediction(str(baseline_name), model, eval_batch_device),
+                target_mean.to(device=device),
+                target_std.to(device=device),
+            )
+            loss = _task_loss(eval_prediction, _move_batch_to_device(eval_batch, device))
             eval_prediction = eval_prediction.detach().cpu()
         router_load = _probe_router_load_by_candidate(str(baseline_name))
         rows.append(
@@ -827,6 +877,7 @@ def _baseline_rows(
                 router_load_by_candidate=router_load,
                 router_entropy=torch.zeros((), dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device),
                 candidate_loss={candidate: loss for candidate in ("TLEO", "SPO", "LRIO", "CATO")},
+                diagnostics=None,
                 model_protocol=f"{baseline_protocol}_public_main_v1",
             )
         )
@@ -839,6 +890,8 @@ def _baseline_rows(
                 seed=seed,
                 raw_metric_path=raw_metrics_path,
                 device=device,
+                target_mean=target_mean,
+                target_std=target_std,
             )
         )
         summaries.append({**summary, "model": str(baseline_name)})
@@ -868,7 +921,7 @@ def _train_ovha_ablation(
     fit_batch, val_batch = _split_train_val_batch(
         train_batch,
         validation_fraction=validation_fraction,
-        seed=int(seed) + _stable_baseline_seed_offset(baseline_name),
+        seed=int(seed),
     )
     target_mean, target_std = _target_standardizer(fit_batch)
     fit_batch_std = _standardize_batch_targets(fit_batch, target_mean, target_std)
@@ -1019,10 +1072,22 @@ def _train_linear_baseline(
     learning_rate: float,
     progress_interval: int,
     batch_size: int,
+    validation_fraction: float,
+    eval_interval: int,
+    early_stopping_patience: int,
+    weight_decay: float,
     device: torch.device,
 ) -> tuple[torch.nn.Linear, dict[str, Any]]:
+    fit_batch, val_batch = _split_train_val_batch(
+        train_batch,
+        validation_fraction=validation_fraction,
+        seed=int(seed),
+    )
+    target_mean, target_std = _target_standardizer(fit_batch)
+    fit_batch_std = _standardize_batch_targets(fit_batch, target_mean, target_std)
+    val_batch_std = _standardize_batch_targets(val_batch, target_mean, target_std)
     input_probe = _move_batch_to_device(
-        _slice_batch(train_batch, torch.arange(0, 1, device=train_batch.target_y.device)),
+        _slice_batch(fit_batch_std, torch.arange(0, 1, device=fit_batch_std.target_y.device)),
         device,
     )
     train_inputs = _same_feature_probe_inputs(baseline_name, input_probe)
@@ -1034,9 +1099,13 @@ def _train_linear_baseline(
         model.weight.uniform_(-0.02, 0.02, generator=generator)
         model.bias.uniform_(-0.02, 0.02, generator=generator)
     initial = _linear_parameter_vector(model)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     max_grad_norm = 0.0
     final_loss = 0.0
+    best_val_loss = float("inf")
+    best_step = 0
+    best_state = _clone_state_dict(model)
+    stale_evals = 0
     model.train()
     started_at = time.perf_counter()
     _print_progress(
@@ -1046,10 +1115,10 @@ def _train_linear_baseline(
         steps=train_steps,
         learning_rate=learning_rate,
     )
-    batch_generator = torch.Generator(device=train_batch.target_y.device)
+    batch_generator = torch.Generator(device=fit_batch_std.target_y.device)
     batch_generator.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name) + 19)
     for step in range(1, train_steps + 1):
-        train_step_batch = _move_batch_to_device(_sample_batch(train_batch, batch_size, batch_generator), device)
+        train_step_batch = _move_batch_to_device(_sample_batch(fit_batch_std, batch_size, batch_generator), device)
         optimizer.zero_grad(set_to_none=True)
         prediction = _baseline_prediction(baseline_name, model, train_step_batch)
         loss = _task_loss(prediction, train_step_batch)
@@ -1057,6 +1126,31 @@ def _train_linear_baseline(
         max_grad_norm = max(max_grad_norm, _linear_grad_l2_norm(model))
         optimizer.step()
         final_loss = _as_float(loss)
+        if _should_validate(step, train_steps, eval_interval):
+            val_loss = _evaluate_linear_task_loss_on_device(
+                baseline_name,
+                model,
+                val_batch_std,
+                device,
+                batch_size=_eval_batch_size(batch_size),
+            )
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_step = step
+                best_state = _clone_state_dict(model)
+                stale_evals = 0
+            else:
+                stale_evals += 1
+            if early_stopping_patience > 0 and stale_evals >= early_stopping_patience:
+                _print_progress(
+                    "model:early_stop",
+                    seed=seed,
+                    model=baseline_name,
+                    step=step,
+                    best_step=best_step,
+                    best_val_loss=f"{best_val_loss:.6g}",
+                )
+                break
         if _should_log_progress(step, train_steps, progress_interval):
             _print_step_progress(
                 seed=seed,
@@ -1074,13 +1168,22 @@ def _train_linear_baseline(
         loss=f"{final_loss:.6g}",
         elapsed=f"{time.perf_counter() - started_at:.1f}s",
     )
+    model.load_state_dict(best_state)
+    model.eval()
     return model, {
         "baseline_optimizer_steps": train_steps,
         "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_linear_parameter_vector(model) - initial).item()),
         "baseline_grad_l2_norm": max_grad_norm,
         "baseline_train_loss_final": final_loss,
-        "baseline_training_protocol": "mini_batch",
+        "baseline_best_val_task_loss": best_val_loss,
+        "baseline_best_checkpoint_step": best_step,
+        "baseline_training_protocol": "mini_batch_validation_best_checkpoint",
         "baseline_batch_size": batch_size,
+        "baseline_validation_fraction": validation_fraction,
+        "baseline_target_standardized": True,
+        "baseline_weight_decay": weight_decay,
+        "_target_mean": target_mean,
+        "_target_std": target_std,
     }
 
 
@@ -1111,6 +1214,7 @@ def _raw_metric_row(
     router_entropy: Any,
     candidate_loss: Any,
     model_protocol: str,
+    diagnostics: Any,
 ) -> dict[str, Any]:
     return {
         "artifact_type": "public_main_raw_metric",
@@ -1139,6 +1243,7 @@ def _raw_metric_row(
             router_load_by_candidate=router_load_by_candidate,
             router_entropy=router_entropy,
             candidate_loss=candidate_loss,
+            diagnostics=diagnostics,
         ),
         "public_metrics_scope": "public_main_metrics",
         "raw_metric_path": str(raw_metrics_path),
@@ -1153,6 +1258,7 @@ def _public_main_metrics(
     router_load_by_candidate: Any,
     router_entropy: Any,
     candidate_loss: Any,
+    diagnostics: Any = None,
 ) -> dict[str, Any]:
     if _is_region_task(config.task_type):
         task_loss = _task_loss(prediction, batch)
@@ -1188,9 +1294,9 @@ def _public_main_metrics(
             "router_load_by_corruption_type": {
                 corruption_key: _complete_candidate_probability_map(router_load_by_candidate)
             },
-            "lrio_rank_entropy": _entropy_proxy(router_load_by_candidate, "LRIO"),
-            "spo_prototype_entropy": _entropy_proxy(router_load_by_candidate, "SPO"),
-            "rceo_reliability_calibration": _rceo_calibration(batch, accuracy),
+            "lrio_rank_entropy": _candidate_diagnostic_metric(diagnostics, "LRIO", "rank_entropy"),
+            "spo_prototype_entropy": _candidate_diagnostic_metric(diagnostics, "SPO", "prototype_entropy"),
+            "rceo_reliability_calibration": _rceo_calibration(batch, prediction, diagnostics),
         }
         return {name: metrics[name] for name in SENTIMENT_REQUIRED_PUBLIC_METRICS}
     return {}
@@ -1237,6 +1343,7 @@ def _ovha_robustness_rows(
                 score=_bounded_score_from_loss(loss),
                 router_load_by_candidate=output.diagnostics.get("router_load_by_candidate", {}),
                 candidate_loss=output.diagnostics.get("candidate_loss", {}),
+                model_reliability=_model_reliability_mean(output.diagnostics),
             )
         )
     return rows
@@ -1251,13 +1358,28 @@ def _baseline_robustness_rows(
     seed: int,
     raw_metric_path: Path,
     device: torch.device,
+    target_mean: torch.Tensor | None = None,
+    target_std: torch.Tensor | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for corruption_type in ("clean", *DEFAULT_REQUIRED_STRESS_TARGETS):
         corrupted = _corrupted_batch(batch, corruption_type)
         corrupted_device = _move_batch_to_device(corrupted, device)
+        model_batch = corrupted_device
+        if target_mean is not None and target_std is not None:
+            model_batch = _standardize_batch_targets(
+                corrupted_device,
+                target_mean.to(device=device),
+                target_std.to(device=device),
+            )
         with torch.no_grad():
-            prediction = _baseline_prediction(baseline_name, model, corrupted_device)
+            prediction = _baseline_prediction(baseline_name, model, model_batch)
+            if target_mean is not None and target_std is not None:
+                prediction = _destandardize_prediction(
+                    prediction,
+                    target_mean.to(device=device),
+                    target_std.to(device=device),
+                )
             loss = _task_loss(prediction, corrupted_device)
         rows.append(
             _robustness_row(
@@ -1270,6 +1392,7 @@ def _baseline_robustness_rows(
                 score=_bounded_score_from_loss(loss),
                 router_load_by_candidate=_probe_router_load_by_candidate(baseline_name),
                 candidate_loss={candidate: loss for candidate in ("TLEO", "SPO", "LRIO", "CATO")},
+                model_reliability=None,
             )
         )
     return rows
@@ -1286,8 +1409,10 @@ def _robustness_row(
     score: float,
     router_load_by_candidate: Any,
     candidate_loss: Any,
+    model_reliability: float | None,
 ) -> dict[str, Any]:
     strength = _corruption_strength(corruption_type)
+    rceo_reliability = 0.0 if model_reliability is None else max(0.0, min(1.0, float(model_reliability)))
     row = {
         "artifact_type": "public_main_robustness_row",
         "evidence_scope": "public_main_robustness",
@@ -1300,7 +1425,8 @@ def _robustness_row(
         "corruption_strength": strength,
         "missing_modalities": _missing_modalities(corruption_type),
         "score": score,
-        "rceo_reliability": max(0.0, min(1.0, 1.0 - strength)),
+        "rceo_reliability": rceo_reliability,
+        "rceo_reliability_source": "model_reliability_prior" if model_reliability is not None else "not_applicable_no_model_reliability",
         "rceo_observed_reliability": score,
         "router_load_by_candidate": _complete_candidate_probability_map(router_load_by_candidate),
         "candidate_loss": _json_ready(candidate_loss),
@@ -1572,14 +1698,39 @@ def _entropy_proxy(values: Any, candidate: str) -> float:
     return max(0.0, -probability * torch.log(torch.tensor(probability)).item())
 
 
-def _rceo_calibration(batch: MultimodalEpisodeBatch, observed_score: float) -> dict[str, Any]:
-    predicted_reliability = max(0.0, min(1.0, 1.0 - _missing_modality_fraction(batch)))
-    observed = max(0.0, min(1.0, observed_score))
+def _candidate_diagnostic_metric(diagnostics: Any, candidate: str, key: str) -> float:
+    if not isinstance(diagnostics, dict):
+        return 0.0
+    candidate_diagnostics = diagnostics.get("candidate_diagnostics")
+    if not isinstance(candidate_diagnostics, dict):
+        return 0.0
+    values = candidate_diagnostics.get(candidate)
+    if not isinstance(values, dict):
+        return 0.0
+    return max(0.0, _as_float(values.get(key)))
+
+
+def _rceo_calibration(
+    batch: MultimodalEpisodeBatch,
+    prediction: torch.Tensor,
+    diagnostics: Any,
+) -> dict[str, Any]:
+    predicted = _model_reliability_mean(diagnostics)
+    observed = _bounded_observed_reliability(batch, prediction)
+    if predicted is None:
+        predicted_reliability = 0.0
+        source = "not_applicable_no_model_reliability"
+    else:
+        predicted_reliability = max(0.0, min(1.0, predicted))
+        source = "model_reliability_prior"
     ece = abs(predicted_reliability - observed)
     return {
         "ece": ece,
         "expected_calibration_error": ece,
         "bin_count": 1,
+        "source": source,
+        "mean_predicted_reliability": predicted_reliability,
+        "mean_observed_reliability": observed,
         "calibration_curve": [
             {
                 "bin": 0,
@@ -1588,8 +1739,32 @@ def _rceo_calibration(batch: MultimodalEpisodeBatch, observed_score: float) -> d
                 "count": max(1, int(batch.target_y.shape[0])),
             }
         ],
-        "condition": "public main reliability calibration between missing-modality prior and bounded task score",
+        "condition": "public main reliability calibration between model RCEO reliability and bounded per-sample performance",
     }
+
+
+def _model_reliability_mean(diagnostics: Any) -> float | None:
+    if not isinstance(diagnostics, dict):
+        return None
+    reliability = diagnostics.get("reliability")
+    if not isinstance(reliability, dict):
+        return None
+    if "modality_reliability_mean" in reliability:
+        return _as_float(reliability["modality_reliability_mean"])
+    candidate_diagnostics = diagnostics.get("candidate_diagnostics")
+    if isinstance(candidate_diagnostics, dict):
+        rceo = candidate_diagnostics.get("RCEO")
+        if isinstance(rceo, dict) and "modality_reliability" in rceo:
+            return _as_float(rceo["modality_reliability"])
+    return None
+
+
+def _bounded_observed_reliability(batch: MultimodalEpisodeBatch, prediction: torch.Tensor) -> float:
+    error = (prediction - batch.target_y.to(device=prediction.device, dtype=prediction.dtype)).square()
+    mask = batch.target_mask.to(device=prediction.device, dtype=prediction.dtype).unsqueeze(-1)
+    per_sample_error = (error * mask).sum(dim=(1, 2)) / mask.sum(dim=(1, 2)).clamp_min(1.0)
+    observed = 1.0 / (1.0 + per_sample_error)
+    return max(0.0, min(1.0, _as_float(observed.mean())))
 
 
 def _validate_main_config_scope(path: Path, config: MultimodalExperimentConfig) -> None:

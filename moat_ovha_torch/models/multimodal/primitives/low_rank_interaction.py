@@ -29,7 +29,7 @@ class LRIOPrimitive(MultimodalCandidatePrimitive):
     ):
         super().__init__()
         self.rank_count = rank_count
-        self.pairs = tuple(_canonical_pair(pair) for pair in (pairs or self.default_pairs()))
+        self.pairs = tuple(_normalize_pair(pair) for pair in (pairs or self.default_pairs()))
         self.branch = nn.ModuleDict({_pair_key(pair): nn.Linear(d_model, rank_count * d_model) for pair in self.pairs})
         self.trunk = nn.ModuleDict({_pair_key(pair): nn.Linear(d_model * 2, rank_count * d_model) for pair in self.pairs})
         self.pair_gate = nn.ModuleDict({_pair_key(pair): nn.Linear(d_model * 2, 1) for pair in self.pairs})
@@ -45,29 +45,50 @@ class LRIOPrimitive(MultimodalCandidatePrimitive):
         pair_features = []
         pair_gates = []
         active_pair_names = []
-        temperature = params["interaction_temperature"].clamp_min(1e-4)
-        rank_weights = torch.softmax(params["rank_logits"] / temperature, dim=-1)
+        pair_rank_entropies = {}
+        pair_interaction_strength = {}
+        rank_logits_by_pair = _rank_logits_by_pair(params, len(self.pairs))
+        temperature_by_pair = _temperature_by_pair(params, len(self.pairs))
+        reliability_by_pair = _pair_reliability_by_key(params, self.pairs, pooled, evidence.query_features)
         for pair in self.pairs:
+            pair_index = self.pairs.index(pair)
             left_name, right_name = pair
             if left_name not in pooled or right_name not in pooled:
                 continue
             left = pooled[left_name]
             right = pooled[right_name]
             key = _pair_key(pair)
-            branch = self.branch[key](left).view(left.shape[0], 1, self.rank_count, -1)
-            right_query = torch.cat([right.unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1), evidence.query_features], dim=-1)
+            left_residual = left - left.mean(dim=0, keepdim=True).detach()
+            right_residual = right - right.mean(dim=0, keepdim=True).detach()
+            branch = self.branch[key](left_residual).view(left.shape[0], 1, self.rank_count, -1)
+            right_query = torch.cat(
+                [right_residual.unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1), evidence.query_features],
+                dim=-1,
+            )
             trunk = self.trunk[key](right_query).view(right.shape[0], evidence.query_features.shape[1], self.rank_count, -1)
+            rank_logits = rank_logits_by_pair[:, :, pair_index, :]
+            temperature = temperature_by_pair[:, :, pair_index, :].clamp_min(1e-4)
+            rank_weights = torch.softmax(rank_logits / temperature, dim=-1)
             interaction = (rank_weights.unsqueeze(-1) * (branch * trunk)).sum(dim=-2)
             gate_input = torch.cat([left, right], dim=-1)
-            pair_gates.append(self.pair_gate[key](gate_input).unsqueeze(1))
+            learned_gate = self.pair_gate[key](gate_input).unsqueeze(1)
+            reliability_gate = reliability_by_pair[key].clamp_min(1e-6).log().view(left.shape[0], 1, 1)
+            pair_gates.append(learned_gate + reliability_gate)
             pair_features.append(interaction)
             active_pair_names.append(key)
+            pair_rank_entropies[key] = _entropy(rank_logits)
+            pair_interaction_strength[key] = interaction.norm(dim=-1).mean()
         if pair_features:
             pair_stack = torch.stack(pair_features, dim=-2)
             gate = torch.softmax(torch.cat(pair_gates, dim=-1), dim=-1).unsqueeze(-1)
             interaction_feature = (gate * pair_stack).sum(dim=-2)
+            pair_load = {
+                key: gate[..., index, :].mean()
+                for index, key in enumerate(active_pair_names)
+            }
         else:
             interaction_feature = evidence.low_rank_features
+            pair_load = {}
         memory = self.memory_proj(memory_slot.mean(dim=1)).unsqueeze(1)
         feature = self.norm(interaction_feature + memory)
         value = apply_scale_bias(self.head(feature), params)
@@ -78,7 +99,14 @@ class LRIOPrimitive(MultimodalCandidatePrimitive):
             "pair_count": torch.as_tensor(float(len(pair_features)), dtype=value.dtype, device=value.device),
             "configured_pair_count": torch.as_tensor(float(len(self.pairs)), dtype=value.dtype, device=value.device),
             "active_pair_names": tuple(active_pair_names),
+            "pair_load": pair_load,
+            "pair_reliability": {
+                key: reliability_by_pair[key].mean()
+                for key in active_pair_names
+            },
+            "pair_rank_entropy": pair_rank_entropies,
             "pair_interaction_strength": interaction_feature.norm(dim=-1).mean(),
+            "pair_interaction_strength_by_pair": pair_interaction_strength,
             "interaction_temperature": params.get("interaction_temperature"),
             "candidate": self.name,
         }
@@ -90,16 +118,53 @@ def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     return (values * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
 
 
-def _canonical_pair(pair: tuple[str, str]) -> tuple[str, str]:
+def _normalize_pair(pair: tuple[str, str]) -> tuple[str, str]:
     left, right = str(pair[0]), str(pair[1])
     if left == right:
         raise ValueError("LRIO pairs must contain two distinct modalities")
-    return tuple(sorted((left, right)))
+    return left, right
 
 
 def _pair_key(pair: tuple[str, str]) -> str:
-    left, right = _canonical_pair(pair)
+    left, right = _normalize_pair(pair)
     return f"{left}__{right}"
+
+
+def _rank_logits_by_pair(params: dict[str, torch.Tensor], pair_count: int) -> torch.Tensor:
+    if "rank_logits_by_pair" in params:
+        return params["rank_logits_by_pair"]
+    rank_logits = params["rank_logits"]
+    return rank_logits.unsqueeze(-2).expand(*rank_logits.shape[:-1], pair_count, rank_logits.shape[-1])
+
+
+def _temperature_by_pair(params: dict[str, torch.Tensor], pair_count: int) -> torch.Tensor:
+    if "interaction_temperature_by_pair" in params:
+        return params["interaction_temperature_by_pair"]
+    temperature = params["interaction_temperature"]
+    return temperature.unsqueeze(-2).expand(*temperature.shape[:-1], pair_count, temperature.shape[-1])
+
+
+def _pair_reliability_by_key(
+    params: dict[str, torch.Tensor],
+    pairs: tuple[tuple[str, str], ...],
+    pooled: dict[str, torch.Tensor],
+    query_features: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    batch_size = int(query_features.shape[0])
+    fallback = torch.ones(batch_size, dtype=query_features.dtype, device=query_features.device)
+    pair_reliability = params.get("pair_reliability")
+    pair_names = params.get("pair_names", ())
+    if pair_reliability is None or not pair_names:
+        return {_pair_key(pair): fallback for pair in pairs}
+    reliability_by_name = {
+        str(name): pair_reliability[:, index].to(dtype=query_features.dtype, device=query_features.device)
+        for index, name in enumerate(pair_names)
+    }
+    return {
+        _pair_key(pair): reliability_by_name.get(_pair_key(pair), fallback)
+        for pair in pairs
+        if pair[0] in pooled and pair[1] in pooled
+    }
 
 
 def _entropy(logits: torch.Tensor) -> torch.Tensor:
