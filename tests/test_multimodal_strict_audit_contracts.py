@@ -337,6 +337,41 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertGreaterEqual(lrio["pair_reliability"]["text__audio"], 0.0)
         self.assertLessEqual(lrio["pair_reliability"]["text__audio"], 1.0)
 
+    def test_public_diagnostics_reject_lrio_pairs_outside_config(self):
+        import torch
+        from types import SimpleNamespace
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_smoke import _public_training_diagnostics_row
+
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_main.json")
+        batch = _batch(torch)
+        output = SimpleNamespace(
+            router_logit_parts={},
+            diagnostics={
+                "router_entropy": torch.tensor(0.0),
+                "router_load_by_candidate": {"SPO": torch.tensor(0.5), "LRIO": torch.tensor(0.5)},
+                "router_memory_logit_norm": torch.tensor(0.0),
+                "router_evidence_logit_norm": torch.tensor(0.0),
+                "router_reliability_logit_norm": torch.tensor(0.0),
+                "candidate_loss": {"SPO": torch.tensor(0.1), "LRIO": torch.tensor(0.2)},
+                "adapter_params": {},
+                "memory_slot_norm": {"SPO": torch.tensor(1.0), "LRIO": torch.tensor(1.0)},
+                "stackability_passed": True,
+                "candidate_diagnostics": {
+                    "LRIO": {
+                        "pair_load": {"audio__vision": torch.tensor(1.0)},
+                        "pair_reliability": {"audio__vision": torch.tensor(1.0)},
+                        "pair_rank_entropy": {"audio__vision": torch.tensor(0.5)},
+                    }
+                },
+                "reliability": {},
+            },
+        )
+
+        with self.assertRaisesRegex(ValueError, "LRIO diagnostics contain unconfigured modality pairs"):
+            _public_training_diagnostics_row(output, config, batch, 0, 301)
+
     def test_sentiment_public_batch_uses_neutral_query_not_text_mean(self):
         import torch
 

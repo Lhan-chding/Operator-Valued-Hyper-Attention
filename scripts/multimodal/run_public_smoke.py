@@ -524,6 +524,7 @@ def _public_training_diagnostics_row(
     stage: str = "T5",
 ) -> dict[str, object]:
     diagnostics = output.diagnostics
+    _assert_lrio_diagnostic_pairs_match_config(config, diagnostics)
     return {
         "artifact_type": artifact_type,
         "config_name": config.name,
@@ -533,6 +534,8 @@ def _public_training_diagnostics_row(
         "split": batch.split,
         "seed": seed,
         "step": step,
+        "configured_candidate_names": list(config.candidate_names),
+        "configured_lrio_pairs": [list(pair) for pair in config.lrio_pairs],
         "router_entropy": _json_ready(diagnostics["router_entropy"]),
         "router_load_by_candidate": _json_ready(diagnostics["router_load_by_candidate"]),
         "router_memory_logit_norm": _json_ready(diagnostics["router_memory_logit_norm"]),
@@ -547,6 +550,36 @@ def _public_training_diagnostics_row(
         "reliability": _json_ready(diagnostics["reliability"]),
         "public_diagnostics": _public_report_diagnostics(config, batch, output),
     }
+
+
+def _assert_lrio_diagnostic_pairs_match_config(config: MultimodalExperimentConfig, diagnostics: dict[str, Any]) -> None:
+    configured = {_pair_key(pair) for pair in config.lrio_pairs}
+    if not configured:
+        return
+    candidate_diagnostics = diagnostics.get("candidate_diagnostics")
+    if not isinstance(candidate_diagnostics, dict):
+        return
+    lrio = candidate_diagnostics.get("LRIO")
+    if not isinstance(lrio, dict):
+        return
+    observed: set[str] = set()
+    for key in ("pair_load", "pair_reliability", "pair_rank_entropy", "pair_interaction_strength_by_pair"):
+        values = lrio.get(key)
+        if isinstance(values, dict):
+            observed.update(str(name) for name in values)
+    active_pair_names = lrio.get("active_pair_names")
+    if isinstance(active_pair_names, (list, tuple)):
+        observed.update(str(name) for name in active_pair_names)
+    unexpected = sorted(observed - configured)
+    if unexpected:
+        raise ValueError(
+            "LRIO diagnostics contain unconfigured modality pairs: "
+            f"{unexpected}; configured lrio_pairs: {sorted(configured)}"
+        )
+
+
+def _pair_key(pair: tuple[str, str]) -> str:
+    return f"{pair[0]}__{pair[1]}"
 
 
 def _router_logit_part_summary(logit_parts: dict[str, torch.Tensor]) -> dict[str, float]:
