@@ -309,6 +309,34 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertIn("source_token_marginal", output.diagnostics)
         self.assertIn("query_token_marginal", output.diagnostics)
         self.assertAlmostEqual(float(output.diagnostics["null_mass"].detach()), 1.0, places=6)
+        self.assertIn("learned_null_mass", output.diagnostics)
+
+    def test_cato_null_dustbin_is_learnable(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceEncoder
+        from moat_ovha_torch.models.multimodal.primitives.alignment_transport import CATOPrimitive
+
+        torch.manual_seed(53)
+        batch = _batch(torch)
+        evidence = MultimodalEvidenceEncoder(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            d_model=8,
+        )(batch)
+        primitive = CATOPrimitive(d_model=8, output_dim=1)
+        params = {
+            "alignment_temperature": torch.ones(3, 2, 1),
+            "transport_scale": torch.ones(3, 2, 1),
+            "scale": torch.ones(3, 2, 1),
+            "bias": torch.zeros(3, 2, 1),
+        }
+        output = primitive(batch, torch.zeros(3, 2, 8), evidence, params, output_dim=1)
+        output.value.square().mean().backward()
+
+        self.assertTrue(hasattr(primitive, "null_value"))
+        self.assertIsNotNone(primitive.null_value.grad)
+        self.assertGreater(float(primitive.null_value.grad.norm()), 0.0)
 
     def test_lrio_diagnostics_include_pair_load_reliability_and_rank_entropy(self):
         import torch
@@ -336,6 +364,131 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertEqual(set(lrio["pair_rank_entropy"]), {"text__audio", "text__vision"})
         self.assertGreaterEqual(lrio["pair_reliability"]["text__audio"], 0.0)
         self.assertLessEqual(lrio["pair_reliability"]["text__audio"], 1.0)
+
+    def test_lrio_pair_specific_rank_logits_are_not_global_broadcast(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(37)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("SPO", "LRIO"),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+        )
+        adapter = model.joint_router_adapter.hyper_adapter
+
+        with torch.no_grad():
+            adapter.lrio_pair_rank_bias["text__audio"].copy_(torch.tensor([6.0, 0.0, 0.0, 0.0]))
+            adapter.lrio_pair_rank_bias["text__vision"].zero_()
+
+        with torch.no_grad():
+            output = model(_batch(torch))
+
+        lrio = output.diagnostics["candidate_diagnostics"]["LRIO"]
+        self.assertIn("rank_logits_by_pair", output.diagnostics["adapter_params_detail"]["LRIO"])
+        self.assertLess(
+            float(lrio["pair_rank_entropy"]["text__audio"]),
+            float(lrio["pair_rank_entropy"]["text__vision"]),
+        )
+
+    def test_evidence_encoder_exposes_pair_specific_bank(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceEncoder
+
+        torch.manual_seed(41)
+        evidence = MultimodalEvidenceEncoder(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            d_model=10,
+        )(_batch(torch))
+
+        self.assertEqual(set(evidence.pair_features), {"text__audio", "text__vision", "audio__vision"})
+        self.assertIn("pair_feature_count", evidence.diagnostics)
+        self.assertFalse(torch.allclose(evidence.pair_features["text__audio"], evidence.pair_features["text__vision"]))
+
+    def test_public_cmu_t5_uses_spo_diversity_and_router_utility_losses(self):
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+        from scripts.multimodal.run_public_smoke import _public_loss_components
+
+        torch.manual_seed(43)
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_main.json")
+        self.assertIn("spo_prototype_diversity", config.losses_by_stage["T5"])
+        self.assertIn("router_marginal_utility", config.losses_by_stage["T5"])
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=config.candidate_names,
+            lrio_pairs=config.lrio_pairs,
+        )
+        batch = _batch(torch)
+        output = model(batch)
+        components = _public_loss_components(output, batch, config)
+
+        self.assertIn("spo_prototype_diversity", components)
+        self.assertIn("router_marginal_utility", components)
+        self.assertGreater(float(components["spo_prototype_diversity"]), 0.0)
+        self.assertGreaterEqual(float(components["router_marginal_utility"]), 0.0)
+
+    def test_operator_admission_and_memory_differentiation_diagnostics(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(47)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("SPO", "LRIO"),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+        )
+        model.eval()
+
+        with torch.no_grad():
+            diagnostics = model(_batch(torch)).diagnostics
+
+        self.assertEqual(set(diagnostics["operator_admission_gate"]), {"SPO", "LRIO"})
+        self.assertIn("pair_admission_gate", diagnostics["candidate_diagnostics"]["LRIO"])
+        self.assertIn("memory_slot_orthogonality", diagnostics)
+        self.assertIn("memory_zero_out_delta", diagnostics)
+        self.assertIn("memory_swap_delta", diagnostics)
+        self.assertGreaterEqual(float(diagnostics["memory_slot_orthogonality"]), 0.0)
+        self.assertGreaterEqual(float(diagnostics["memory_zero_out_delta"]), 0.0)
+        self.assertGreaterEqual(float(diagnostics["memory_swap_delta"]), 0.0)
+
+    def test_rceo_calibration_uses_multi_bin_ece(self):
+        import torch
+
+        from scripts.multimodal.run_public_main import _rceo_calibration
+
+        batch = _batch(torch)
+        prediction = batch.target_y + torch.tensor([[[0.0]], [[0.5]], [[1.0]]])
+        diagnostics = {
+            "reliability": {
+                "sample_modality_reliability_mean": torch.tensor([0.1, 0.6, 0.9]),
+                "modality_reliability_mean": torch.tensor(0.5333),
+            }
+        }
+
+        calibration = _rceo_calibration(batch, prediction, diagnostics)
+
+        self.assertEqual(calibration["bin_count"], 10)
+        self.assertEqual(len(calibration["calibration_curve"]), 10)
+        self.assertGreaterEqual(calibration["expected_calibration_error"], 0.0)
 
     def test_public_diagnostics_reject_lrio_pairs_outside_config(self):
         import torch
