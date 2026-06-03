@@ -21,6 +21,41 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
                     [["text", "audio"], ["text", "vision"]],
                 )
 
+    def test_tanso_candidate_enters_cmu_text_anchored_shift_stack(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for TANSO tensor checks")
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(31)
+        batch = _batch(torch)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=16,
+            memory_tokens=2,
+            candidate_names=("SPO", "LRIO", "TANSO"),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+            composition_mode="base_plus_residual",
+            base_candidate="SPO",
+            residual_candidates=("LRIO", "TANSO"),
+        )
+
+        output = model(batch)
+        tanso = output.candidate_outputs["TANSO"]
+
+        self.assertEqual(tuple(output.y_hat.shape), (3, 2, 1))
+        self.assertEqual(tuple(output.candidate_values.shape), (3, 2, 3, 1))
+        self.assertIn("TANSO", output.diagnostics["candidate_loss"])
+        self.assertIn("TANSO", output.diagnostics["composition"]["residual_gate_by_candidate"])
+        self.assertEqual(tuple(tanso.value.shape), (3, 2, 1))
+        self.assertGreaterEqual(float(tanso.diagnostics["shift_magnitude"].detach().cpu()), 0.0)
+        self.assertIn("audio_shift_load", tanso.diagnostics)
+        self.assertIn("vision_shift_load", tanso.diagnostics)
+        self.assertIn("shift_direction_alignment", tanso.diagnostics)
+
     def test_cmu_public_main_uses_reverse_evidence_router_ablation_not_duplicate(self):
         payload = json.loads((ROOT / "configs" / "multimodal_cmu_mosei_public_main.json").read_text())
 
