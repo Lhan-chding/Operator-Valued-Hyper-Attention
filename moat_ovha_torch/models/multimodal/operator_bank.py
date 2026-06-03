@@ -31,7 +31,7 @@ def assert_stackable(outputs: dict[str, CandidateOutput], batch_size: int, q_cou
     assert_candidate_names(names)
     for forbidden in FORBIDDEN_V1_STACK_NAMES:
         if forbidden in outputs:
-            raise ValueError("Only TLEO / SPO / LRIO / CATO may enter the v1 candidate stack")
+            raise ValueError("Only TLEO / SPO / LRIO / CATO / TANSO may enter the v1 candidate stack")
     for name, out in outputs.items():
         if tuple(out.value.shape) != (batch_size, q_count, dy):
             raise ValueError(

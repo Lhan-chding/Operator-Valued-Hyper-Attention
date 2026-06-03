@@ -365,6 +365,10 @@ def _operator_admission_gate(
             source_gate = output.diagnostics.get("source_gate", {})
             if isinstance(source_gate, dict) and not source_gate:
                 gate = torch.zeros_like(gate)
+        if name == "TANSO":
+            nonverbal_source_count = output.diagnostics.get("nonverbal_source_count")
+            if nonverbal_source_count is not None and float(nonverbal_source_count.detach().item()) <= 0.0:
+                gate = torch.zeros_like(gate)
         gates.append(gate)
         diagnostics[name] = gate.mean()
     return {

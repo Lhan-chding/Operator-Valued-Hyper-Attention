@@ -2,6 +2,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -55,6 +56,71 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertIn("audio_shift_load", tanso.diagnostics)
         self.assertIn("vision_shift_load", tanso.diagnostics)
         self.assertIn("shift_direction_alignment", tanso.diagnostics)
+
+    def test_tanso_text_pair_features_are_field_order_invariant(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for TANSO tensor checks")
+        import torch
+
+        from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceBank
+        from moat_ovha_torch.models.multimodal.hyper_adapter import _candidate_query_feature
+        from moat_ovha_torch.models.multimodal.memory import _candidate_episode_feature
+
+        query_features = torch.zeros(2, 3, 4)
+        text_audio = torch.full((2, 3, 4), 2.0)
+        text_vision = torch.full((2, 3, 4), 6.0)
+        audio_vision = torch.full((2, 3, 4), 99.0)
+        evidence = MultimodalEvidenceBank(
+            query_features=query_features,
+            global_features=torch.zeros(2, 4),
+            local_features=query_features,
+            prototype_features=query_features,
+            low_rank_features=torch.full((2, 3, 4), -5.0),
+            alignment_features=query_features,
+            candidate_evidence_logits=torch.zeros(2, 3, 5),
+            local_entropy=torch.zeros(()),
+            alignment_entropy=torch.zeros(()),
+            field_features={},
+            diagnostics={},
+            all_pair_features={
+                "audio__text": text_audio,
+                "audio__vision": audio_vision,
+                "text__vision": text_vision,
+            },
+        )
+
+        expected = torch.full((2, 3, 4), 4.0)
+        self.assertTrue(torch.allclose(_candidate_query_feature("TANSO", evidence), expected))
+        self.assertTrue(torch.allclose(_candidate_episode_feature("TANSO", evidence), expected.mean(dim=1)))
+
+    def test_tanso_admission_gate_closes_without_nonverbal_sources(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for TANSO tensor checks")
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(37)
+        base = _batch(torch)
+        batch = replace(
+            base,
+            fields={"text": base.fields["text"]},
+            provenance=replace(base.provenance, feature_extractor_version={"text": "unit"}),
+        )
+        model = MultimodalOVHA(
+            field_dims={"text": 5},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("SPO", "TANSO"),
+        )
+
+        output = model(batch)
+
+        self.assertEqual(float(output.diagnostics["candidate_diagnostics"]["TANSO"]["nonverbal_source_count"]), 0.0)
+        self.assertEqual(float(output.diagnostics["operator_admission_gate"]["TANSO"]), 0.0)
+        self.assertTrue(torch.allclose(output.router_weights[..., 1], torch.zeros_like(output.router_weights[..., 1])))
 
     def test_cmu_public_main_uses_reverse_evidence_router_ablation_not_duplicate(self):
         payload = json.loads((ROOT / "configs" / "multimodal_cmu_mosei_public_main.json").read_text())

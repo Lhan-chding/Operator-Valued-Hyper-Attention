@@ -61,9 +61,13 @@ def _candidate_episode_feature(name: str, evidence: MultimodalEvidenceBank) -> t
             text_pairs = [
                 feature.mean(dim=1)
                 for key, feature in evidence.all_pair_features.items()
-                if key.startswith("text__")
+                if _pair_contains_modality(key, "text")
             ]
             if text_pairs:
                 return torch.stack(text_pairs, dim=0).mean(dim=0)
         return evidence.low_rank_features.mean(dim=1)
     raise ValueError(f"unknown multimodal candidate: {name}")
+
+
+def _pair_contains_modality(pair_key: str, modality: str) -> bool:
+    return str(modality) in tuple(str(pair_key).split("__"))

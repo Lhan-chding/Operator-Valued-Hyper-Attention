@@ -162,7 +162,7 @@ def _candidate_query_feature(name: str, evidence: MultimodalEvidenceBank) -> tor
             text_pairs = [
                 feature
                 for key, feature in evidence.all_pair_features.items()
-                if key.startswith("text__")
+                if _pair_contains_modality(key, "text")
             ]
             if text_pairs:
                 return torch.stack(text_pairs, dim=0).mean(dim=0)
@@ -234,3 +234,7 @@ def _params_for_name(name: str, raw: torch.Tensor) -> dict[str, torch.Tensor]:
 
 def _pair_key(pair: tuple[str, str]) -> str:
     return f"{pair[0]}__{pair[1]}"
+
+
+def _pair_contains_modality(pair_key: str, modality: str) -> bool:
+    return str(modality) in tuple(str(pair_key).split("__"))
