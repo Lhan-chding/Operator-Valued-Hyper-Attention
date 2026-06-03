@@ -15,6 +15,8 @@ class PairEvidenceBank:
     pair_features: dict[str, torch.Tensor]
     pair_gram: dict[str, torch.Tensor]
     pair_correlation: dict[str, torch.Tensor]
+    all_pair_names: tuple[str, ...] = ()
+    all_pair_features: dict[str, torch.Tensor] | None = None
 
 
 @dataclass(frozen=True)
@@ -32,11 +34,19 @@ class MultimodalEvidenceBank:
     diagnostics: dict[str, torch.Tensor]
     pair_features: dict[str, torch.Tensor] | None = None
     pair_evidence: PairEvidenceBank | None = None
+    all_pair_features: dict[str, torch.Tensor] | None = None
 
 
 class MultimodalEvidenceEncoder(nn.Module):
-    def __init__(self, field_dims: dict[str, int], query_dim: int, d_model: int):
+    def __init__(
+        self,
+        field_dims: dict[str, int],
+        query_dim: int,
+        d_model: int,
+        lrio_pairs: tuple[tuple[str, str], ...] | None = None,
+    ):
         super().__init__()
+        self.lrio_pairs = None if lrio_pairs is None else tuple(_normalize_pair(pair) for pair in lrio_pairs)
         self.field_projections = nn.ModuleDict({name: nn.Linear(dim, d_model) for name, dim in field_dims.items()})
         self.query_projection = nn.Linear(query_dim, d_model)
         self.local_head = nn.Linear(d_model * 2, d_model)
@@ -62,10 +72,19 @@ class MultimodalEvidenceEncoder(nn.Module):
         local_source = field_features["text"] if "text" in field_features else next(iter(field_features.values()))
         local_features, local_entropy = _nearest_token_features(query_features, local_source)
         prototype_features = self.prototype_head(fused)
-        paired_interaction, pair_evidence = _paired_field_interaction_bank(pooled, query_features)
-        pair_features = {
+        paired_interaction, pair_evidence, all_pair_count = _paired_field_interaction_bank(
+            pooled,
+            query_features,
+            configured_pairs=self.lrio_pairs,
+        )
+        all_projected_pair_features = {
             name: self.low_rank_head(torch.cat([query_features, feature], dim=-1))
-            for name, feature in pair_evidence.pair_features.items()
+            for name, feature in (pair_evidence.all_pair_features or {}).items()
+        }
+        pair_features = {
+            name: all_projected_pair_features[name]
+            for name in pair_evidence.pair_names
+            if name in all_projected_pair_features
         }
         low_rank_features = self.low_rank_head(torch.cat([query_features, paired_interaction], dim=-1))
         alignment_features, alignment_entropy = _alignment_features(query_features, field_features)
@@ -86,6 +105,8 @@ class MultimodalEvidenceEncoder(nn.Module):
             "explicit_query_relation_prior_rate": explicit_relation_rate,
             "controlled_family_relation_prior_rate": torch.zeros((), dtype=query_features.dtype, device=query_features.device),
             "pair_feature_count": torch.tensor(float(len(pair_features)), dtype=query_features.dtype, device=query_features.device),
+            "configured_pair_feature_count": torch.tensor(float(len(pair_features)), dtype=query_features.dtype, device=query_features.device),
+            "all_pair_feature_count": torch.tensor(float(all_pair_count), dtype=query_features.dtype, device=query_features.device),
             "pair_feature_norm": (
                 torch.stack([feature.norm(dim=-1).mean() for feature in pair_features.values()]).mean()
                 if pair_features
@@ -110,7 +131,10 @@ class MultimodalEvidenceEncoder(nn.Module):
                 pair_features=pair_features,
                 pair_gram=pair_evidence.pair_gram,
                 pair_correlation=pair_evidence.pair_correlation,
+                all_pair_names=pair_evidence.all_pair_names,
+                all_pair_features=all_projected_pair_features,
             ),
+            all_pair_features=all_projected_pair_features,
         )
 
 
@@ -144,30 +168,57 @@ def _alignment_features(query: torch.Tensor, field_features: dict[str, torch.Ten
 def _paired_field_interaction_bank(
     pooled: dict[str, torch.Tensor],
     query_features: torch.Tensor,
-) -> tuple[torch.Tensor, PairEvidenceBank]:
+    configured_pairs: tuple[tuple[str, str], ...] | None = None,
+) -> tuple[torch.Tensor, PairEvidenceBank, int]:
     names = list(pooled)
     if len(names) == 1:
         interaction = pooled[names[0]].unsqueeze(1).expand(-1, query_features.shape[1], -1)
-        return interaction, PairEvidenceBank(pair_names=(), pair_features={}, pair_gram={}, pair_correlation={})
-    pair_features = {}
-    pair_gram = {}
-    pair_correlation = {}
+        return interaction, PairEvidenceBank(pair_names=(), pair_features={}, pair_gram={}, pair_correlation={}), 0
+    all_pair_features = {}
+    all_pair_gram = {}
+    all_pair_correlation = {}
     for left_index, left_name in enumerate(names):
         left = pooled[left_name]
         for right_name in names[left_index + 1:]:
             right = pooled[right_name]
             key = f"{left_name}__{right_name}"
             pair = left * right
-            pair_features[key] = pair.unsqueeze(1).expand(-1, query_features.shape[1], -1)
-            pair_gram[key] = (left * right).sum(dim=-1)
-            pair_correlation[key] = torch.nn.functional.cosine_similarity(left, right, dim=-1)
-    interaction = torch.stack(list(pair_features.values()), dim=0).mean(dim=0)
+            all_pair_features[key] = pair.unsqueeze(1).expand(-1, query_features.shape[1], -1)
+            all_pair_gram[key] = (left * right).sum(dim=-1)
+            all_pair_correlation[key] = torch.nn.functional.cosine_similarity(left, right, dim=-1)
+    if configured_pairs is None:
+        selected_names = tuple(all_pair_features)
+    else:
+        selected_names = tuple(_pair_key(pair) for pair in configured_pairs if _pair_key(pair) in all_pair_features)
+    pair_features = {name: all_pair_features[name] for name in selected_names}
+    pair_gram = {name: all_pair_gram[name] for name in selected_names}
+    pair_correlation = {name: all_pair_correlation[name] for name in selected_names}
+    if not pair_features:
+        interaction = torch.zeros_like(query_features)
+        if all_pair_features and configured_pairs is None:
+            interaction = torch.stack(list(all_pair_features.values()), dim=0).mean(dim=0)
+    else:
+        interaction = torch.stack(list(pair_features.values()), dim=0).mean(dim=0)
     return interaction, PairEvidenceBank(
         pair_names=tuple(pair_features),
         pair_features=pair_features,
         pair_gram=pair_gram,
         pair_correlation=pair_correlation,
-    )
+        all_pair_names=tuple(all_pair_features),
+        all_pair_features=all_pair_features,
+    ), len(all_pair_features)
+
+
+def _normalize_pair(pair: tuple[str, str]) -> tuple[str, str]:
+    left, right = str(pair[0]), str(pair[1])
+    if left == right:
+        raise ValueError("LRIO evidence pairs must contain two distinct modalities")
+    return left, right
+
+
+def _pair_key(pair: tuple[str, str]) -> str:
+    left, right = _normalize_pair(pair)
+    return f"{left}__{right}"
 
 
 def _explicit_query_type_relation_logits(

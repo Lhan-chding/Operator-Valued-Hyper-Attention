@@ -21,8 +21,8 @@ class SPOPrimitive(MultimodalCandidatePrimitive):
     def forward(self, batch, memory_slot: torch.Tensor, evidence, params: dict[str, torch.Tensor], output_dim: int) -> CandidateOutput:
         context = self.context_proj(evidence.global_features)
         base_logits = torch.matmul(context, self.prototypes.transpose(0, 1)).unsqueeze(1)
-        shift = 0.5 * torch.tanh(params["prototype_logits_shift"])
-        temperature = params["prototype_temperature"].clamp_min(1e-4)
+        shift = 0.1 * torch.tanh(params["prototype_logits_shift"])
+        temperature = params["prototype_temperature"].clamp_min(0.5)
         logits = (base_logits + shift) / temperature
         weights = torch.softmax(logits, dim=-1)
         prototype_mix = torch.matmul(weights, self.prototypes)

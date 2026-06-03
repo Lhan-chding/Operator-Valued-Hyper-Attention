@@ -61,8 +61,8 @@ class LRIOPrimitive(MultimodalCandidatePrimitive):
             left = pooled[left_name]
             right = pooled[right_name]
             key = _pair_key(pair)
-            left_residual = left - left.mean(dim=0, keepdim=True).detach()
-            right_residual = right - right.mean(dim=0, keepdim=True).detach()
+            left_residual = left
+            right_residual = right
             branch = self.branch[key](left_residual).view(left.shape[0], 1, self.rank_count, -1)
             right_query = torch.cat(
                 [right_residual.unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1), evidence.query_features],
@@ -70,7 +70,7 @@ class LRIOPrimitive(MultimodalCandidatePrimitive):
             )
             trunk = self.trunk[key](right_query).view(right.shape[0], evidence.query_features.shape[1], self.rank_count, -1)
             rank_logits = rank_logits_by_pair[:, :, pair_index, :]
-            temperature = temperature_by_pair[:, :, pair_index, :].clamp_min(1e-4)
+            temperature = temperature_by_pair[:, :, pair_index, :].clamp_min(0.5)
             rank_weights = torch.softmax(rank_logits / temperature, dim=-1)
             interaction = (rank_weights.unsqueeze(-1) * (branch * trunk)).sum(dim=-2)
             pair_evidence = evidence_pair_features.get(key)

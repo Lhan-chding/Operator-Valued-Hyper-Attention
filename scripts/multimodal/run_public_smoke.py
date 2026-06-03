@@ -198,7 +198,9 @@ def _run_public_training_smoke(
             d_model=args.d_model,
             memory_tokens=args.memory_tokens,
             candidate_names=config.candidate_names,
+            use_evidence_router=config.use_evidence_router,
             lrio_pairs=config.lrio_pairs or None,
+            **_ovha_composition_kwargs(config, config.candidate_names),
         ).to(device)
         parameter_count = _parameter_count(model)
         initial_parameters = _parameter_vector(model)
@@ -471,6 +473,26 @@ def _public_loss_weight(config: MultimodalExperimentConfig, loss_name: str) -> f
     if loss_name == "candidate_individual_loss" and bool(metadata.get("diagnostic_only", True)):
         return 0.0
     return float(metadata.get("weight", 1.0))
+
+
+def _ovha_composition_kwargs(
+    config: MultimodalExperimentConfig,
+    active_candidate_names: tuple[str, ...],
+) -> dict[str, object]:
+    if config.composition_mode != "base_plus_residual":
+        return {"composition_mode": config.composition_mode}
+    residuals = tuple(
+        candidate
+        for candidate in config.residual_candidates
+        if candidate in active_candidate_names
+    )
+    if config.base_candidate not in active_candidate_names or not residuals:
+        return {"composition_mode": "convex_mixture"}
+    return {
+        "composition_mode": "base_plus_residual",
+        "base_candidate": config.base_candidate,
+        "residual_candidates": residuals,
+    }
 
 
 def _candidate_diagnostic_tensor(

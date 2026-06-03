@@ -42,6 +42,7 @@ from scripts.multimodal.run_public_smoke import (
     _linear_parameter_count,
     _linear_parameter_vector,
     _load_public_batch,
+    _ovha_composition_kwargs,
     _parameter_count,
     _parameter_vector,
     _probe_router_load_by_candidate,
@@ -259,7 +260,9 @@ def _run_seed(
         d_model=int(args.d_model),
         memory_tokens=int(args.memory_tokens),
         candidate_names=config.candidate_names,
+        use_evidence_router=config.use_evidence_router,
         lrio_pairs=config.lrio_pairs or None,
+        **_ovha_composition_kwargs(config, config.candidate_names),
     ).to(device)
     initial_parameters = _parameter_vector(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.learning_rate), weight_decay=float(args.weight_decay))
@@ -931,6 +934,11 @@ def _train_ovha_ablation(
     torch.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name))
     variant_kwargs = _ovha_variant_kwargs(baseline_name, config.candidate_names)
     active_candidate_names = variant_kwargs.pop("candidate_names", config.candidate_names)
+    model_kwargs = {
+        "use_evidence_router": config.use_evidence_router,
+        **_ovha_composition_kwargs(config, active_candidate_names),
+        **variant_kwargs,
+    }
     model = MultimodalOVHA(
         field_dims=field_dims,
         query_dim=int(train_batch.query.x.shape[-1]),
@@ -939,7 +947,7 @@ def _train_ovha_ablation(
         memory_tokens=memory_tokens,
         candidate_names=active_candidate_names,
         lrio_pairs=config.lrio_pairs or None,
-        **variant_kwargs,
+        **model_kwargs,
     ).to(device)
     initial = _parameter_vector(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)

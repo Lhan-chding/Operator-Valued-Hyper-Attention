@@ -59,6 +59,10 @@ class MultimodalExperimentConfig:
     loss_metadata: dict[str, dict[str, Any]] | None = None
     adapter_params_by_candidate: dict[str, tuple[str, ...]] | None = None
     lrio_pairs: tuple[tuple[str, str], ...] = ()
+    use_evidence_router: bool = True
+    composition_mode: str = "convex_mixture"
+    base_candidate: str | None = None
+    residual_candidates: tuple[str, ...] = ()
 
     @classmethod
     def from_file(cls, path: Path | str) -> "MultimodalExperimentConfig":
@@ -93,6 +97,10 @@ class MultimodalExperimentConfig:
             loss_metadata=dict(mapping.get("loss_metadata", {})) if "loss_metadata" in mapping else None,
             adapter_params_by_candidate=_tuple_mapping(mapping.get("adapter_params_by_candidate")),
             lrio_pairs=_pair_tuple(mapping.get("lrio_pairs")),
+            use_evidence_router=bool(mapping.get("use_evidence_router", True)),
+            composition_mode=str(mapping.get("composition_mode", "convex_mixture")),
+            base_candidate=str(mapping["base_candidate"]) if mapping.get("base_candidate") is not None else None,
+            residual_candidates=tuple(str(candidate) for candidate in mapping.get("residual_candidates", ())),
         )
         config.validate()
         return config
@@ -128,6 +136,7 @@ class MultimodalExperimentConfig:
                 "external references must not be listed as same-feature baselines: "
                 + ", ".join(forbidden)
             )
+        _validate_composition_config(self)
 
 
 def _expected_training_stages(task_type: str, robustness_corruptions: tuple[str, ...]) -> tuple[str, ...]:
@@ -164,6 +173,26 @@ def _validate_public_alignment_label_contract(config: MultimodalExperimentConfig
     t5_losses = tuple((config.losses_by_stage or {}).get("T5", ()))
     if "public_alignment_ce" in t5_losses and not config.require_public_alignment_labels:
         raise ValueError("region-text public_alignment_ce requires require_public_alignment_labels=true")
+
+
+def _validate_composition_config(config: MultimodalExperimentConfig) -> None:
+    if config.composition_mode == "convex_mixture":
+        if config.base_candidate is not None or config.residual_candidates:
+            raise ValueError("convex_mixture composition must not set base_candidate or residual_candidates")
+        return
+    if config.composition_mode != "base_plus_residual":
+        raise ValueError("composition_mode must be convex_mixture or base_plus_residual")
+    if config.base_candidate not in config.candidate_names:
+        raise ValueError("base_plus_residual base_candidate must be an active candidate")
+    if not config.residual_candidates:
+        raise ValueError("base_plus_residual requires residual_candidates")
+    invalid = [
+        candidate
+        for candidate in config.residual_candidates
+        if candidate not in config.candidate_names or candidate == config.base_candidate
+    ]
+    if invalid:
+        raise ValueError("base_plus_residual residual_candidates must be active non-base candidates: " + ", ".join(invalid))
 
 
 def _validate_robustness_corruptions(robustness_corruptions: tuple[str, ...]) -> None:

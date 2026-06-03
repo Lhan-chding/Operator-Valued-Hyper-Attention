@@ -133,7 +133,7 @@ class MultimodalHyperAdapter(nn.Module):
             rank_logits.append(raw[..., : self.lrio_rank_count] + self.lrio_pair_rank_bias[key].view(1, 1, -1))
             temperatures.append(
                 torch.nn.functional.softplus(raw[..., self.lrio_rank_count : self.lrio_rank_count + 1] + self.lrio_pair_temperature_bias[key].view(1, 1, 1))
-                + 1e-3
+                + 0.1
             )
             pair_names.append(key)
         if not rank_logits:
@@ -191,15 +191,15 @@ def _params_for_name(name: str, raw: torch.Tensor) -> dict[str, torch.Tensor]:
         }
     if name == "SPO":
         return {
-            "prototype_temperature": torch.nn.functional.softplus(raw[..., 2:3]) + 1e-3,
-            "prototype_logits_shift": raw[..., 3:7],
+            "prototype_temperature": torch.nn.functional.softplus(raw[..., 2:3]) + 0.1,
+            "prototype_logits_shift": 0.1 * torch.tanh(raw[..., 3:7]),
             "scale": scale,
             "bias": bias,
         }
     if name == "LRIO":
         return {
             "rank_logits": raw[..., 2:6],
-            "interaction_temperature": torch.nn.functional.softplus(raw[..., 6:7]) + 1e-3,
+            "interaction_temperature": torch.nn.functional.softplus(raw[..., 6:7]) + 0.1,
             "scale": scale,
             "bias": bias,
         }

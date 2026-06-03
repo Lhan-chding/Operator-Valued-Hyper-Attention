@@ -9,6 +9,10 @@
   "training_stages": ["T0", "T5"],
   "candidate_names": ["SPO", "LRIO"],
   "lrio_pairs": [["text", "audio"], ["text", "vision"]],
+  "use_evidence_router": false,
+  "composition_mode": "base_plus_residual",
+  "base_candidate": "SPO",
+  "residual_candidates": ["LRIO"],
   "baseline_names": [
     "text_only",
     "audio_only",

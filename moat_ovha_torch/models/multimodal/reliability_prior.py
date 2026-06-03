@@ -33,6 +33,8 @@ class RCEOReliabilityPrior(nn.Module):
         self.candidate_names = candidate_names
         self.lrio_pairs = tuple(_normalize_pair(pair) for pair in (lrio_pairs or ()))
         self.bias_head = nn.Linear(d_model + 1, len(candidate_names))
+        nn.init.zeros_(self.bias_head.weight)
+        nn.init.zeros_(self.bias_head.bias)
 
     def forward(self, batch: MultimodalEpisodeBatch, evidence: MultimodalEvidenceBank) -> ReliabilityPrior:
         reliabilities = []
@@ -45,15 +47,16 @@ class RCEOReliabilityPrior(nn.Module):
             reliabilities.append(quality.clamp(0.0, 1.0))
         modality_reliability = torch.cat(reliabilities, dim=-1)
         pair_names, pair_reliability = _pair_reliability(modality_names, modality_reliability, self.lrio_pairs)
-        reliability_mean = modality_reliability.mean(dim=-1, keepdim=True)
-        reliability_query = reliability_mean.unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1)
+        reliability_gap_mean = (1.0 - modality_reliability).clamp_min(0.0).mean(dim=-1, keepdim=True)
+        reliability_query = reliability_gap_mean.unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1)
         reliability_only_context = torch.zeros_like(evidence.query_features)
         features = torch.cat([reliability_only_context, reliability_query], dim=-1)
-        bias = self.bias_head(features)
+        bias = reliability_query * self.bias_head(features)
         diagnostics = {
             "modality_reliability": modality_reliability.mean(dim=0),
             "modality_reliability_mean": modality_reliability.mean(),
             "sample_modality_reliability_mean": modality_reliability.mean(dim=-1),
+            "sample_modality_reliability_gap_mean": reliability_gap_mean.squeeze(-1),
             "modality_names": modality_names,
             "pair_reliability": _diagnostic_pair_map(pair_names, pair_reliability),
             "reliability_bias_norm": bias.norm(dim=-1).mean(),

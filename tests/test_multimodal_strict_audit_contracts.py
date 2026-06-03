@@ -498,7 +498,7 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         reliability = prior(clean_batch, encoder(clean_batch))
 
         self.assertTrue(torch.allclose(reliability.operator_logit_bias, torch.zeros_like(reliability.operator_logit_bias), atol=1e-7))
-        self.assertEqual(float(reliability.diagnostics["operator_logit_bias_norm"]), 0.0)
+        self.assertEqual(float(reliability.diagnostics["operator_logit_bias_norm"].detach()), 0.0)
 
     def test_base_plus_residual_composition_uses_spo_base_and_lrio_delta(self):
         import torch

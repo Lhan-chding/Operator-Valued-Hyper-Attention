@@ -46,6 +46,9 @@ class MultimodalOVHA(nn.Module):
         use_evidence_router: bool = True,
         router_weight_policy: dict[str, str] | None = None,
         lrio_pairs: tuple[tuple[str, str], ...] | None = None,
+        composition_mode: str = "convex_mixture",
+        base_candidate: str | None = None,
+        residual_candidates: tuple[str, ...] = (),
     ):
         super().__init__()
         candidate_names = tuple(candidate_names)
@@ -54,7 +57,18 @@ class MultimodalOVHA(nn.Module):
         self.candidate_names = candidate_names
         self.use_evidence_router = bool(use_evidence_router)
         self.router_weight_policy = _validated_router_weight_policy(router_weight_policy, candidate_names)
-        self.evidence_encoder = MultimodalEvidenceEncoder(field_dims=field_dims, query_dim=query_dim, d_model=d_model)
+        self.composition = _validated_composition(
+            composition_mode=composition_mode,
+            candidate_names=candidate_names,
+            base_candidate=base_candidate,
+            residual_candidates=residual_candidates,
+        )
+        self.evidence_encoder = MultimodalEvidenceEncoder(
+            field_dims=field_dims,
+            query_dim=query_dim,
+            d_model=d_model,
+            lrio_pairs=lrio_pairs,
+        )
         self.memory_encoder = MultimodalOperatorMemory(d_model=d_model, memory_tokens=memory_tokens, candidate_names=candidate_names)
         self.reliability_prior = (
             RCEOReliabilityPrior(d_model=d_model, candidate_names=candidate_names, lrio_pairs=lrio_pairs or ())
@@ -103,8 +117,8 @@ class MultimodalOVHA(nn.Module):
             )
         batch_size, q_count = batch.target_y.shape[0], batch.target_y.shape[1]
         assert_stackable(candidate_outputs, batch_size, q_count, self.output_dim)
-        candidate_values = stack_candidate_values(candidate_outputs, self.candidate_names)
-        operator_admission_gate = _operator_admission_gate(candidate_outputs, self.candidate_names, candidate_values)
+        raw_candidate_values = stack_candidate_values(candidate_outputs, self.candidate_names)
+        operator_admission_gate = _operator_admission_gate(candidate_outputs, self.candidate_names, raw_candidate_values)
         router_weights = _effective_router_weights(
             router_output.weights,
             router_weight_override,
@@ -112,8 +126,17 @@ class MultimodalOVHA(nn.Module):
             self.router_weight_policy,
             operator_admission_gate["tensor"],
         )
-        y_hat = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
-        candidate_losses = _candidate_losses(candidate_outputs, batch.target_y, batch.target_mask)
+        composition = _compose_prediction(
+            candidate_outputs=candidate_outputs,
+            raw_candidate_values=raw_candidate_values,
+            router_logits=router_output.logits,
+            router_weights=router_weights,
+            candidate_names=self.candidate_names,
+            composition=self.composition,
+        )
+        candidate_values = composition["candidate_values"]
+        y_hat = composition["y_hat"]
+        candidate_losses = _candidate_losses(candidate_values, self.candidate_names, batch.target_y, batch.target_mask)
         raw_router_load_by_candidate = router_output.diagnostics.get("router_load_by_candidate", {})
         memory_diagnostics = self._memory_differentiation_diagnostics(
             batch=batch,
@@ -132,8 +155,8 @@ class MultimodalOVHA(nn.Module):
                 for key, value in router_output.logit_parts.items()
             },
             "candidate_loss": candidate_losses,
-            "candidate_loss_by_sample": _candidate_losses_by_sample(candidate_outputs, batch.target_y, batch.target_mask),
-            "candidate_value_stats": _candidate_value_stats(candidate_outputs),
+            "candidate_loss_by_sample": _candidate_losses_by_sample(candidate_values, self.candidate_names, batch.target_y, batch.target_mask),
+            "candidate_value_stats": _candidate_value_stats(candidate_values, self.candidate_names),
             "adapter_params": _adapter_param_diagnostics(params),
             "adapter_params_detail": _adapter_param_details(params),
             "memory_slot_norm": {name: memory_bank[name].norm(dim=-1).mean() for name in self.candidate_names},
@@ -147,6 +170,7 @@ class MultimodalOVHA(nn.Module):
                 "source": "training_only_supplied_weights" if router_weight_override is not None else "learned_router",
             },
             "router_weight_policy": _router_weight_policy_diagnostics(self.router_weight_policy),
+            "composition": composition["diagnostics"],
         }
         return MultimodalOVHAOutput(
             y_hat=y_hat,
@@ -242,6 +266,75 @@ def _effective_router_weights(
     return _apply_admission_gate(weights, admission_gate)
 
 
+def _validated_composition(
+    *,
+    composition_mode: str,
+    candidate_names: tuple[str, ...],
+    base_candidate: str | None,
+    residual_candidates: tuple[str, ...],
+) -> dict[str, Any]:
+    mode = str(composition_mode or "convex_mixture")
+    if mode == "convex_mixture":
+        return {"mode": mode, "base_candidate": None, "residual_candidates": ()}
+    if mode != "base_plus_residual":
+        raise ValueError("composition_mode must be convex_mixture or base_plus_residual")
+    if base_candidate is None or base_candidate not in candidate_names:
+        raise ValueError(f"base_plus_residual base_candidate must be one of {candidate_names}: {base_candidate}")
+    residuals = tuple(str(candidate) for candidate in residual_candidates)
+    if not residuals:
+        raise ValueError("base_plus_residual requires at least one residual candidate")
+    invalid = tuple(candidate for candidate in residuals if candidate not in candidate_names or candidate == base_candidate)
+    if invalid:
+        raise ValueError(f"base_plus_residual residual candidates must be active non-base candidates: {invalid}")
+    return {"mode": mode, "base_candidate": str(base_candidate), "residual_candidates": residuals}
+
+
+def _compose_prediction(
+    *,
+    candidate_outputs: dict[str, CandidateOutput],
+    raw_candidate_values: torch.Tensor,
+    router_logits: torch.Tensor,
+    router_weights: torch.Tensor,
+    candidate_names: tuple[str, ...],
+    composition: dict[str, Any],
+) -> dict[str, Any]:
+    if composition["mode"] == "convex_mixture":
+        return {
+            "y_hat": (router_weights.unsqueeze(-1) * raw_candidate_values).sum(dim=-2),
+            "candidate_values": raw_candidate_values,
+            "diagnostics": {
+                "mode": "convex_mixture",
+                "base_candidate": None,
+                "residual_candidates": (),
+            },
+        }
+    base_candidate = str(composition["base_candidate"])
+    residual_candidates = tuple(composition["residual_candidates"])
+    base_value = candidate_outputs[base_candidate].value
+    corrected_values = raw_candidate_values.clone()
+    residual_gate_by_candidate = {}
+    y_hat = base_value
+    for candidate in residual_candidates:
+        candidate_index = candidate_names.index(candidate)
+        delta = candidate_outputs[candidate].value
+        gate = torch.sigmoid(router_logits[..., candidate_index : candidate_index + 1])
+        y_hat = y_hat + gate * delta
+        corrected_values[..., candidate_index, :] = base_value + delta
+        residual_gate_by_candidate[candidate] = gate.mean()
+    base_index = candidate_names.index(base_candidate)
+    corrected_values[..., base_index, :] = base_value
+    return {
+        "y_hat": y_hat,
+        "candidate_values": corrected_values,
+        "diagnostics": {
+            "mode": "base_plus_residual",
+            "base_candidate": base_candidate,
+            "residual_candidates": residual_candidates,
+            "residual_gate_by_candidate": residual_gate_by_candidate,
+        },
+    }
+
+
 def _apply_admission_gate(weights: torch.Tensor, admission_gate: torch.Tensor | None) -> torch.Tensor:
     if admission_gate is None:
         return weights
@@ -326,28 +419,30 @@ def _router_weight_policy_diagnostics(router_weight_policy: dict[str, str] | Non
 
 
 def _candidate_losses(
-    candidate_outputs: dict[str, CandidateOutput],
+    candidate_values: torch.Tensor,
+    candidate_names: tuple[str, ...],
     target_y: torch.Tensor,
     target_mask: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
     mask = target_mask.to(dtype=target_y.dtype, device=target_y.device).unsqueeze(-1)
     denom = mask.sum().clamp_min(1.0)
     return {
-        name: ((output.value - target_y).square() * mask).sum() / denom
-        for name, output in candidate_outputs.items()
+        name: ((candidate_values[..., index, :] - target_y).square() * mask).sum() / denom
+        for index, name in enumerate(candidate_names)
     }
 
 
 def _candidate_losses_by_sample(
-    candidate_outputs: dict[str, CandidateOutput],
+    candidate_values: torch.Tensor,
+    candidate_names: tuple[str, ...],
     target_y: torch.Tensor,
     target_mask: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
     mask = target_mask.to(dtype=target_y.dtype, device=target_y.device).unsqueeze(-1)
     denom = mask.sum(dim=-1).clamp_min(1.0)
     return {
-        name: ((output.value - target_y).square() * mask).sum(dim=-1) / denom
-        for name, output in candidate_outputs.items()
+        name: ((candidate_values[..., index, :] - target_y).square() * mask).sum(dim=-1) / denom
+        for index, name in enumerate(candidate_names)
     }
 
 
@@ -411,10 +506,10 @@ def _candidate_diagnostics(
     return diagnostics
 
 
-def _candidate_value_stats(candidate_outputs: dict[str, CandidateOutput]) -> dict[str, dict[str, torch.Tensor]]:
+def _candidate_value_stats(candidate_values: torch.Tensor, candidate_names: tuple[str, ...]) -> dict[str, dict[str, torch.Tensor]]:
     stats = {}
-    for name, output in candidate_outputs.items():
-        values = output.value.detach()
+    for index, name in enumerate(candidate_names):
+        values = candidate_values[..., index, :].detach()
         abs_values = values.abs().reshape(-1)
         stats[name] = {
             "mean": values.mean(),
