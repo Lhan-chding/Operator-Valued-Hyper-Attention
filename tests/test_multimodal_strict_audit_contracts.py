@@ -60,8 +60,8 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         metrics = mosei_standard_metrics(prediction, target, mask)
 
         self.assertEqual(metrics["acc2_excl0"], 1.0)
-        self.assertEqual(metrics["acc5"], 0.8)
-        self.assertAlmostEqual(metrics["mae"], 0.18, places=6)
+        self.assertEqual(metrics["acc5"], 1.0)
+        self.assertAlmostEqual(metrics["mae"], 0.22, places=6)
 
     def test_public_main_runner_exposes_official_selection_split_contract(self):
         source = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()

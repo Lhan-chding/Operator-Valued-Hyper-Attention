@@ -51,10 +51,19 @@ def _masked_flat_pair(
     target: torch.Tensor,
     mask: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    valid = mask.to(dtype=torch.bool, device=prediction.device)
-    pred = prediction[..., 0][valid].reshape(-1).to(dtype=torch.float32)
-    truth = target[..., 0].to(device=prediction.device, dtype=torch.float32)[valid].reshape(-1)
+    pred_grid = _scalar_grid(prediction).to(dtype=torch.float32)
+    truth_grid = _scalar_grid(target).to(device=prediction.device, dtype=torch.float32)
+    valid = _scalar_grid(mask).to(dtype=torch.bool, device=prediction.device)
+    pred_grid, truth_grid, valid = torch.broadcast_tensors(pred_grid, truth_grid, valid)
+    pred = pred_grid[valid].reshape(-1)
+    truth = truth_grid[valid].reshape(-1)
     return pred, truth
+
+
+def _scalar_grid(value: torch.Tensor) -> torch.Tensor:
+    if value.ndim > 1 and int(value.shape[-1]) == 1:
+        return value.squeeze(-1)
+    return value
 
 
 def _pearson(pred: torch.Tensor, truth: torch.Tensor) -> float:
