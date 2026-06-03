@@ -7,21 +7,23 @@ from moat_ovha_torch.models.multimodal.primitives.alignment_transport import CAT
 from moat_ovha_torch.models.multimodal.primitives.base import CandidateOutput
 from moat_ovha_torch.models.multimodal.primitives.low_rank_interaction import LRIOPrimitive
 from moat_ovha_torch.models.multimodal.primitives.semantic_prototype import SPOPrimitive
+from moat_ovha_torch.models.multimodal.primitives.text_anchored_shift import TANSOPrimitive
 from moat_ovha_torch.models.multimodal.primitives.typed_local_evidence import TLEOPrimitive
 
 
 MULTIMODAL_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
+MULTIMODAL_EXTENDED_CANDIDATE_NAMES = MULTIMODAL_CANDIDATE_NAMES + ("TANSO",)
 FORBIDDEN_V1_STACK_NAMES = ("RCEO", "MMRO", "CTRO", "TLDO", "OMRO")
 
 
 def assert_candidate_names(names: tuple[str, ...] | list[str]) -> None:
     values = tuple(names)
     if not values:
-        raise ValueError("At least one TLEO / SPO / LRIO / CATO candidate must enter the v1 candidate stack")
-    allowed = set(MULTIMODAL_CANDIDATE_NAMES)
+        raise ValueError("At least one TLEO / SPO / LRIO / CATO / TANSO candidate must enter the candidate stack")
+    allowed = set(MULTIMODAL_EXTENDED_CANDIDATE_NAMES)
     invalid = sorted(name for name in values if name not in allowed)
     if invalid:
-        raise ValueError(f"Only TLEO / SPO / LRIO / CATO may enter the v1 candidate stack: {invalid}")
+        raise ValueError(f"Only TLEO / SPO / LRIO / CATO / TANSO may enter the candidate stack: {invalid}")
 
 
 def assert_stackable(outputs: dict[str, CandidateOutput], batch_size: int, q_count: int, dy: int) -> None:
@@ -60,6 +62,8 @@ def make_candidate_bank(
             modules[name] = LRIOPrimitive(d_model, output_dim, pairs=lrio_pairs or LRIOPrimitive.default_pairs())
         elif name == "CATO":
             modules[name] = CATOPrimitive(d_model, output_dim)
+        elif name == "TANSO":
+            modules[name] = TANSOPrimitive(d_model, output_dim)
     return nn.ModuleDict(modules)
 
 

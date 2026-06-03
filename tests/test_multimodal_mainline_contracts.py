@@ -2084,7 +2084,15 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(CONTROLLED_FAMILY_ACTIVE_OPERATOR["cato_alignment_transport"], "CATO")
         self.assertEqual(CONTROLLED_FAMILY_ACTIVE_OPERATOR["rceo_reliability_corruption"], "LRIO")
         self.assertEqual(CONTROLLED_FAMILY_ACTIVE_OPERATOR["mixed_relation_operator"], "mixed")
-        self.assertEqual(CONTROLLED_TRUE_ADAPTER_PARAM_KEYS, ALLOWED_V1_ADAPTER_PARAMS)
+        self.assertNotIn("TANSO", CONTROLLED_TRUE_ADAPTER_PARAM_KEYS)
+        self.assertEqual(
+            CONTROLLED_TRUE_ADAPTER_PARAM_KEYS,
+            {
+                candidate: ALLOWED_V1_ADAPTER_PARAMS[candidate]
+                for candidate in CONTROLLED_TRUE_ADAPTER_PARAM_KEYS
+            },
+        )
+        self.assertIn("TANSO", ALLOWED_V1_ADAPTER_PARAMS)
 
         for family in CONTROLLED_MULTIMODAL_FAMILIES:
             expected_operator = CONTROLLED_FAMILY_ACTIVE_OPERATOR[family]

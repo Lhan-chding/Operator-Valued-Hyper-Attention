@@ -247,9 +247,9 @@ def _pair_tuple(value: Any) -> tuple[tuple[str, str], ...]:
 def _validate_candidate_names(candidate_names: tuple[str, ...]) -> None:
     if not candidate_names:
         raise ValueError("candidate_names must contain at least one v1 candidate")
-    allowed = set(DEFAULT_CANDIDATE_NAMES)
+    allowed = set(DEFAULT_CANDIDATE_NAMES) | {"TANSO"}
     invalid = sorted(candidate for candidate in candidate_names if candidate not in allowed)
     if invalid:
-        raise ValueError("candidate_names may only contain TLEO/SPO/LRIO/CATO: " + ", ".join(invalid))
+        raise ValueError("candidate_names may only contain TLEO/SPO/LRIO/CATO/TANSO: " + ", ".join(invalid))
     if len(set(candidate_names)) != len(candidate_names):
         raise ValueError("candidate_names must not contain duplicates")

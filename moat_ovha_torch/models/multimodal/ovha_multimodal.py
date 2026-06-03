@@ -11,6 +11,7 @@ from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceBank, M
 from moat_ovha_torch.models.multimodal.joint_router_adapter import MultimodalJointRouterAdapter
 from moat_ovha_torch.models.multimodal.memory import MultimodalOperatorMemory
 from moat_ovha_torch.models.multimodal.operator_bank import (
+    MULTIMODAL_EXTENDED_CANDIDATE_NAMES,
     MULTIMODAL_CANDIDATE_NAMES,
     assert_stackable,
     make_candidate_bank,
@@ -400,10 +401,10 @@ def _validated_router_weight_policy(
 def _validate_candidate_subset(candidate_names: tuple[str, ...]) -> None:
     if not candidate_names:
         raise ValueError("MultimodalOVHA requires at least one active candidate")
-    allowed = set(MULTIMODAL_CANDIDATE_NAMES)
+    allowed = set(MULTIMODAL_EXTENDED_CANDIDATE_NAMES)
     invalid = sorted(name for name in candidate_names if name not in allowed)
     if invalid:
-        raise ValueError(f"MultimodalOVHA candidates must be TLEO/SPO/LRIO/CATO: {invalid}")
+        raise ValueError(f"MultimodalOVHA candidates must be TLEO/SPO/LRIO/CATO/TANSO: {invalid}")
     if len(set(candidate_names)) != len(candidate_names):
         raise ValueError("MultimodalOVHA candidate_names must not contain duplicates")
 
@@ -473,6 +474,8 @@ def _adapter_param_diagnostics(params: dict[str, dict[str, torch.Tensor]]) -> di
             diagnostics["LRIO_pair_rank_entropy"] = _entropy(params["LRIO"]["rank_logits_by_pair"])
     if "CATO" in params:
         diagnostics["CATO_alignment_temperature"] = params["CATO"]["alignment_temperature"].mean()
+    if "TANSO" in params:
+        diagnostics["TANSO_shift_temperature"] = params["TANSO"]["shift_temperature"].mean()
     return diagnostics
 
 

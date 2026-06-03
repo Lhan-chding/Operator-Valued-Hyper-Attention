@@ -14,6 +14,7 @@ ALLOWED_V1_ADAPTER_PARAMS = {
     "SPO": ("prototype_temperature", "prototype_logits_shift", "scale", "bias"),
     "LRIO": ("rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"),
     "CATO": ("alignment_temperature", "transport_scale", "scale", "bias"),
+    "TANSO": ("audio_shift_scale", "vision_shift_scale", "shift_temperature", "scale", "bias"),
 }
 
 
@@ -156,6 +157,16 @@ def _candidate_query_feature(name: str, evidence: MultimodalEvidenceBank) -> tor
         return evidence.low_rank_features
     if name == "CATO":
         return evidence.alignment_features
+    if name == "TANSO":
+        if evidence.all_pair_features:
+            text_pairs = [
+                feature
+                for key, feature in evidence.all_pair_features.items()
+                if key.startswith("text__")
+            ]
+            if text_pairs:
+                return torch.stack(text_pairs, dim=0).mean(dim=0)
+        return evidence.low_rank_features
     raise ValueError(f"unknown multimodal candidate: {name}")
 
 
@@ -207,6 +218,14 @@ def _params_for_name(name: str, raw: torch.Tensor) -> dict[str, torch.Tensor]:
         return {
             "alignment_temperature": torch.nn.functional.softplus(raw[..., 2:3]) + 1e-3,
             "transport_scale": torch.sigmoid(raw[..., 3:4]),
+            "scale": scale,
+            "bias": bias,
+        }
+    if name == "TANSO":
+        return {
+            "audio_shift_scale": torch.sigmoid(raw[..., 2:3]),
+            "vision_shift_scale": torch.sigmoid(raw[..., 3:4]),
+            "shift_temperature": torch.nn.functional.softplus(raw[..., 4:5]) + 0.1,
             "scale": scale,
             "bias": bias,
         }

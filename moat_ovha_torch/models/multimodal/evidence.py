@@ -6,7 +6,7 @@ import torch
 from torch import nn
 
 from moat_ovha_torch.data.multimodal.typed_batch import MultimodalEpisodeBatch
-from moat_ovha_torch.models.multimodal.operator_bank import MULTIMODAL_CANDIDATE_NAMES
+from moat_ovha_torch.models.multimodal.operator_bank import MULTIMODAL_EXTENDED_CANDIDATE_NAMES
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ class MultimodalEvidenceEncoder(nn.Module):
         self.prototype_head = nn.Linear(d_model * 2, d_model)
         self.low_rank_head = nn.Linear(d_model * 2, d_model)
         self.alignment_head = nn.Linear(d_model * 2, d_model)
-        self.evidence_logit_head = nn.Linear(d_model * 2, len(MULTIMODAL_CANDIDATE_NAMES))
+        self.evidence_logit_head = nn.Linear(d_model * 2, len(MULTIMODAL_EXTENDED_CANDIDATE_NAMES))
 
     def forward(self, batch: MultimodalEpisodeBatch) -> MultimodalEvidenceBank:
         query_features = self.query_projection(batch.query.x)
@@ -93,7 +93,7 @@ class MultimodalEvidenceEncoder(nn.Module):
         explicit_relation_logits, explicit_relation_rate = _explicit_query_type_relation_logits(
             batch.query.query_type,
             query_features.shape[:2],
-            len(MULTIMODAL_CANDIDATE_NAMES),
+            len(MULTIMODAL_EXTENDED_CANDIDATE_NAMES),
             dtype=query_features.dtype,
             device=query_features.device,
         )

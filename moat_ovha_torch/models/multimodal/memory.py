@@ -56,4 +56,14 @@ def _candidate_episode_feature(name: str, evidence: MultimodalEvidenceBank) -> t
         return evidence.low_rank_features.mean(dim=1)
     if name == "CATO":
         return evidence.alignment_features.mean(dim=1)
+    if name == "TANSO":
+        if evidence.all_pair_features:
+            text_pairs = [
+                feature.mean(dim=1)
+                for key, feature in evidence.all_pair_features.items()
+                if key.startswith("text__")
+            ]
+            if text_pairs:
+                return torch.stack(text_pairs, dim=0).mean(dim=0)
+        return evidence.low_rank_features.mean(dim=1)
     raise ValueError(f"unknown multimodal candidate: {name}")

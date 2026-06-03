@@ -65,6 +65,7 @@ ALLOWED_V1_ADAPTER_PARAMS = {
     "SPO": ("prototype_temperature", "prototype_logits_shift", "scale", "bias"),
     "LRIO": ("rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"),
     "CATO": ("alignment_temperature", "transport_scale", "scale", "bias"),
+    "TANSO": ("audio_shift_scale", "vision_shift_scale", "shift_temperature", "scale", "bias"),
 }
 
 FORBIDDEN_V1_ADAPTER_PARAMS = (
@@ -147,7 +148,11 @@ def validate_training_protocol(plan: dict[str, Any]) -> TrainingProtocolReport:
     _validate_stage_sequence(task_type, stages, errors)
     losses_by_stage = plan.get("losses_by_stage", {})
     _validate_losses(task_type, losses_by_stage, plan.get("loss_metadata", {}), errors)
-    _validate_adapter_params(plan.get("adapter_params_by_candidate", {}), errors)
+    _validate_adapter_params(
+        plan.get("adapter_params_by_candidate", {}),
+        tuple(str(name) for name in plan.get("candidate_names", ())),
+        errors,
+    )
     return TrainingProtocolReport(ok=not errors, errors=errors, warnings=warnings)
 
 
@@ -285,8 +290,17 @@ def _validate_public_candidate_loss_metadata(
         )
 
 
-def _validate_adapter_params(params_by_candidate: dict[str, list[str]], errors: list[str]) -> None:
-    for candidate, allowed in ALLOWED_V1_ADAPTER_PARAMS.items():
+def _validate_adapter_params(
+    params_by_candidate: dict[str, list[str]],
+    candidate_names: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    expected_candidates = candidate_names or tuple(params_by_candidate)
+    for candidate in expected_candidates:
+        allowed = ALLOWED_V1_ADAPTER_PARAMS.get(candidate)
+        if allowed is None:
+            errors.append(f"unknown v1 adapter candidate: {candidate}")
+            continue
         params = tuple(params_by_candidate.get(candidate, ()))
         if not params:
             errors.append(f"adapter params missing for {candidate}")

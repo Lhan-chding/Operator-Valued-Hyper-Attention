@@ -6,7 +6,7 @@ import torch
 from torch import nn
 
 from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceBank
-from moat_ovha_torch.models.multimodal.operator_bank import MULTIMODAL_CANDIDATE_NAMES
+from moat_ovha_torch.models.multimodal.operator_bank import MULTIMODAL_CANDIDATE_NAMES, MULTIMODAL_EXTENDED_CANDIDATE_NAMES
 from moat_ovha_torch.models.multimodal.reliability_prior import ReliabilityPrior
 
 
@@ -45,7 +45,7 @@ class MultimodalRelationRouter(nn.Module):
             memory_logits.append(self.memory_head(torch.cat([evidence.query_features, memory], dim=-1)))
         memory_logit = torch.cat(memory_logits, dim=-1) + self.query_candidate_head(evidence.query_features)
         candidate_indices = torch.as_tensor(
-            [MULTIMODAL_CANDIDATE_NAMES.index(name) for name in self.candidate_names],
+            [MULTIMODAL_EXTENDED_CANDIDATE_NAMES.index(name) for name in self.candidate_names],
             dtype=torch.long,
             device=evidence.candidate_evidence_logits.device,
         )
