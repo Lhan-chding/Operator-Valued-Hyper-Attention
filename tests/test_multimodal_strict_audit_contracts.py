@@ -595,9 +595,10 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
             residual_candidates=config.residual_candidates,
         )
 
+        batch = _batch(torch)
         with torch.no_grad():
-            output = model(_batch(torch))
-        row = _public_training_diagnostics_row(output, config, _batch(torch), step=1, seed=301)
+            output = model(batch)
+        row = _public_training_diagnostics_row(output, config, batch, step=1, seed=301)
         public = row["public_diagnostics"]
 
         self.assertIn("candidate_oracle_selection", public)

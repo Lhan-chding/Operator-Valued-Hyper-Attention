@@ -704,6 +704,7 @@ def _sentiment_public_report_diagnostics(
         "lrio_pair_load": _json_ready(lrio_diag.get("pair_load", {})),
         "lrio_pair_reliability": _json_ready(lrio_diag.get("pair_reliability", {})),
         "spo_prototype_usage": _prototype_usage_map(spo_diag.get("prototype_usage")),
+        **_sentiment_candidate_oracle_diagnostics(batch, output),
         "rceo_reliability_shift_under_missing_noisy_modality": {
             "missing_audio": reliability_shift,
             "noisy_vision": -max(0.01, min(1.0, 0.5 * abs(reliability_shift))),
@@ -714,6 +715,111 @@ def _sentiment_public_report_diagnostics(
             "omitted_router_load_shift_templates": "not emitted because no corrupted/missing forward pass was aggregated for this diagnostic row",
         },
     }
+
+
+def _sentiment_candidate_oracle_diagnostics(
+    batch: MultimodalEpisodeBatch,
+    output: MultimodalOVHAOutput,
+) -> dict[str, object]:
+    candidate_names = tuple(output.candidate_outputs)
+    full_loss = _task_loss(output.y_hat, batch)
+    candidate_oracle = _candidate_oracle_selection(batch, output, candidate_names, full_loss)
+    return {
+        "candidate_oracle_selection": candidate_oracle,
+        "gate_sweep": _spo_lrio_gate_sweep(batch, output, candidate_names, full_loss),
+        "residual_oracle": _spo_lrio_residual_oracle(batch, output, candidate_names, full_loss),
+    }
+
+
+def _candidate_oracle_selection(
+    batch: MultimodalEpisodeBatch,
+    output: MultimodalOVHAOutput,
+    candidate_names: tuple[str, ...],
+    full_loss: torch.Tensor,
+) -> dict[str, object]:
+    losses = {
+        name: _as_float(_task_loss(output.candidate_values[..., index, :], batch))
+        for index, name in enumerate(candidate_names)
+    }
+    full_loss_float = _as_float(full_loss)
+    if not losses:
+        return {
+            "available": False,
+            "reason": "no candidate values available",
+            "full_loss": full_loss_float,
+            "candidate_loss": {},
+        }
+    best_candidate = min(losses, key=losses.get)
+    oracle_min_loss = float(losses[best_candidate])
+    return {
+        "available": True,
+        "full_loss": full_loss_float,
+        "candidate_loss": losses,
+        "best_candidate": best_candidate,
+        "oracle_min_loss": oracle_min_loss,
+        "full_minus_oracle_min_loss": full_loss_float - oracle_min_loss,
+        "oracle_min_beats_full": oracle_min_loss + 1e-12 < full_loss_float,
+    }
+
+
+def _spo_lrio_gate_sweep(
+    batch: MultimodalEpisodeBatch,
+    output: MultimodalOVHAOutput,
+    candidate_names: tuple[str, ...],
+    full_loss: torch.Tensor,
+) -> dict[str, object]:
+    if "SPO" not in candidate_names or "LRIO" not in candidate_names:
+        return {"available": False, "reason": "SPO and LRIO candidates are both required"}
+    spo = output.candidate_values[..., candidate_names.index("SPO"), :]
+    lrio = output.candidate_values[..., candidate_names.index("LRIO"), :]
+    rows = []
+    for alpha in _oracle_grid():
+        prediction = (1.0 - alpha) * spo + alpha * lrio
+        rows.append({"alpha": alpha, "loss": _as_float(_task_loss(prediction, batch))})
+    best = min(rows, key=lambda row: float(row["loss"]))
+    full_loss_float = _as_float(full_loss)
+    return {
+        "available": True,
+        "grid": rows,
+        "best_alpha": best["alpha"],
+        "best_loss": best["loss"],
+        "full_minus_best_gate_loss": full_loss_float - float(best["loss"]),
+    }
+
+
+def _spo_lrio_residual_oracle(
+    batch: MultimodalEpisodeBatch,
+    output: MultimodalOVHAOutput,
+    candidate_names: tuple[str, ...],
+    full_loss: torch.Tensor,
+) -> dict[str, object]:
+    if "SPO" not in candidate_names or "LRIO" not in candidate_names:
+        return {"available": False, "reason": "SPO and LRIO candidates are both required"}
+    spo = output.candidate_outputs["SPO"].value
+    if output.diagnostics.get("composition", {}).get("mode") == "base_plus_residual":
+        lrio_delta = output.candidate_outputs["LRIO"].value
+        delta_source = "lrio_candidate_delta"
+    else:
+        lrio_delta = output.candidate_outputs["LRIO"].value - spo
+        delta_source = "lrio_minus_spo_candidate_value"
+    rows = []
+    for gamma in _oracle_grid():
+        prediction = spo + gamma * lrio_delta
+        rows.append({"gamma": gamma, "loss": _as_float(_task_loss(prediction, batch))})
+    best = min(rows, key=lambda row: float(row["loss"]))
+    full_loss_float = _as_float(full_loss)
+    return {
+        "available": True,
+        "delta_source": delta_source,
+        "grid": rows,
+        "best_gamma": best["gamma"],
+        "best_loss": best["loss"],
+        "full_minus_best_residual_loss": full_loss_float - float(best["loss"]),
+    }
+
+
+def _oracle_grid() -> tuple[float, ...]:
+    return (0.0, 0.25, 0.5, 0.75, 1.0)
 
 
 def _prototype_usage_map(value: Any) -> dict[str, float]:
