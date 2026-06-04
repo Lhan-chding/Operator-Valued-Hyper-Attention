@@ -212,6 +212,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             baseline_names_for_task,
             baseline_protocol_for_name,
             external_reference_names_for_task,
+            missing_required_baselines,
             ovha_ablation_names_for_task,
             same_feature_probe_names_for_task,
         )
@@ -231,9 +232,6 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "lrio_only",
                 "ovha_tanso_only",
                 "ovha_no_tanso",
-                "ovha_spo_lrio",
-                "ovha_spo_tanso",
-                "ovha_lrio_tanso",
                 "ovha_no_lrio",
                 "ovha_no_spo",
                 "ovha_no_rceo",
@@ -256,9 +254,6 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "lrio_only",
                 "ovha_tanso_only",
                 "ovha_no_tanso",
-                "ovha_spo_lrio",
-                "ovha_spo_tanso",
-                "ovha_lrio_tanso",
                 "ovha_no_lrio",
                 "ovha_no_spo",
                 "ovha_no_rceo",
@@ -267,6 +262,36 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         )
         self.assertTrue({"MDETR", "GLIP", "GroundingDINO", "GroundingDINO-1.5"}.issubset(set(external_reference_names_for_task("phrase_region_grounding"))))
         self.assertTrue({"TFN", "LMF", "MulT", "MISA", "MAG-BERT", "Self-MM"}.issubset(set(external_reference_names_for_task("sentiment_emotion"))))
+
+    def test_sentiment_ovha_ablation_registry_uses_canonical_non_duplicate_models(self):
+        from moat_ovha_torch.models.multimodal.baselines import (
+            missing_required_baselines,
+            ovha_ablation_names_for_task,
+        )
+
+        canonical = {
+            "spo_only",
+            "lrio_only",
+            "ovha_tanso_only",
+            "ovha_no_tanso",
+            "ovha_no_lrio",
+            "ovha_no_spo",
+            "ovha_no_rceo",
+            "ovha_with_evidence_router",
+        }
+
+        ablations = set(ovha_ablation_names_for_task("sentiment_emotion"))
+
+        self.assertEqual(ablations, canonical)
+        canonical_baselines = (
+            "text_only",
+            "audio_only",
+            "vision_only",
+            "concat_fusion",
+            *tuple(canonical),
+        )
+
+        self.assertEqual(missing_required_baselines("sentiment_emotion", canonical_baselines), ())
 
     def test_visual_genome_uses_region_text_public_protocol_contracts(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
