@@ -14,7 +14,17 @@ ALLOWED_V1_ADAPTER_PARAMS = {
     "SPO": ("prototype_temperature", "prototype_logits_shift", "scale", "bias"),
     "LRIO": ("rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"),
     "CATO": ("alignment_temperature", "transport_scale", "scale", "bias"),
-    "TANSO": ("audio_shift_scale", "vision_shift_scale", "shift_temperature", "scale", "bias"),
+    "TANSO": (
+        "audio_shift_scale",
+        "vision_shift_scale",
+        "shift_temperature",
+        "audio_lag_logits",
+        "vision_lag_logits",
+        "lag_width",
+        "temporal_temperature",
+        "scale",
+        "bias",
+    ),
 }
 
 
@@ -32,7 +42,7 @@ class MultimodalHyperAdapter(nn.Module):
         self.lrio_rank_count = int(lrio_rank_count)
         self.reliability_projection = nn.Linear(d_model + 1, d_model)
         self.router_projection = nn.Linear(len(candidate_names), d_model)
-        self.heads = nn.ModuleDict({name: nn.Linear(d_model * 5, 8) for name in candidate_names})
+        self.heads = nn.ModuleDict({name: nn.Linear(d_model * 5, 16) for name in candidate_names})
         rng_state = torch.random.get_rng_state()
         self.lrio_pair_head = nn.Linear(d_model * 6, self.lrio_rank_count + 1)
         torch.random.set_rng_state(rng_state)
@@ -226,6 +236,10 @@ def _params_for_name(name: str, raw: torch.Tensor) -> dict[str, torch.Tensor]:
             "audio_shift_scale": torch.sigmoid(raw[..., 2:3]),
             "vision_shift_scale": torch.sigmoid(raw[..., 3:4]),
             "shift_temperature": torch.nn.functional.softplus(raw[..., 4:5]) + 0.1,
+            "audio_lag_logits": raw[..., 5:10],
+            "vision_lag_logits": raw[..., 10:15],
+            "lag_width": torch.nn.functional.softplus(raw[..., 15:16]) + 0.05,
+            "temporal_temperature": torch.nn.functional.softplus(raw[..., 4:5]) + 0.1,
             "scale": scale,
             "bias": bias,
         }

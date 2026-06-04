@@ -341,12 +341,20 @@ def _run_seed(
     model.eval()
     with torch.no_grad():
         eval_batch_std_device = _move_batch_to_device(eval_batch_std, device)
+        val_batch_std_device = _move_batch_to_device(val_batch_std, device)
+        val_output = _destandardize_output(
+            model(val_batch_std_device),
+            target_mean.to(device=device),
+            target_std.to(device=device),
+        )
+        calibrator = _fit_affine_calibrator(val_output.y_hat.detach().cpu(), selection_batch)
         eval_output = _destandardize_output(
             model(eval_batch_std_device),
             target_mean.to(device=device),
             target_std.to(device=device),
         )
         eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std_device, eval_batch)
+        eval_output = _apply_affine_calibration(eval_output, calibrator, config, eval_batch)
         eval_output = _move_ovha_output_to_device(eval_output, torch.device("cpu"))
     elapsed = time.perf_counter() - seed_started_at
     hardware = _hardware_metadata(device, elapsed)
@@ -827,6 +835,88 @@ def _destandardize_prediction(
     return prediction * target_std + target_mean
 
 
+def _fit_affine_calibrator(
+    prediction: torch.Tensor,
+    batch: MultimodalEpisodeBatch,
+) -> dict[str, float]:
+    pred, truth = _masked_flat_pair(prediction, batch.target_y, batch.target_mask)
+    if pred.numel() < 2:
+        return {"a": 1.0, "b": 0.0, "objective": "validation_mse_closed_form", "sample_count": int(pred.numel())}
+    pred = pred.to(dtype=torch.float64)
+    truth = truth.to(dtype=torch.float64)
+    pred_centered = pred - pred.mean()
+    denom = (pred_centered.square()).mean().clamp_min(1e-12)
+    a = ((pred_centered * (truth - truth.mean())).mean() / denom).clamp(-5.0, 5.0)
+    b = truth.mean() - a * pred.mean()
+    return {
+        "a": float(a.item()),
+        "b": float(b.item()),
+        "objective": "validation_mse_closed_form",
+        "sample_count": int(pred.numel()),
+    }
+
+
+def _apply_affine_calibration(
+    output: MultimodalOVHAOutput,
+    calibrator: dict[str, float],
+    config: MultimodalExperimentConfig,
+    batch: MultimodalEpisodeBatch,
+) -> MultimodalOVHAOutput:
+    pre_prediction = output.y_hat
+    post_prediction = _apply_affine_calibration_to_prediction(pre_prediction, calibrator)
+    diagnostics = {
+        **output.diagnostics,
+        **_affine_calibration_diagnostics(
+            config,
+            batch,
+            pre_prediction=pre_prediction,
+            post_prediction=post_prediction,
+            calibrator=calibrator,
+        ),
+    }
+    return replace(output, y_hat=post_prediction, diagnostics=diagnostics)
+
+
+def _apply_affine_calibration_to_prediction(
+    prediction: torch.Tensor,
+    calibrator: dict[str, float],
+) -> torch.Tensor:
+    return float(calibrator.get("a", 1.0)) * prediction + float(calibrator.get("b", 0.0))
+
+
+def _affine_calibration_diagnostics(
+    config: MultimodalExperimentConfig,
+    batch: MultimodalEpisodeBatch,
+    *,
+    pre_prediction: torch.Tensor,
+    post_prediction: torch.Tensor,
+    calibrator: dict[str, float],
+) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {"affine_calibration": dict(calibrator)}
+    try:
+        diagnostics["pre_calibration_public_metrics"] = _public_main_metrics(
+            config,
+            batch,
+            prediction=pre_prediction,
+            router_load_by_candidate={},
+            router_entropy=None,
+            candidate_loss={},
+            diagnostics=None,
+        )
+        diagnostics["post_calibration_public_metrics"] = _public_main_metrics(
+            config,
+            batch,
+            prediction=post_prediction,
+            router_load_by_candidate={},
+            router_entropy=None,
+            candidate_loss={},
+            diagnostics=None,
+        )
+    except RuntimeError as exc:
+        diagnostics["calibration_metric_status"] = f"skipped_shape_mismatch: {exc}"
+    return diagnostics
+
+
 def _ovha_raw_metric_row(
     config: MultimodalExperimentConfig,
     batch: MultimodalEpisodeBatch,
@@ -957,14 +1047,30 @@ def _baseline_rows(
         target_std = summary.pop("_target_std")
         with torch.no_grad():
             eval_batch_std = _standardize_batch_targets(eval_batch, target_mean, target_std)
+            selection_batch_std = _standardize_batch_targets(selection_batch, target_mean, target_std)
+            selection_batch_device = _move_batch_to_device(selection_batch_std, device)
+            selection_prediction = _destandardize_prediction(
+                _baseline_prediction(str(baseline_name), model, selection_batch_device),
+                target_mean.to(device=device),
+                target_std.to(device=device),
+            )
+            calibrator = _fit_affine_calibrator(selection_prediction.detach().cpu(), selection_batch)
             eval_batch_device = _move_batch_to_device(eval_batch_std, device)
-            eval_prediction = _destandardize_prediction(
+            pre_calibration_prediction = _destandardize_prediction(
                 _baseline_prediction(str(baseline_name), model, eval_batch_device),
                 target_mean.to(device=device),
                 target_std.to(device=device),
             )
+            eval_prediction = _apply_affine_calibration_to_prediction(pre_calibration_prediction, calibrator)
             loss = _task_loss(eval_prediction, _move_batch_to_device(eval_batch, device))
             eval_prediction = eval_prediction.detach().cpu()
+            calibration_diagnostics = _affine_calibration_diagnostics(
+                config,
+                eval_batch,
+                pre_prediction=pre_calibration_prediction.detach().cpu(),
+                post_prediction=eval_prediction,
+                calibrator=calibrator,
+            )
         router_load = _probe_router_load_by_candidate(str(baseline_name))
         rows.append(
             _raw_metric_row(
@@ -981,7 +1087,7 @@ def _baseline_rows(
                 router_load_by_candidate=router_load,
                 router_entropy=torch.zeros((), dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device),
                 candidate_loss={candidate: loss for candidate in ("TLEO", "SPO", "LRIO", "CATO")},
-                diagnostics=None,
+                diagnostics=calibration_diagnostics,
                 model_protocol=f"{baseline_protocol}_public_main_v1",
             )
         )
@@ -1121,6 +1227,13 @@ def _train_ovha_ablation(
     model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
+        val_batch_std_device = _move_batch_to_device(val_batch_std, device)
+        val_output = _destandardize_output(
+            model(val_batch_std_device),
+            target_mean.to(device=device),
+            target_std.to(device=device),
+        )
+        calibrator = _fit_affine_calibrator(val_output.y_hat.detach().cpu(), selection_batch)
         eval_batch_std_device = _move_batch_to_device(eval_batch_std, device)
         eval_output = _destandardize_output(
             model(eval_batch_std_device),
@@ -1128,6 +1241,7 @@ def _train_ovha_ablation(
             target_std.to(device=device),
         )
         eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std_device, eval_batch)
+        eval_output = _apply_affine_calibration(eval_output, calibrator, config, eval_batch)
         eval_output = _move_ovha_output_to_device(eval_output, torch.device("cpu"))
     return model, eval_output, {
         "baseline_optimizer_steps": train_steps,
@@ -1345,7 +1459,7 @@ def _raw_metric_row(
     diagnostics: Any,
 ) -> dict[str, Any]:
     standard = mosei_standard_metrics(prediction, batch.target_y, batch.target_mask) if _is_sentiment_task(config.task_type) else {}
-    return {
+    row = {
         "artifact_type": "public_main_raw_metric",
         "evidence_scope": "public_main_table",
         "dataset": config.dataset_name,
@@ -1379,6 +1493,11 @@ def _raw_metric_row(
         "public_metrics_scope": "public_main_metrics",
         "raw_metric_path": str(raw_metrics_path),
     }
+    if isinstance(diagnostics, dict):
+        for key in ("affine_calibration", "pre_calibration_public_metrics", "post_calibration_public_metrics"):
+            if key in diagnostics:
+                row[key] = _json_ready(diagnostics[key])
+    return row
 
 
 def _public_main_metrics(

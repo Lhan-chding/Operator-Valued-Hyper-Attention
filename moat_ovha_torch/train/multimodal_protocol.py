@@ -65,7 +65,17 @@ ALLOWED_V1_ADAPTER_PARAMS = {
     "SPO": ("prototype_temperature", "prototype_logits_shift", "scale", "bias"),
     "LRIO": ("rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"),
     "CATO": ("alignment_temperature", "transport_scale", "scale", "bias"),
-    "TANSO": ("audio_shift_scale", "vision_shift_scale", "shift_temperature", "scale", "bias"),
+    "TANSO": (
+        "audio_shift_scale",
+        "vision_shift_scale",
+        "shift_temperature",
+        "audio_lag_logits",
+        "vision_lag_logits",
+        "lag_width",
+        "temporal_temperature",
+        "scale",
+        "bias",
+    ),
 }
 
 FORBIDDEN_V1_ADAPTER_PARAMS = (
@@ -113,6 +123,11 @@ PUBLIC_ALLOWED_LOSSES = (
     "spo_prototype_diversity",
     "router_marginal_utility",
     "residual_norm_shrinkage",
+    "huber_l1_task_loss",
+    "ordinal_acc5_acc7_auxiliary",
+    "residual_oracle_gate_loss",
+    "tanso_source_oracle_gate_loss",
+    "val_affine_calibration",
     "weak_rceo_unimodal_disagreement_marked",
     "weak_modality_dropout_consistency_marked",
     "weak_unimodal_entropy_calibration_marked",

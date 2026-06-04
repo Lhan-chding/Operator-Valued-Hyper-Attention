@@ -482,6 +482,16 @@ def _compute_public_loss_component(
         return _router_marginal_utility_loss(output, batch)
     if name == "residual_norm_shrinkage":
         return _residual_norm_shrinkage_loss(output)
+    if name == "huber_l1_task_loss":
+        return _huber_l1_task_loss(output.y_hat, batch)
+    if name == "ordinal_acc5_acc7_auxiliary":
+        return _ordinal_acc5_acc7_auxiliary_loss(output.y_hat, batch)
+    if name == "residual_oracle_gate_loss":
+        return _residual_oracle_gate_loss(output, batch)
+    if name == "tanso_source_oracle_gate_loss":
+        return _tanso_source_oracle_gate_loss(output, batch)
+    if name == "val_affine_calibration":
+        return None
     return None
 
 
@@ -583,6 +593,89 @@ def _residual_norm_shrinkage_loss(output: MultimodalOVHAOutput) -> torch.Tensor:
     if not values:
         return output.y_hat.sum() * 0.0
     return torch.stack(values).mean()
+
+
+def _huber_l1_task_loss(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    mask = batch.target_mask.to(dtype=prediction.dtype, device=prediction.device).unsqueeze(-1)
+    target = batch.target_y.to(dtype=prediction.dtype, device=prediction.device)
+    huber = torch.nn.functional.smooth_l1_loss(prediction, target, reduction="none")
+    l1 = (prediction - target).abs()
+    denom = mask.sum().clamp_min(1.0)
+    return ((huber + l1) * mask).sum() / denom
+
+
+def _ordinal_acc5_acc7_auxiliary_loss(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    if prediction.shape[-1] != 1:
+        return prediction.sum() * 0.0
+    mask = batch.target_mask.to(dtype=torch.bool, device=prediction.device)
+    if not bool(mask.any()):
+        return prediction.sum() * 0.0
+    pred = prediction[..., 0][mask]
+    target = batch.target_y.to(dtype=prediction.dtype, device=prediction.device)[..., 0][mask]
+    return _ordinal_ce_from_scalar(pred, target, bins=torch.arange(-3, 4, dtype=prediction.dtype, device=prediction.device)) + _ordinal_ce_from_scalar(
+        pred,
+        target.clamp(-2.0, 2.0),
+        bins=torch.arange(-2, 3, dtype=prediction.dtype, device=prediction.device),
+    )
+
+
+def _ordinal_ce_from_scalar(prediction: torch.Tensor, target: torch.Tensor, *, bins: torch.Tensor) -> torch.Tensor:
+    labels = (target.round().clamp(float(bins.min().item()), float(bins.max().item())) - bins.min()).to(dtype=torch.long)
+    logits = -(prediction.unsqueeze(-1) - bins.view(1, -1)).square()
+    return torch.nn.functional.cross_entropy(logits, labels)
+
+
+def _residual_oracle_gate_loss(output: MultimodalOVHAOutput, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    composition = output.diagnostics.get("composition", {})
+    raw_delta = composition.get("raw_delta_by_candidate", {})
+    gate = composition.get("residual_gate_tensor_by_candidate", {})
+    base_candidate = composition.get("base_candidate")
+    if not isinstance(raw_delta, dict) or not isinstance(gate, dict) or base_candidate not in output.candidate_outputs:
+        return output.y_hat.sum() * 0.0
+    base = output.candidate_outputs[str(base_candidate)].value
+    losses = []
+    for candidate, delta in raw_delta.items():
+        candidate_gate = gate.get(candidate)
+        if not hasattr(delta, "to") or not hasattr(candidate_gate, "to"):
+            continue
+        target_alpha = _residual_oracle_alpha(base, delta, batch)
+        losses.append(torch.nn.functional.binary_cross_entropy(candidate_gate.clamp(1e-6, 1.0 - 1e-6), target_alpha.detach()))
+    if not losses:
+        return output.y_hat.sum() * 0.0
+    return torch.stack(losses).mean()
+
+
+def _tanso_source_oracle_gate_loss(output: MultimodalOVHAOutput, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    composition = output.diagnostics.get("composition", {})
+    base_candidate = composition.get("base_candidate")
+    if base_candidate not in output.candidate_outputs:
+        return output.y_hat.sum() * 0.0
+    tanso = output.diagnostics.get("candidate_diagnostics", {}).get("TANSO", {})
+    if not isinstance(tanso, dict):
+        return output.y_hat.sum() * 0.0
+    source_gates = tanso.get("source_gate_tensor", {})
+    source_deltas = tanso.get("source_specific_raw_delta", {})
+    if not isinstance(source_gates, dict) or not isinstance(source_deltas, dict):
+        return output.y_hat.sum() * 0.0
+    base = output.candidate_outputs[str(base_candidate)].value
+    losses = []
+    for source, source_gate in source_gates.items():
+        delta = source_deltas.get(source)
+        if not hasattr(delta, "to") or not hasattr(source_gate, "to"):
+            continue
+        target_alpha = _residual_oracle_alpha(base, delta.to(dtype=base.dtype, device=base.device), batch).squeeze(-1)
+        losses.append(torch.nn.functional.binary_cross_entropy(source_gate.clamp(1e-6, 1.0 - 1e-6), target_alpha.detach()))
+    if not losses:
+        return output.y_hat.sum() * 0.0
+    return torch.stack(losses).mean()
+
+
+def _residual_oracle_alpha(base: torch.Tensor, delta: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    target = batch.target_y.to(dtype=base.dtype, device=base.device)
+    mask = batch.target_mask.to(dtype=base.dtype, device=base.device).unsqueeze(-1)
+    base_error = ((base - target).square() * mask).mean(dim=-1, keepdim=True)
+    residual_error = ((base + delta - target).square() * mask).mean(dim=-1, keepdim=True)
+    return (residual_error < base_error).to(dtype=base.dtype)
 
 
 def _public_alignment_ce(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:

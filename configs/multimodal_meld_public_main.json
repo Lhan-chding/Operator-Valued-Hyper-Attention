@@ -5,15 +5,44 @@
   "cache_version": "v0.1",
   "cache_root": "data/multimodal_cache",
   "output_dir": "outputs/multimodal/meld_main",
-  "seeds": [501, 502, 503, 504, 505],
+  "seeds": [
+    501,
+    502,
+    503,
+    504,
+    505
+  ],
   "main_table_seed_policy": "five_seed_default",
-  "training_stages": ["T0", "T5"],
-  "candidate_names": ["SPO", "LRIO", "TANSO"],
-  "lrio_pairs": [["text", "audio"], ["text", "vision"], ["audio", "vision"]],
+  "training_stages": [
+    "T0",
+    "T5"
+  ],
+  "candidate_names": [
+    "SPO",
+    "LRIO",
+    "TANSO"
+  ],
+  "lrio_pairs": [
+    [
+      "text",
+      "audio"
+    ],
+    [
+      "text",
+      "vision"
+    ],
+    [
+      "audio",
+      "vision"
+    ]
+  ],
   "use_evidence_router": false,
   "composition_mode": "base_plus_residual",
   "base_candidate": "SPO",
-  "residual_candidates": ["LRIO", "TANSO"],
+  "residual_candidates": [
+    "LRIO",
+    "TANSO"
+  ],
   "baseline_names": [
     "text_only",
     "audio_only",
@@ -31,14 +60,30 @@
     "ovha_no_rceo",
     "ovha_with_evidence_router"
   ],
-  "eval_splits": ["val", "test"],
+  "eval_splits": [
+    "val",
+    "test"
+  ],
   "eval_episode_count": 4096,
   "enforce_same_features_for_baselines": true,
   "fail_on_missing_cache_artifact": true,
   "allow_hidden_losses": false,
   "losses_by_stage": {
-    "T0": ["cache_validation"],
-    "T5": ["task_loss", "candidate_individual_loss", "spo_prototype_diversity", "router_marginal_utility", "residual_norm_shrinkage"]
+    "T0": [
+      "cache_validation"
+    ],
+    "T5": [
+      "task_loss",
+      "candidate_individual_loss",
+      "spo_prototype_diversity",
+      "router_marginal_utility",
+      "residual_norm_shrinkage",
+      "huber_l1_task_loss",
+      "ordinal_acc5_acc7_auxiliary",
+      "residual_oracle_gate_loss",
+      "tanso_source_oracle_gate_loss",
+      "val_affine_calibration"
+    ]
   },
   "loss_metadata": {
     "candidate_individual_loss": {
@@ -53,13 +98,64 @@
     },
     "residual_norm_shrinkage": {
       "weight": 0.001
+    },
+    "task_loss": {
+      "weight": 0.2
+    },
+    "huber_l1_task_loss": {
+      "weight": 1.0
+    },
+    "ordinal_acc5_acc7_auxiliary": {
+      "weight": 0.05
+    },
+    "residual_oracle_gate_loss": {
+      "weight": 0.01
+    },
+    "tanso_source_oracle_gate_loss": {
+      "weight": 0.01
+    },
+    "val_affine_calibration": {
+      "weight": 0.0,
+      "stage": "validation_postfit"
     }
   },
   "adapter_params_by_candidate": {
-    "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
-    "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
-    "LRIO": ["rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"],
-    "TANSO": ["audio_shift_scale", "vision_shift_scale", "shift_temperature", "scale", "bias"],
-    "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"]
+    "TLEO": [
+      "lengthscale",
+      "local_temperature",
+      "scale",
+      "bias"
+    ],
+    "SPO": [
+      "prototype_temperature",
+      "prototype_logits_shift",
+      "scale",
+      "bias"
+    ],
+    "LRIO": [
+      "rank_logits",
+      "rank_logits_by_pair",
+      "interaction_temperature",
+      "interaction_temperature_by_pair",
+      "scale",
+      "bias"
+    ],
+    "TANSO": [
+      "audio_shift_scale",
+      "vision_shift_scale",
+      "shift_temperature",
+      "audio_lag_logits",
+      "vision_lag_logits",
+      "lag_width",
+      "temporal_temperature",
+      "scale",
+      "bias"
+    ],
+    "CATO": [
+      "alignment_temperature",
+      "transport_scale",
+      "scale",
+      "bias"
+    ]
   }
 }

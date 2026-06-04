@@ -169,6 +169,7 @@ class MultimodalOVHA(nn.Module):
             **memory_diagnostics,
             "operator_admission_gate": operator_admission_gate["diagnostics"],
             "candidate_diagnostics": _candidate_diagnostics(candidate_outputs, reliability),
+            "public_residual_oracles": _public_residual_oracle_contract(candidate_outputs, self.composition),
             "stackability_passed": True,
             "reliability": reliability.diagnostics if reliability is not None else {},
             "router_override": {
@@ -517,6 +518,28 @@ def _candidate_diagnostics(
         diagnostics[name] = values
     diagnostics["RCEO"] = dict(reliability.diagnostics) if reliability is not None else {}
     return diagnostics
+
+
+def _public_residual_oracle_contract(
+    candidate_outputs: dict[str, CandidateOutput],
+    composition: dict[str, Any],
+) -> dict[str, Any]:
+    residual_candidates = tuple(composition.get("residual_candidates", ()))
+    source_oracle_alpha: dict[str, Any] = {}
+    if "TANSO" in candidate_outputs:
+        source_oracle_alpha["TANSO"] = {
+            "computed_in": "public_loss_or_evaluator_layer",
+            "uses_target_in_model_forward": False,
+            "sources": tuple(candidate_outputs["TANSO"].diagnostics.get("source_gate_tensor", {}).keys()),
+        }
+    return {
+        "residual_candidates": residual_candidates,
+        "residual_oracle_alpha": {
+            candidate: "computed_in_public_loss_or_evaluator_layer"
+            for candidate in residual_candidates
+        },
+        "source_oracle_alpha": source_oracle_alpha,
+    }
 
 
 def _candidate_value_stats(candidate_values: torch.Tensor, candidate_names: tuple[str, ...]) -> dict[str, dict[str, torch.Tensor]]:
