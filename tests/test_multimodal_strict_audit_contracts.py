@@ -58,6 +58,39 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertIn("vision_shift_load", tanso.diagnostics)
         self.assertNotIn("shift_direction_alignment", tanso.diagnostics)
 
+    def test_tanso_v2_exposes_text_token_temporal_lag_and_source_oracle_diagnostics(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for TANSO tensor checks")
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(41)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=16,
+            memory_tokens=2,
+            candidate_names=("SPO", "LRIO", "TANSO"),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+            composition_mode="base_plus_residual",
+            base_candidate="SPO",
+            residual_candidates=("LRIO", "TANSO"),
+        )
+
+        output = model(_batch(torch))
+        tanso_diag = output.diagnostics["candidate_diagnostics"]["TANSO"]
+
+        self.assertEqual(tanso_diag["tanso_version"], "v2_temporal_lag_residual")
+        self.assertIn("text_token_anchor_count", tanso_diag)
+        self.assertIn("temporal_lag_hypotheses", tanso_diag)
+        self.assertIn("temporal_lag_load", tanso_diag)
+        self.assertIn("source_gate_tensor", tanso_diag)
+        self.assertIn("source_specific_raw_delta", tanso_diag)
+        self.assertIn("source_specific_temporal_entropy", tanso_diag)
+        self.assertIn("source_oracle_alpha", output.diagnostics["public_residual_oracles"])
+
     def test_tanso_text_pair_features_are_field_order_invariant(self):
         if not TORCH_AVAILABLE:
             self.skipTest("torch is required for TANSO tensor checks")
@@ -170,6 +203,34 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertFalse(payload["use_evidence_router"])
         self.assertNotIn("ovha_no_evidence_router", payload["baseline_names"])
         self.assertIn("ovha_with_evidence_router", payload["baseline_names"])
+
+    def test_cmu_public_main_declares_metric_aligned_pro_losses_and_calibration(self):
+        payload = json.loads((ROOT / "configs" / "multimodal_cmu_mosei_public_main.json").read_text())
+        t5_losses = payload["losses_by_stage"]["T5"]
+
+        self.assertIn("huber_l1_task_loss", t5_losses)
+        self.assertIn("ordinal_acc5_acc7_auxiliary", t5_losses)
+        self.assertIn("residual_oracle_gate_loss", t5_losses)
+        self.assertIn("tanso_source_oracle_gate_loss", t5_losses)
+        self.assertIn("val_affine_calibration", t5_losses)
+        self.assertGreater(payload["loss_metadata"]["huber_l1_task_loss"]["weight"], 0.0)
+        self.assertGreater(payload["loss_metadata"]["ordinal_acc5_acc7_auxiliary"]["weight"], 0.0)
+        self.assertEqual(payload["loss_metadata"]["val_affine_calibration"]["stage"], "validation_postfit")
+
+    def test_public_runner_implements_metric_aligned_losses_and_val_calibration(self):
+        runner = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()
+        smoke = (ROOT / "scripts" / "multimodal" / "run_public_smoke.py").read_text()
+
+        for token in (
+            "_huber_l1_task_loss",
+            "_ordinal_acc5_acc7_auxiliary_loss",
+            "_residual_oracle_gate_loss",
+            "_tanso_source_oracle_gate_loss",
+        ):
+            self.assertIn(token, smoke)
+        self.assertIn("_fit_affine_calibrator", runner)
+        self.assertIn("_apply_affine_calibration", runner)
+        self.assertIn("post_calibration_public_metrics", runner)
 
     def test_mosei_standard_metrics_match_mult_exclude_zero_binary_protocol(self):
         if not TORCH_AVAILABLE:
