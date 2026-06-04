@@ -217,19 +217,11 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertGreater(payload["loss_metadata"]["ordinal_acc5_acc7_auxiliary"]["weight"], 0.0)
         self.assertEqual(payload["loss_metadata"]["val_affine_calibration"]["stage"], "validation_postfit")
 
-    def test_cmu_public_main_declares_two_stage_residual_training_protocol(self):
+    def test_cmu_public_main_does_not_use_two_stage_residual_training_protocol(self):
         for config_name in ("multimodal_cmu_mosei_public_main.json", "multimodal_cmu_mosei_tanso_public_main.json"):
             with self.subTest(config_name=config_name):
                 payload = json.loads((ROOT / "configs" / config_name).read_text())
-                protocol = payload["residual_training_protocol"]
-
-                self.assertEqual(protocol["mode"], "two_stage_base_then_residual")
-                self.assertEqual(protocol["base_candidate"], "SPO")
-                self.assertEqual(protocol["residual_candidates"], ["LRIO", "TANSO"])
-                self.assertGreater(protocol["base_stage_fraction"], 0.0)
-                self.assertLess(protocol["base_stage_fraction"], 1.0)
-                self.assertTrue(protocol["freeze_base_candidate_during_residual_stage"])
-                self.assertTrue(protocol["freeze_shared_backbone_during_residual_stage"])
+                self.assertNotIn("residual_training_protocol", payload)
 
     def test_public_runner_implements_metric_aligned_losses_and_val_calibration(self):
         runner = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()
@@ -246,16 +238,14 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertIn("_apply_affine_calibration", runner)
         self.assertIn("post_calibration_public_metrics", runner)
 
-    def test_public_runner_implements_two_stage_residual_training_protocol(self):
+    def test_public_runner_does_not_implement_two_stage_residual_training_protocol(self):
         runner = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()
 
-        self.assertIn("_fit_two_stage_residual_model", runner)
-        self.assertIn("_set_two_stage_trainable_scope", runner)
-        self.assertIn("_base_stage_loss_components", runner)
-        self.assertIn('"base_pretrain"', runner)
-        self.assertIn('"residual_admission"', runner)
-        self.assertIn('"two_stage_base_then_residual"', runner)
-        self.assertIn('"freeze_shared_backbone_during_residual_stage"', runner)
+        self.assertNotIn("_fit_two_stage_residual_model", runner)
+        self.assertNotIn("_set_two_stage_trainable_scope", runner)
+        self.assertNotIn("_base_stage_loss_components", runner)
+        self.assertNotIn('"base_pretrain"', runner)
+        self.assertNotIn('"two_stage_base_then_residual"', runner)
 
     def test_mosei_standard_metrics_match_mult_exclude_zero_binary_protocol(self):
         if not TORCH_AVAILABLE:
@@ -811,6 +801,36 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertIn("raw_delta_by_candidate", output.diagnostics["composition"])
         self.assertIn("gated_delta_by_candidate", output.diagnostics["composition"])
         self.assertIn("ungated_corrected_candidate_values_by_candidate", output.diagnostics["composition"])
+
+    def test_lrio_residual_must_pass_utility_admission_before_contributing(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(46)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("SPO", "LRIO"),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+            composition_mode="base_plus_residual",
+            base_candidate="SPO",
+            residual_candidates=("LRIO",),
+        )
+        with torch.no_grad():
+            model.residual_gate_logit_bias["LRIO"].fill_(-20.0)
+            output = model(_batch(torch))
+
+        spo = output.candidate_outputs["SPO"].value
+        composition = output.diagnostics["composition"]
+
+        self.assertTrue(torch.allclose(output.y_hat, spo, atol=1e-7))
+        self.assertTrue(torch.allclose(composition["gated_delta_by_candidate"]["LRIO"], torch.zeros_like(spo), atol=1e-7))
+        self.assertEqual(float(composition["residual_utility_admission_by_candidate"]["LRIO"].detach()), 0.0)
+        self.assertEqual(float(composition["actual_contribution_norm_by_candidate"]["LRIO"].detach()), 0.0)
 
     def test_cmu_configs_disable_evidence_router_and_use_residual_composition(self):
         import json
