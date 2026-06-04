@@ -69,7 +69,7 @@ class MultimodalOVHA(nn.Module):
         )
         self.residual_gate_logit_bias = nn.ParameterDict(
             {
-                candidate: nn.Parameter(torch.full((), -3.0))
+                candidate: nn.Parameter(torch.full((), -1.0))
                 for candidate in self.composition["residual_candidates"]
             }
         )
@@ -345,9 +345,7 @@ def _compose_prediction(
             admission = torch.ones_like(raw_gate)
         else:
             admission = admission_gate[..., candidate_index : candidate_index + 1].to(dtype=raw_gate.dtype, device=raw_gate.device)
-        utility_hard_admission = (raw_gate >= RESIDUAL_UTILITY_ADMISSION_THRESHOLD).to(dtype=raw_gate.dtype)
-        utility_admission = utility_hard_admission.detach() - raw_gate.detach() + raw_gate
-        gate = raw_gate * admission * utility_admission
+        gate = raw_gate * admission
         gated_delta = gate * delta
         gated_corrected = base_value + gated_delta
         ungated_corrected = base_value + delta
@@ -361,7 +359,7 @@ def _compose_prediction(
         ungated_corrected_candidate_values_by_candidate[candidate] = ungated_corrected
         actual_contribution_norm_by_candidate[candidate] = gated_delta.norm(dim=-1).mean()
         residual_utility_score_by_candidate[candidate] = raw_gate.mean()
-        residual_utility_admission_by_candidate[candidate] = utility_hard_admission.mean()
+        residual_utility_admission_by_candidate[candidate] = admission.mean()
     base_index = candidate_names.index(base_candidate)
     corrected_values[..., base_index, :] = base_value
     return {

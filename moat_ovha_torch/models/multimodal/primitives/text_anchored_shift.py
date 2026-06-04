@@ -23,7 +23,7 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
         self.norm = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, output_dim)
         self.register_buffer("lag_hypotheses", torch.linspace(-0.4, 0.4, steps=5), persistent=False)
-        self._zero_initialize_residual_paths()
+        self._small_initialize_residual_paths()
 
     def forward(self, batch, memory_slot: torch.Tensor, evidence, params: dict[str, torch.Tensor], output_dim: int) -> CandidateOutput:
         text_tokens = evidence.field_features.get("text")
@@ -56,11 +56,14 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
         source_entropy = {}
         source_lag_load = {}
         source_specific_raw_delta = {}
+        source_valid_by_name = {}
         memory = self.memory_proj(memory_slot.mean(dim=1)).unsqueeze(1)
         for source in self.sources:
             tokens = evidence.field_features.get(source)
             if tokens is None or source not in batch.fields:
                 continue
+            source_valid = batch.fields[source].mask.to(dtype=torch.bool, device=tokens.device).any(dim=1)
+            source_valid_by_name[source] = source_valid
             if text_tokens is None:
                 attended, entropy, _ = _masked_attention_with_weights(
                     text_anchor,
@@ -89,19 +92,31 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
                     temperature=params.get("temporal_temperature", params["shift_temperature"]),
                 )
                 attended = torch.matmul(text_weights.to(dtype=attended_by_text.dtype, device=attended_by_text.device), attended_by_text)
+            source_valid_f = source_valid.to(dtype=attended.dtype, device=attended.device).view(-1, 1, 1)
+            attended = attended * source_valid_f
             source_input = torch.cat([evidence.query_features, text_anchor, attended], dim=-1)
             scale = params.get(f"{source}_shift_scale", torch.ones_like(params["scale"]))
-            shift = self.source_shift[source](source_input) * scale
+            shift = self.source_shift[source](source_input) * scale * source_valid_f
+            raw_delta = self.head(self.norm(shift + memory)) * source_valid_f
             source_shifts.append(shift)
             source_gate_logits.append(self.source_gate[source](source_input))
             source_names.append(source)
             source_entropy[source] = entropy
             source_lag_load[source] = lag_load
-            source_specific_raw_delta[source] = self.head(self.norm(shift + memory))
+            source_specific_raw_delta[source] = raw_delta
 
         if source_shifts:
             shift_stack = torch.stack(source_shifts, dim=-2)
-            gate = torch.softmax(torch.cat(source_gate_logits, dim=-1), dim=-1).unsqueeze(-1)
+            valid_stack = torch.stack(
+                [source_valid_by_name[source] for source in source_names],
+                dim=-1,
+            )[:, None, :]
+            gate_logits = torch.cat(source_gate_logits, dim=-1)
+            gate_logits = gate_logits.masked_fill(~valid_stack, torch.finfo(gate_logits.dtype).min)
+            gate = torch.softmax(gate_logits, dim=-1)
+            gate = torch.where(valid_stack, gate, torch.zeros_like(gate))
+            gate = gate / gate.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+            gate = gate.unsqueeze(-1)
             shift_feature = (gate * shift_stack).sum(dim=-2)
             source_load = {source: gate[..., index, :].mean() for index, source in enumerate(source_names)}
             source_gate_tensor = {source: gate[..., index, 0] for index, source in enumerate(source_names)}
@@ -110,8 +125,10 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
             source_load = {}
             source_gate_tensor = {}
 
+        valid_source_count = _valid_source_count_by_sample(source_valid_by_name, value_reference=evidence.query_features)
+        has_valid_source = (valid_source_count > 0).to(dtype=evidence.query_features.dtype, device=evidence.query_features.device).view(-1, 1, 1)
         feature = self.norm(shift_feature + memory)
-        value = apply_scale_bias(self.head(feature), params)
+        value = apply_scale_bias(self.head(feature), params) * has_valid_source
         diagnostics = {
             "candidate": self.name,
             "tanso_version": "v2_temporal_lag_residual",
@@ -122,7 +139,7 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
             "shift_magnitude": shift_feature.norm(dim=-1).mean(),
             "audio_shift_load": source_load.get("audio", torch.zeros((), dtype=value.dtype, device=value.device)),
             "vision_shift_load": source_load.get("vision", torch.zeros((), dtype=value.dtype, device=value.device)),
-            "nonverbal_source_count": torch.as_tensor(float(len(source_names)), dtype=value.dtype, device=value.device),
+            "nonverbal_source_count": valid_source_count.mean(),
             "source_gate_tensor": source_gate_tensor,
             "source_specific_raw_delta": source_specific_raw_delta,
             "source_specific_temporal_entropy": source_entropy,
@@ -130,12 +147,21 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
         }
         return CandidateOutput(value=value, feature=feature, diagnostics=diagnostics)
 
-    def _zero_initialize_residual_paths(self) -> None:
+    def _small_initialize_residual_paths(self) -> None:
         for source_shift in self.source_shift.values():
-            nn.init.zeros_(source_shift.weight)
+            nn.init.normal_(source_shift.weight, mean=0.0, std=1e-3)
             nn.init.zeros_(source_shift.bias)
-        nn.init.zeros_(self.head.weight)
+        nn.init.normal_(self.head.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(self.head.bias)
+
+
+def _valid_source_count_by_sample(source_valid_by_name: dict[str, torch.Tensor], value_reference: torch.Tensor) -> torch.Tensor:
+    if not source_valid_by_name:
+        return torch.zeros(value_reference.shape[0], dtype=value_reference.dtype, device=value_reference.device)
+    return torch.stack(
+        [valid.to(dtype=value_reference.dtype, device=value_reference.device) for valid in source_valid_by_name.values()],
+        dim=-1,
+    ).sum(dim=-1)
 
 
 def _masked_attention_with_weights(

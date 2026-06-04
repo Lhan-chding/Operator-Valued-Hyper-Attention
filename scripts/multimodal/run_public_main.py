@@ -1015,11 +1015,86 @@ def _destandardize_output(
     target_mean: torch.Tensor,
     target_std: torch.Tensor,
 ) -> MultimodalOVHAOutput:
+    return _transform_ovha_output_target_space(
+        output,
+        prediction_transform=lambda value: value * target_std + target_mean,
+        delta_transform=lambda value: value * target_std,
+        target_space={
+            "prediction": "raw",
+            "candidate_values": "raw",
+            "candidate_outputs": "raw_prediction_or_delta",
+            "residual_delta": "raw_delta",
+        },
+    )
+
+
+def _transform_ovha_output_target_space(
+    output: MultimodalOVHAOutput,
+    *,
+    prediction_transform: Any,
+    delta_transform: Any,
+    target_space: dict[str, Any],
+) -> MultimodalOVHAOutput:
+    composition = output.diagnostics.get("composition", {}) if isinstance(output.diagnostics, dict) else {}
+    mode = composition.get("mode")
+    base_candidate = str(composition.get("base_candidate", ""))
+    residual_candidates = {str(name) for name in composition.get("residual_candidates", ())}
+    transformed_candidate_outputs = {
+        name: replace(
+            candidate_output,
+            value=(
+                delta_transform(candidate_output.value)
+                if mode == "base_plus_residual" and name in residual_candidates and name != base_candidate
+                else prediction_transform(candidate_output.value)
+            ),
+        )
+        for name, candidate_output in output.candidate_outputs.items()
+    }
+    transformed_composition = _transform_composition_target_space(
+        composition,
+        prediction_transform=prediction_transform,
+        delta_transform=delta_transform,
+    )
+    diagnostics = {
+        **output.diagnostics,
+        "composition": transformed_composition,
+        "target_space": {
+            **output.diagnostics.get("target_space", {}),
+            **target_space,
+        },
+    }
     return replace(
         output,
-        y_hat=output.y_hat * target_std + target_mean,
-        candidate_values=output.candidate_values * target_std.unsqueeze(-2) + target_mean.unsqueeze(-2),
+        y_hat=prediction_transform(output.y_hat),
+        candidate_values=prediction_transform(output.candidate_values),
+        candidate_outputs=transformed_candidate_outputs,
+        diagnostics=diagnostics,
     )
+
+
+def _transform_composition_target_space(
+    composition: Any,
+    *,
+    prediction_transform: Any,
+    delta_transform: Any,
+) -> Any:
+    if not isinstance(composition, dict):
+        return composition
+    transformed = dict(composition)
+    for key in ("raw_delta_by_candidate", "gated_delta_by_candidate"):
+        transformed[key] = _transform_tensor_dict(transformed.get(key), delta_transform)
+    for key in ("gated_corrected_candidate_values_by_candidate", "ungated_corrected_candidate_values_by_candidate"):
+        transformed[key] = _transform_tensor_dict(transformed.get(key), prediction_transform)
+    return transformed
+
+
+def _transform_tensor_dict(values: Any, transform: Any) -> Any:
+    if not isinstance(values, dict):
+        return values
+    return {
+        key: transform(value) if hasattr(value, "shape") else value
+        for key, value in values.items()
+    }
 
 
 def _with_raw_space_candidate_diagnostics(
@@ -1154,9 +1229,28 @@ def _apply_affine_calibration(
     batch: MultimodalEpisodeBatch,
 ) -> MultimodalOVHAOutput:
     pre_prediction = output.y_hat
-    post_prediction = _apply_affine_calibration_to_prediction(pre_prediction, calibrator)
+    scale = float(calibrator.get("a", 1.0))
+    offset = float(calibrator.get("b", 0.0))
+    calibrated_output = _transform_ovha_output_target_space(
+        output,
+        prediction_transform=lambda value: scale * value + offset,
+        delta_transform=lambda value: scale * value,
+        target_space={
+            "prediction": "raw_calibrated",
+            "candidate_values": "raw_calibrated",
+            "candidate_outputs": "raw_calibrated_prediction_or_delta",
+            "residual_delta": "raw_calibrated_delta",
+        },
+    )
+    post_prediction = calibrated_output.y_hat
+    candidate_names = tuple(calibrated_output.candidate_outputs)
+    candidate_loss = _candidate_losses_from_values(calibrated_output.candidate_values, candidate_names, batch)
     diagnostics = {
-        **output.diagnostics,
+        **calibrated_output.diagnostics,
+        "pre_calibration_candidate_loss": output.diagnostics.get("candidate_loss", {}),
+        "candidate_loss": candidate_loss,
+        "raw_calibrated_candidate_loss": candidate_loss,
+        "raw_calibrated_candidate_value_stats": _candidate_value_stats_from_values(calibrated_output.candidate_values, candidate_names),
         **_affine_calibration_diagnostics(
             config,
             batch,
@@ -1165,7 +1259,14 @@ def _apply_affine_calibration(
             calibrator=calibrator,
         ),
     }
-    return replace(output, y_hat=post_prediction, diagnostics=diagnostics)
+    if "candidate_loss_by_sample" in output.diagnostics:
+        diagnostics["pre_calibration_candidate_loss_by_sample"] = output.diagnostics["candidate_loss_by_sample"]
+        diagnostics["candidate_loss_by_sample"] = _candidate_losses_by_sample_from_values(
+            calibrated_output.candidate_values,
+            candidate_names,
+            batch,
+        )
+    return replace(calibrated_output, diagnostics=diagnostics)
 
 
 def _apply_affine_calibration_to_prediction(
@@ -1256,6 +1357,7 @@ def _per_sample_prediction_rows(
     mask = batch.target_mask.detach().cpu()
     rows: list[dict[str, Any]] = []
     composition = output.diagnostics.get("composition", {}) if output is not None and isinstance(output.diagnostics, dict) else {}
+    output_target_space = output.diagnostics.get("target_space", {}) if output is not None and isinstance(output.diagnostics, dict) else {}
     base_candidate = str(composition.get("base_candidate", ""))
     base_prediction = None
     prediction_by_candidate: dict[str, torch.Tensor] = {}
@@ -1289,6 +1391,7 @@ def _per_sample_prediction_rows(
                 for name, value in prediction_by_candidate.items()
                 if value.shape[0] > index
             },
+            "target_space": _per_sample_target_space(output_target_space, output is not None),
             "base_candidate": base_candidate or None,
             "base_prediction": _tensor_payload(base_prediction[index]) if base_prediction is not None and base_prediction.shape[0] > index else None,
             "raw_delta_by_candidate": _indexed_tensor_map(raw_delta, index),
@@ -1297,6 +1400,24 @@ def _per_sample_prediction_rows(
         }
         rows.append(row)
     return rows
+
+
+def _per_sample_target_space(target_space: Any, has_ovha_output: bool) -> dict[str, str]:
+    if isinstance(target_space, dict) and target_space:
+        prediction_space = str(target_space.get("prediction", "model_output"))
+        residual_delta_space = str(target_space.get("residual_delta", "model_output_delta"))
+        candidate_space = str(target_space.get("candidate_outputs", target_space.get("candidate_values", prediction_space)))
+    else:
+        prediction_space = "model_output" if has_ovha_output else "raw_calibrated"
+        residual_delta_space = "model_output_delta" if has_ovha_output else "not_applicable"
+        candidate_space = prediction_space
+    return {
+        "prediction_full": prediction_space,
+        "prediction_by_candidate": candidate_space,
+        "base_prediction": prediction_space,
+        "raw_delta_by_candidate": residual_delta_space,
+        "gated_delta_by_candidate": residual_delta_space,
+    }
 
 
 def _sample_tensor_map(values: Any) -> dict[str, torch.Tensor]:

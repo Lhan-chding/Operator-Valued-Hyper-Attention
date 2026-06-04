@@ -638,28 +638,24 @@ def _residual_gate_utility_loss(
     overlap_weight: float = 0.01,
 ) -> torch.Tensor:
     composition = output.diagnostics.get("composition", {})
-    gated_delta = composition.get("gated_delta_by_candidate", {})
+    raw_delta = composition.get("raw_delta_by_candidate", {})
     gate = composition.get("residual_gate_tensor_by_candidate", {})
-    if not isinstance(gated_delta, dict) or not isinstance(gate, dict):
+    base_candidate = composition.get("base_candidate")
+    if base_candidate not in output.candidate_outputs:
         return output.y_hat.sum() * 0.0
-    target = batch.target_y.to(dtype=output.y_hat.dtype, device=output.y_hat.device)
+    if not isinstance(raw_delta, dict) or not isinstance(gate, dict):
+        return output.y_hat.sum() * 0.0
     mask = batch.target_mask.to(dtype=output.y_hat.dtype, device=output.y_hat.device).unsqueeze(-1)
-    full_error = (output.y_hat - target).square()
+    base = output.candidate_outputs[str(base_candidate)].value.to(dtype=output.y_hat.dtype, device=output.y_hat.device)
     losses = []
     gate_values = []
-    for candidate, delta in gated_delta.items():
+    for candidate, delta in raw_delta.items():
         candidate_gate = gate.get(candidate)
         if not hasattr(delta, "to") or not hasattr(candidate_gate, "to"):
             continue
         delta = delta.to(dtype=output.y_hat.dtype, device=output.y_hat.device)
         candidate_gate = candidate_gate.to(dtype=output.y_hat.dtype, device=output.y_hat.device)
-        without_error = (output.y_hat - delta - target).square()
-        utility = ((without_error - full_error) * mask).detach()
-        target_gate = torch.where(
-            utility > 0.0,
-            torch.sigmoid(utility / max(float(tau), 1e-6)),
-            torch.zeros_like(utility),
-        )
+        target_gate = _residual_oracle_alpha(base, delta, batch).detach()
         if target_gate.shape != candidate_gate.shape:
             target_gate = target_gate.mean(dim=-1, keepdim=True)
         losses.append(
@@ -1794,6 +1790,7 @@ def _public_smoke_metrics(
     if config.task_type not in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
         if config.task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
             return _sentiment_smoke_metrics(
+                config,
                 batch,
                 prediction=prediction,
                 router_load_by_candidate=router_load_by_candidate,
@@ -1914,6 +1911,7 @@ def _null_unmatched_rate(batch: MultimodalEpisodeBatch) -> float:
 
 
 def _sentiment_smoke_metrics(
+    config: MultimodalExperimentConfig,
     batch: MultimodalEpisodeBatch,
     *,
     prediction: torch.Tensor,

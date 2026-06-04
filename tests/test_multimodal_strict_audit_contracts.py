@@ -198,7 +198,45 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
 
         self.assertTrue(torch.allclose(tanso_diag["source_gate_tensor"]["audio"][0], torch.zeros_like(tanso_diag["source_gate_tensor"]["audio"][0]), atol=1e-7))
         self.assertTrue(torch.allclose(tanso_diag["source_specific_raw_delta"]["audio"][0], torch.zeros_like(tanso_diag["source_specific_raw_delta"]["audio"][0]), atol=1e-7))
-        self.assertGreater(float(tanso_diag["source_gate_tensor"]["vision"][0].max()), 0.0)
+        self.assertGreater(float(tanso_diag["source_gate_tensor"]["vision"][0].max().detach()), 0.0)
+
+    def test_tanso_zeroes_sample_with_all_nonverbal_sources_masked(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for TANSO tensor checks")
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(54)
+        base = _batch(torch)
+        audio = replace(base.fields["audio"], mask=base.fields["audio"].mask.clone())
+        vision = replace(base.fields["vision"], mask=base.fields["vision"].mask.clone())
+        audio.mask[0] = False
+        vision.mask[0] = False
+        batch = replace(base, fields={**base.fields, "audio": audio, "vision": vision})
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("SPO", "TANSO"),
+            composition_mode="base_plus_residual",
+            base_candidate="SPO",
+            residual_candidates=("TANSO",),
+        )
+        tanso = model.candidate_primitives["TANSO"]
+        with torch.no_grad():
+            for layer in tanso.source_shift.values():
+                layer.weight.normal_(mean=0.0, std=0.02)
+                layer.bias.fill_(0.01)
+            tanso.head.weight.normal_(mean=0.0, std=0.02)
+            tanso.head.bias.fill_(0.01)
+
+        output = model(batch)
+
+        self.assertTrue(torch.allclose(output.candidate_outputs["TANSO"].value[0], torch.zeros_like(output.candidate_outputs["TANSO"].value[0]), atol=1e-7))
+        self.assertGreater(float(output.candidate_outputs["TANSO"].value[1].abs().max().detach()), 0.0)
 
     def test_model_forward_outputs_and_diagnostics_do_not_depend_on_target_y(self):
         if not TORCH_AVAILABLE:
@@ -863,7 +901,7 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertIn("gated_delta_by_candidate", output.diagnostics["composition"])
         self.assertIn("ungated_corrected_candidate_values_by_candidate", output.diagnostics["composition"])
 
-    def test_lrio_residual_must_pass_utility_admission_before_contributing(self):
+    def test_lrio_residual_low_soft_gate_has_near_zero_contribution(self):
         import torch
 
         from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
@@ -888,10 +926,11 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         spo = output.candidate_outputs["SPO"].value
         composition = output.diagnostics["composition"]
 
-        self.assertTrue(torch.allclose(output.y_hat, spo, atol=1e-7))
-        self.assertTrue(torch.allclose(composition["gated_delta_by_candidate"]["LRIO"], torch.zeros_like(spo), atol=1e-7))
-        self.assertEqual(float(composition["residual_utility_admission_by_candidate"]["LRIO"].detach()), 0.0)
-        self.assertEqual(float(composition["actual_contribution_norm_by_candidate"]["LRIO"].detach()), 0.0)
+        self.assertTrue(torch.allclose(output.y_hat, spo, atol=1e-6))
+        self.assertLess(float(composition["residual_gate_by_candidate"]["LRIO"].detach()), 1e-6)
+        self.assertLess(float(composition["gated_delta_by_candidate"]["LRIO"].abs().max().detach()), 1e-6)
+        self.assertEqual(float(composition["residual_utility_admission_by_candidate"]["LRIO"].detach()), 1.0)
+        self.assertLess(float(composition["actual_contribution_norm_by_candidate"]["LRIO"].detach()), 1e-6)
 
     def test_cmu_configs_disable_evidence_router_and_use_residual_composition(self):
         import json
@@ -1072,8 +1111,8 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertIn("residual_gate_by_candidate", row)
         self.assertIn("LRIO", row["raw_delta_by_candidate"])
         self.assertIn("TANSO", row["raw_delta_by_candidate"])
-        self.assertEqual(row["target_space"]["prediction_full"], "raw_calibrated")
-        self.assertEqual(row["target_space"]["raw_delta_by_candidate"], "raw_calibrated_delta")
+        self.assertEqual(row["target_space"]["prediction_full"], "model_output")
+        self.assertEqual(row["target_space"]["raw_delta_by_candidate"], "model_output_delta")
 
     def test_destandardize_and_calibration_sync_candidate_and_residual_spaces(self):
         import torch

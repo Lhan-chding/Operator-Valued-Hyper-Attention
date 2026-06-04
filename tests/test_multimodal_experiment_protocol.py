@@ -1549,7 +1549,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("clean", smoke_raw["public_metrics"]["router_load_by_corruption_type"])
         self.assertEqual(
             set(smoke_raw["public_metrics"]["router_load_by_corruption_type"]["clean"]),
-            {"TLEO", "SPO", "LRIO", "CATO"},
+            set(json.loads((ROOT / "configs" / "multimodal_cmu_mosei_public_smoke.json").read_text())["candidate_names"]),
         )
         self.assertGreaterEqual(smoke_raw["public_metrics"]["rceo_reliability_calibration"]["bin_count"], 1)
         self.assertEqual(len(smoke_baseline_rows), len(payload["baselines"]))
