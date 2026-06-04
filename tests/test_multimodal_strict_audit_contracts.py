@@ -162,6 +162,44 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertTrue(torch.allclose(output.y_hat, spo, atol=1e-7))
         self.assertTrue(torch.allclose(output.diagnostics["composition"]["residual_gate_tensor_by_candidate"]["TANSO"], torch.zeros_like(spo), atol=1e-7))
 
+    def test_tanso_masks_all_missing_source_per_sample(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for TANSO tensor checks")
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(53)
+        base = _batch(torch)
+        audio = replace(base.fields["audio"], mask=base.fields["audio"].mask.clone())
+        audio.mask[0] = False
+        batch = replace(base, fields={**base.fields, "audio": audio})
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("SPO", "TANSO"),
+            composition_mode="base_plus_residual",
+            base_candidate="SPO",
+            residual_candidates=("TANSO",),
+        )
+        tanso = model.candidate_primitives["TANSO"]
+        with torch.no_grad():
+            for layer in tanso.source_shift.values():
+                layer.weight.normal_(mean=0.0, std=0.02)
+                layer.bias.fill_(0.01)
+            tanso.head.weight.normal_(mean=0.0, std=0.02)
+            tanso.head.bias.fill_(0.01)
+
+        output = model(batch)
+        tanso_diag = output.diagnostics["candidate_diagnostics"]["TANSO"]
+
+        self.assertTrue(torch.allclose(tanso_diag["source_gate_tensor"]["audio"][0], torch.zeros_like(tanso_diag["source_gate_tensor"]["audio"][0]), atol=1e-7))
+        self.assertTrue(torch.allclose(tanso_diag["source_specific_raw_delta"]["audio"][0], torch.zeros_like(tanso_diag["source_specific_raw_delta"]["audio"][0]), atol=1e-7))
+        self.assertGreater(float(tanso_diag["source_gate_tensor"]["vision"][0].max()), 0.0)
+
     def test_model_forward_outputs_and_diagnostics_do_not_depend_on_target_y(self):
         if not TORCH_AVAILABLE:
             self.skipTest("torch is required for target isolation checks")
@@ -1034,6 +1072,57 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertIn("residual_gate_by_candidate", row)
         self.assertIn("LRIO", row["raw_delta_by_candidate"])
         self.assertIn("TANSO", row["raw_delta_by_candidate"])
+        self.assertEqual(row["target_space"]["prediction_full"], "raw_calibrated")
+        self.assertEqual(row["target_space"]["raw_delta_by_candidate"], "raw_calibrated_delta")
+
+    def test_destandardize_and_calibration_sync_candidate_and_residual_spaces(self):
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHAOutput
+        from moat_ovha_torch.models.multimodal.primitives.base import CandidateOutput
+        from scripts.multimodal.run_public_main import _apply_affine_calibration, _destandardize_output
+
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_main.json")
+        batch = _batch(torch)
+        base = torch.ones(3, 2, 1)
+        delta = torch.full((3, 2, 1), 2.0)
+        output = MultimodalOVHAOutput(
+            y_hat=base + delta,
+            candidate_values=torch.stack([base, base + delta], dim=-2),
+            router_weights=torch.full((3, 2, 2), 0.5),
+            router_logits=torch.zeros(3, 2, 2),
+            router_logit_parts={},
+            candidate_outputs={
+                "SPO": CandidateOutput(value=base, feature=torch.zeros(3, 2, 4), diagnostics={}),
+                "LRIO": CandidateOutput(value=delta, feature=torch.zeros(3, 2, 4), diagnostics={}),
+            },
+            reliability_prior=None,
+            diagnostics={
+                "composition": {
+                    "mode": "base_plus_residual",
+                    "base_candidate": "SPO",
+                    "residual_candidates": ("LRIO",),
+                    "raw_delta_by_candidate": {"LRIO": delta},
+                    "gated_delta_by_candidate": {"LRIO": delta * 0.25},
+                    "gated_corrected_candidate_values_by_candidate": {"LRIO": base + delta * 0.25},
+                    "ungated_corrected_candidate_values_by_candidate": {"LRIO": base + delta},
+                    "residual_gate_tensor_by_candidate": {"LRIO": torch.full((3, 2, 1), 0.25)},
+                }
+            },
+        )
+
+        destandardized = _destandardize_output(output, torch.tensor([[[10.0]]]), torch.tensor([[[3.0]]]))
+        self.assertTrue(torch.allclose(destandardized.candidate_outputs["SPO"].value, torch.full((3, 2, 1), 13.0)))
+        self.assertTrue(torch.allclose(destandardized.diagnostics["composition"]["raw_delta_by_candidate"]["LRIO"], torch.full((3, 2, 1), 6.0)))
+        self.assertTrue(torch.allclose(destandardized.diagnostics["composition"]["ungated_corrected_candidate_values_by_candidate"]["LRIO"], torch.full((3, 2, 1), 19.0)))
+
+        calibrated = _apply_affine_calibration(destandardized, {"a": 2.0, "b": 5.0}, config, batch)
+        self.assertTrue(torch.allclose(calibrated.candidate_outputs["SPO"].value, torch.full((3, 2, 1), 31.0)))
+        self.assertTrue(torch.allclose(calibrated.diagnostics["composition"]["raw_delta_by_candidate"]["LRIO"], torch.full((3, 2, 1), 12.0)))
+        self.assertTrue(torch.allclose(calibrated.diagnostics["composition"]["ungated_corrected_candidate_values_by_candidate"]["LRIO"], torch.full((3, 2, 1), 43.0)))
+        self.assertEqual(calibrated.diagnostics["target_space"]["prediction"], "raw_calibrated")
+        self.assertEqual(calibrated.diagnostics["target_space"]["residual_delta"], "raw_calibrated_delta")
 
     def test_router_marginal_utility_uses_per_sample_candidate_losses(self):
         import torch
@@ -1106,6 +1195,79 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
             float(_router_marginal_utility_loss(aligned, batch).detach()),
             float(_router_marginal_utility_loss(uniform, batch).detach()),
         )
+
+    def test_residual_gate_utility_loss_uses_base_plus_raw_delta_oracle(self):
+        import torch
+        from types import SimpleNamespace
+
+        from scripts.multimodal.run_public_smoke import _residual_gate_utility_loss
+
+        batch = SimpleNamespace(
+            target_y=torch.tensor([[[1.0], [0.0]]]),
+            target_mask=torch.ones(1, 2, dtype=torch.bool),
+        )
+        base = torch.zeros(1, 2, 1)
+        delta = torch.ones(1, 2, 1)
+
+        def output_with_gate(gate):
+            return SimpleNamespace(
+                y_hat=base + gate * delta,
+                candidate_outputs={
+                    "SPO": SimpleNamespace(value=base),
+                    "LRIO": SimpleNamespace(value=delta),
+                },
+                diagnostics={
+                    "composition": {
+                        "mode": "base_plus_residual",
+                        "base_candidate": "SPO",
+                        "raw_delta_by_candidate": {"LRIO": delta},
+                        "residual_gate_tensor_by_candidate": {"LRIO": gate},
+                    }
+                },
+            )
+
+        aligned = output_with_gate(torch.tensor([[[0.99], [0.01]]]))
+        uniform = output_with_gate(torch.full((1, 2, 1), 0.5))
+
+        self.assertLess(
+            float(_residual_gate_utility_loss(aligned, batch, sparse_weight=0.0, overlap_weight=0.0).detach()),
+            float(_residual_gate_utility_loss(uniform, batch, sparse_weight=0.0, overlap_weight=0.0).detach()),
+        )
+
+    def test_base_plus_residual_low_gate_keeps_soft_training_contribution(self):
+        import torch
+        from types import SimpleNamespace
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import _compose_prediction
+
+        base = torch.zeros(1, 1, 1)
+        delta = torch.ones(1, 1, 1)
+        candidate_outputs = {
+            "SPO": SimpleNamespace(value=base),
+            "LRIO": SimpleNamespace(value=delta),
+        }
+        raw_candidate_values = torch.stack([base, delta], dim=-2)
+        router_logits = torch.tensor([[[0.0, -3.0]]])
+        router_weights = torch.tensor([[[0.95, 0.05]]])
+
+        composed = _compose_prediction(
+            candidate_outputs=candidate_outputs,
+            raw_candidate_values=raw_candidate_values,
+            router_logits=router_logits,
+            router_weights=router_weights,
+            candidate_names=("SPO", "LRIO"),
+            composition={
+                "mode": "base_plus_residual",
+                "base_candidate": "SPO",
+                "residual_candidates": ("LRIO",),
+            },
+            admission_gate=torch.ones(1, 1, 2),
+            residual_gate_logit_bias={},
+        )
+
+        self.assertGreater(float(composed["y_hat"].abs().max()), 0.0)
+        self.assertGreater(float(composed["diagnostics"]["residual_gate_by_candidate"]["LRIO"]), 0.0)
+        self.assertLess(float(composed["diagnostics"]["residual_gate_by_candidate"]["LRIO"]), 0.5)
 
     def test_operator_admission_and_memory_differentiation_diagnostics(self):
         import torch
