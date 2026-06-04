@@ -216,6 +216,8 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertGreater(payload["loss_metadata"]["huber_l1_task_loss"]["weight"], 0.0)
         self.assertGreater(payload["loss_metadata"]["ordinal_acc5_acc7_auxiliary"]["weight"], 0.0)
         self.assertEqual(payload["loss_metadata"]["val_affine_calibration"]["stage"], "validation_postfit")
+        protocol = (ROOT / "moat_ovha_torch" / "train" / "multimodal_protocol.py").read_text()
+        self.assertIn('"residual_gate_utility_loss"', protocol)
 
     def test_cmu_public_main_does_not_use_two_stage_residual_training_protocol(self):
         for config_name in ("multimodal_cmu_mosei_public_main.json", "multimodal_cmu_mosei_tanso_public_main.json"):
