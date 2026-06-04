@@ -247,6 +247,14 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertNotIn('"base_pretrain"', runner)
         self.assertNotIn('"two_stage_base_then_residual"', runner)
 
+    def test_public_runner_batches_final_ovha_inference_to_avoid_tanso_eval_oom(self):
+        runner = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()
+
+        self.assertIn("_predict_ovha_on_device", runner)
+        self.assertIn("inference_batch_size", runner)
+        self.assertNotIn("eval_batch_std_device = _move_batch_to_device(eval_batch_std, device)", runner)
+        self.assertNotIn("model(eval_batch_std_device)", runner)
+
     def test_mosei_standard_metrics_match_mult_exclude_zero_binary_protocol(self):
         if not TORCH_AVAILABLE:
             self.skipTest("torch is required for MOSEI metric tensor checks")
