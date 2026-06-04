@@ -217,6 +217,18 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertGreater(payload["loss_metadata"]["ordinal_acc5_acc7_auxiliary"]["weight"], 0.0)
         self.assertEqual(payload["loss_metadata"]["val_affine_calibration"]["stage"], "validation_postfit")
 
+    def test_cmu_public_main_declares_two_stage_residual_training_protocol(self):
+        payload = json.loads((ROOT / "configs" / "multimodal_cmu_mosei_public_main.json").read_text())
+        protocol = payload["residual_training_protocol"]
+
+        self.assertEqual(protocol["mode"], "two_stage_base_then_residual")
+        self.assertEqual(protocol["base_candidate"], "SPO")
+        self.assertEqual(protocol["residual_candidates"], ["LRIO", "TANSO"])
+        self.assertGreater(protocol["base_stage_fraction"], 0.0)
+        self.assertLess(protocol["base_stage_fraction"], 1.0)
+        self.assertTrue(protocol["freeze_base_candidate_during_residual_stage"])
+        self.assertTrue(protocol["freeze_shared_backbone_during_residual_stage"])
+
     def test_public_runner_implements_metric_aligned_losses_and_val_calibration(self):
         runner = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()
         smoke = (ROOT / "scripts" / "multimodal" / "run_public_smoke.py").read_text()
@@ -231,6 +243,17 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertIn("_fit_affine_calibrator", runner)
         self.assertIn("_apply_affine_calibration", runner)
         self.assertIn("post_calibration_public_metrics", runner)
+
+    def test_public_runner_implements_two_stage_residual_training_protocol(self):
+        runner = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()
+
+        self.assertIn("_fit_two_stage_residual_model", runner)
+        self.assertIn("_set_two_stage_trainable_scope", runner)
+        self.assertIn("_base_stage_loss_components", runner)
+        self.assertIn('"base_pretrain"', runner)
+        self.assertIn('"residual_admission"', runner)
+        self.assertIn('"two_stage_base_then_residual"', runner)
+        self.assertIn('"freeze_shared_backbone_during_residual_stage"', runner)
 
     def test_mosei_standard_metrics_match_mult_exclude_zero_binary_protocol(self):
         if not TORCH_AVAILABLE:
