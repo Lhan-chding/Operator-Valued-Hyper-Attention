@@ -11,12 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MultimodalStrictAuditStaticContracts(unittest.TestCase):
-    def test_cmu_public_configs_use_task_aware_spo_lrio_bank(self):
+    def test_cmu_public_configs_use_task_aware_spo_lrio_tanso_bank(self):
         for name in ("multimodal_cmu_mosei_public_main.json", "multimodal_cmu_mosei_public_smoke.json"):
             with self.subTest(config=name):
                 payload = json.loads((ROOT / "configs" / name).read_text())
 
-                self.assertEqual(payload["candidate_names"], ["SPO", "LRIO"])
+                self.assertEqual(payload["candidate_names"], ["SPO", "LRIO", "TANSO"])
+                self.assertEqual(payload["residual_candidates"], ["LRIO", "TANSO"])
                 self.assertEqual(
                     payload["lrio_pairs"],
                     [["text", "audio"], ["text", "vision"]],
@@ -49,7 +50,7 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
 
         self.assertEqual(tuple(output.y_hat.shape), (3, 2, 1))
         self.assertEqual(tuple(output.candidate_values.shape), (3, 2, 3, 1))
-        self.assertIn("TANSO", output.diagnostics["candidate_loss"])
+        self.assertNotIn("candidate_loss", output.diagnostics)
         self.assertIn("TANSO", output.diagnostics["composition"]["residual_gate_by_candidate"])
         self.assertEqual(tuple(tanso.value.shape), (3, 2, 1))
         self.assertGreaterEqual(float(tanso.diagnostics["shift_magnitude"].detach().cpu()), 0.0)
@@ -715,7 +716,7 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
 
         spo = output.candidate_outputs["SPO"].value
         lrio_delta = output.candidate_outputs["LRIO"].value
-        lrio_gate = torch.sigmoid(output.router_logits[..., 1:2])
+        lrio_gate = output.diagnostics["composition"]["residual_gate_tensor_by_candidate"]["LRIO"]
         expected = spo + lrio_gate * lrio_delta
 
         self.assertTrue(torch.allclose(output.y_hat, expected, atol=1e-6))
@@ -735,7 +736,7 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
                 self.assertFalse(payload["use_evidence_router"])
                 self.assertEqual(payload["composition_mode"], "base_plus_residual")
                 self.assertEqual(payload["base_candidate"], "SPO")
-                self.assertEqual(payload["residual_candidates"], ["LRIO"])
+                self.assertEqual(payload["residual_candidates"], ["LRIO", "TANSO"])
 
     def test_public_cmu_t5_uses_spo_diversity_and_router_utility_losses(self):
         import torch

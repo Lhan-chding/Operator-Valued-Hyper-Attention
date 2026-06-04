@@ -2257,7 +2257,9 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         model_source = (ROOT / "moat_ovha_torch" / "models" / "multimodal" / "ovha_multimodal.py").read_text()
         self.assertIn('"candidate_diagnostics": _candidate_diagnostics(', model_source)
         self.assertIn("candidate_outputs", model_source)
-        self.assertIn("candidate_losses", model_source)
+        self.assertNotIn("def _candidate_losses", model_source)
+        self.assertIn("gated_corrected_candidate_values_by_candidate", model_source)
+        self.assertIn("ungated_corrected_candidate_values_by_candidate", model_source)
 
         primitive_requirements = {
             "typed_local_evidence.py": ("lengthscale", "local_entropy", "local_window_size"),
@@ -2743,7 +2745,7 @@ class MultimodalMainlineTorchContractTests(unittest.TestCase):
             )
         )
         self.assertIn("router_logit_parts", output.diagnostics)
-        self.assertIn("candidate_loss", output.diagnostics)
+        self.assertNotIn("candidate_loss", output.diagnostics)
         self.assertIn("stackability_passed", output.diagnostics)
         self.assertTrue(output.diagnostics["stackability_passed"])
 

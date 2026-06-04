@@ -112,6 +112,7 @@ PUBLIC_ALLOWED_LOSSES = (
     "public_contrastive_retrieval",
     "spo_prototype_diversity",
     "router_marginal_utility",
+    "residual_norm_shrinkage",
     "weak_rceo_unimodal_disagreement_marked",
     "weak_modality_dropout_consistency_marked",
     "weak_unimodal_entropy_calibration_marked",

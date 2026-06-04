@@ -22,6 +22,7 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
         self.memory_proj = nn.Linear(d_model, d_model)
         self.norm = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, output_dim)
+        self._zero_initialize_residual_paths()
 
     def forward(self, batch, memory_slot: torch.Tensor, evidence, params: dict[str, torch.Tensor], output_dim: int) -> CandidateOutput:
         text_tokens = evidence.field_features.get("text")
@@ -77,9 +78,15 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
             "vision_shift_load": source_load.get("vision", torch.zeros((), dtype=value.dtype, device=value.device)),
             "nonverbal_source_count": torch.as_tensor(float(len(source_names)), dtype=value.dtype, device=value.device),
             "source_attention_entropy": source_entropy,
-            "shift_direction_alignment": _shift_direction_alignment(value, batch.target_y, batch.target_mask),
         }
         return CandidateOutput(value=value, feature=feature, diagnostics=diagnostics)
+
+    def _zero_initialize_residual_paths(self) -> None:
+        for source_shift in self.source_shift.values():
+            nn.init.zeros_(source_shift.weight)
+            nn.init.zeros_(source_shift.bias)
+        nn.init.zeros_(self.head.weight)
+        nn.init.zeros_(self.head.bias)
 
 
 def _masked_attention(
@@ -105,13 +112,3 @@ def _masked_attention(
     entropy = -(weights * weights.clamp_min(1e-12).log()).sum(dim=-1).mean()
     return attended, entropy
 
-
-def _shift_direction_alignment(value: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    valid = mask.to(dtype=torch.bool, device=value.device)
-    if not bool(valid.any()):
-        return torch.zeros((), dtype=value.dtype, device=value.device)
-    pred = value[valid].reshape(-1).to(dtype=torch.float32)
-    truth = target.to(device=value.device, dtype=torch.float32)[valid].reshape(-1)
-    if pred.numel() < 2 or float(pred.norm().item()) <= 1e-12 or float(truth.norm().item()) <= 1e-12:
-        return torch.zeros((), dtype=value.dtype, device=value.device)
-    return torch.nn.functional.cosine_similarity(pred.view(1, -1), truth.view(1, -1)).squeeze(0).to(dtype=value.dtype)

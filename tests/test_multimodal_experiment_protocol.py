@@ -135,7 +135,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 self.assertEqual(config.task_type, task_type)
                 self.assertEqual(config.training_stages, ("T0", "T5"))
                 if dataset in {"cmu_mosei", "meld"}:
-                    self.assertEqual(config.candidate_names, ("SPO", "LRIO"))
+                    self.assertEqual(config.candidate_names, ("SPO", "LRIO", "TANSO"))
                     expected_lrio_pairs = (
                         (("text", "audio"), ("text", "vision"))
                         if dataset == "cmu_mosei"
@@ -220,7 +220,26 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(region, {"text_only", "region_only", "concat_fusion", "cato_only", "ovha_no_cato", "ovha_no_rceo", "ovha_no_evidence_router"})
 
         sentiment = set(baseline_names_for_task("sentiment_emotion"))
-        self.assertEqual(sentiment, {"text_only", "audio_only", "vision_only", "concat_fusion", "ovha_no_lrio", "ovha_no_spo", "ovha_no_rceo", "ovha_with_evidence_router"})
+        self.assertEqual(
+            sentiment,
+            {
+                "text_only",
+                "audio_only",
+                "vision_only",
+                "concat_fusion",
+                "spo_only",
+                "lrio_only",
+                "ovha_tanso_only",
+                "ovha_no_tanso",
+                "ovha_spo_lrio",
+                "ovha_spo_tanso",
+                "ovha_lrio_tanso",
+                "ovha_no_lrio",
+                "ovha_no_spo",
+                "ovha_no_rceo",
+                "ovha_with_evidence_router",
+            },
+        )
         self.assertNotIn("GroundingDINO", region)
         self.assertNotIn("MISA", sentiment)
         self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "concat_fusion"), "same_feature_sanity_probe")
@@ -232,7 +251,19 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         )
         self.assertEqual(
             set(ovha_ablation_names_for_task("sentiment_emotion")),
-            {"ovha_no_lrio", "ovha_no_spo", "ovha_no_rceo", "ovha_with_evidence_router"},
+            {
+                "spo_only",
+                "lrio_only",
+                "ovha_tanso_only",
+                "ovha_no_tanso",
+                "ovha_spo_lrio",
+                "ovha_spo_tanso",
+                "ovha_lrio_tanso",
+                "ovha_no_lrio",
+                "ovha_no_spo",
+                "ovha_no_rceo",
+                "ovha_with_evidence_router",
+            },
         )
         self.assertTrue({"MDETR", "GLIP", "GroundingDINO", "GroundingDINO-1.5"}.issubset(set(external_reference_names_for_task("phrase_region_grounding"))))
         self.assertTrue({"TFN", "LMF", "MulT", "MISA", "MAG-BERT", "Self-MM"}.issubset(set(external_reference_names_for_task("sentiment_emotion"))))
@@ -1071,6 +1102,13 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_spo"), {"candidate_names": ("TLEO", "LRIO", "CATO")})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_lrio", ("SPO", "LRIO")), {"candidate_names": ("SPO",)})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_spo", ("SPO", "LRIO")), {"candidate_names": ("LRIO",)})
+        self.assertEqual(module._ovha_variant_kwargs("spo_only", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("SPO",)})
+        self.assertEqual(module._ovha_variant_kwargs("lrio_only", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("LRIO",)})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_tanso_only", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("TANSO",)})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_tanso", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("SPO", "LRIO")})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_spo_lrio", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("SPO", "LRIO")})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_spo_tanso", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("SPO", "TANSO")})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_lrio_tanso", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("LRIO", "TANSO")})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_rceo"), {"use_reliability_prior": False})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_evidence_router"), {"use_evidence_router": False})
         self.assertEqual(module._ovha_variant_kwargs("ovha_with_evidence_router"), {"use_evidence_router": True})
@@ -1357,7 +1395,6 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(
             stages["T5"]["loss_names_observed"],
             [
-                "candidate_individual_loss",
                 "public_alignment_ce",
                 "router_marginal_utility",
                 "spo_prototype_diversity",
@@ -4412,17 +4449,9 @@ def _public_metrics_for_task(task: str) -> dict[str, object]:
 
 def _gate_models_for_task(task: str) -> tuple[str, ...]:
     if task == "sentiment_emotion":
-        return (
-            "ovha_full",
-            "text_only",
-            "audio_only",
-            "vision_only",
-            "concat_fusion",
-            "ovha_no_lrio",
-            "ovha_no_spo",
-            "ovha_no_rceo",
-            "ovha_with_evidence_router",
-        )
+        from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
+
+        return ("ovha_full", *baseline_names_for_task(task))
     return (
         "ovha_full",
         "text_only",
@@ -4445,6 +4474,13 @@ def _gate_score_for_model(task: str, model: str, *, full_score: float, baseline_
             "text_only": 0.73,
             "audio_only": 0.72,
             "vision_only": 0.71,
+            "spo_only": 0.705,
+            "lrio_only": 0.706,
+            "ovha_tanso_only": 0.704,
+            "ovha_no_tanso": 0.707,
+            "ovha_spo_lrio": 0.707,
+            "ovha_spo_tanso": 0.708,
+            "ovha_lrio_tanso": 0.709,
             "ovha_no_lrio": 0.70,
             "ovha_no_spo": 0.71,
             "ovha_no_rceo": 0.68,

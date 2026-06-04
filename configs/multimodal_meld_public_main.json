@@ -8,13 +8,24 @@
   "seeds": [501, 502, 503, 504, 505],
   "main_table_seed_policy": "five_seed_default",
   "training_stages": ["T0", "T5"],
-  "candidate_names": ["SPO", "LRIO"],
+  "candidate_names": ["SPO", "LRIO", "TANSO"],
   "lrio_pairs": [["text", "audio"], ["text", "vision"], ["audio", "vision"]],
+  "use_evidence_router": false,
+  "composition_mode": "base_plus_residual",
+  "base_candidate": "SPO",
+  "residual_candidates": ["LRIO", "TANSO"],
   "baseline_names": [
     "text_only",
     "audio_only",
     "vision_only",
     "concat_fusion",
+    "spo_only",
+    "lrio_only",
+    "ovha_tanso_only",
+    "ovha_no_tanso",
+    "ovha_spo_lrio",
+    "ovha_spo_tanso",
+    "ovha_lrio_tanso",
     "ovha_no_lrio",
     "ovha_no_spo",
     "ovha_no_rceo",
@@ -27,7 +38,7 @@
   "allow_hidden_losses": false,
   "losses_by_stage": {
     "T0": ["cache_validation"],
-    "T5": ["task_loss", "candidate_individual_loss", "spo_prototype_diversity", "router_marginal_utility"]
+    "T5": ["task_loss", "candidate_individual_loss", "spo_prototype_diversity", "router_marginal_utility", "residual_norm_shrinkage"]
   },
   "loss_metadata": {
     "candidate_individual_loss": {
@@ -39,12 +50,16 @@
     },
     "router_marginal_utility": {
       "weight": 0.01
+    },
+    "residual_norm_shrinkage": {
+      "weight": 0.001
     }
   },
   "adapter_params_by_candidate": {
     "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
     "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
     "LRIO": ["rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"],
+    "TANSO": ["audio_shift_scale", "vision_shift_scale", "shift_temperature", "scale", "bias"],
     "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"]
   }
 }

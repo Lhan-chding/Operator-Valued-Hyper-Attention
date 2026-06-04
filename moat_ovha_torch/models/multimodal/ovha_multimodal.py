@@ -6,7 +6,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from moat_ovha_torch.data.multimodal.typed_batch import MultimodalEpisodeBatch
+from moat_ovha_torch.data.multimodal.typed_batch import MultimodalEpisodeBatch, MultimodalModelInputs
 from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceBank, MultimodalEvidenceEncoder
 from moat_ovha_torch.models.multimodal.joint_router_adapter import MultimodalJointRouterAdapter
 from moat_ovha_torch.models.multimodal.memory import MultimodalOperatorMemory
@@ -64,6 +64,12 @@ class MultimodalOVHA(nn.Module):
             base_candidate=base_candidate,
             residual_candidates=residual_candidates,
         )
+        self.residual_gate_logit_bias = nn.ParameterDict(
+            {
+                candidate: nn.Parameter(torch.full((), -3.0))
+                for candidate in self.composition["residual_candidates"]
+            }
+        )
         self.evidence_encoder = MultimodalEvidenceEncoder(
             field_dims=field_dims,
             query_dim=query_dim,
@@ -95,10 +101,10 @@ class MultimodalOVHA(nn.Module):
         *,
         router_weight_override: torch.Tensor | None = None,
     ) -> MultimodalOVHAOutput:
-        batch.model_inputs()
-        evidence = self.evidence_encoder(batch)
+        inputs = batch.model_inputs()
+        evidence = self.evidence_encoder(inputs)
         memory_bank = self.memory_encoder(evidence.global_features, evidence)
-        reliability = self.reliability_prior(batch, evidence) if self.reliability_prior is not None else None
+        reliability = self.reliability_prior(inputs, evidence) if self.reliability_prior is not None else None
         router_output, params = self.joint_router_adapter(memory_bank, evidence, reliability)
         if reliability is not None and "LRIO" in params:
             params["LRIO"] = {
@@ -110,13 +116,13 @@ class MultimodalOVHA(nn.Module):
         candidate_outputs: dict[str, CandidateOutput] = {}
         for name in self.candidate_names:
             candidate_outputs[name] = self.candidate_primitives[name](
-                batch=batch,
+                batch=inputs,
                 memory_slot=memory_bank[name],
                 evidence=evidence,
                 params=params[name],
                 output_dim=self.output_dim,
             )
-        batch_size, q_count = batch.target_y.shape[0], batch.target_y.shape[1]
+        batch_size, q_count = inputs.query.x.shape[0], inputs.query.x.shape[1]
         assert_stackable(candidate_outputs, batch_size, q_count, self.output_dim)
         raw_candidate_values = stack_candidate_values(candidate_outputs, self.candidate_names)
         operator_admission_gate = _operator_admission_gate(candidate_outputs, self.candidate_names, raw_candidate_values)
@@ -134,13 +140,14 @@ class MultimodalOVHA(nn.Module):
             router_weights=router_weights,
             candidate_names=self.candidate_names,
             composition=self.composition,
+            admission_gate=operator_admission_gate["tensor"],
+            residual_gate_logit_bias=self.residual_gate_logit_bias,
         )
         candidate_values = composition["candidate_values"]
         y_hat = composition["y_hat"]
-        candidate_losses = _candidate_losses(candidate_values, self.candidate_names, batch.target_y, batch.target_mask)
         raw_router_load_by_candidate = router_output.diagnostics.get("router_load_by_candidate", {})
         memory_diagnostics = self._memory_differentiation_diagnostics(
-            batch=batch,
+            inputs=inputs,
             evidence=evidence,
             memory_bank=memory_bank,
             params=params,
@@ -155,15 +162,13 @@ class MultimodalOVHA(nn.Module):
                 key: value.detach()
                 for key, value in router_output.logit_parts.items()
             },
-            "candidate_loss": candidate_losses,
-            "candidate_loss_by_sample": _candidate_losses_by_sample(candidate_values, self.candidate_names, batch.target_y, batch.target_mask),
             "candidate_value_stats": _candidate_value_stats(candidate_values, self.candidate_names),
             "adapter_params": _adapter_param_diagnostics(params),
             "adapter_params_detail": _adapter_param_details(params),
             "memory_slot_norm": {name: memory_bank[name].norm(dim=-1).mean() for name in self.candidate_names},
             **memory_diagnostics,
             "operator_admission_gate": operator_admission_gate["diagnostics"],
-            "candidate_diagnostics": _candidate_diagnostics(candidate_outputs, candidate_losses, reliability),
+            "candidate_diagnostics": _candidate_diagnostics(candidate_outputs, reliability),
             "stackability_passed": True,
             "reliability": reliability.diagnostics if reliability is not None else {},
             "router_override": {
@@ -188,7 +193,7 @@ class MultimodalOVHA(nn.Module):
     def _memory_differentiation_diagnostics(
         self,
         *,
-        batch: MultimodalEpisodeBatch,
+        inputs: MultimodalModelInputs,
         evidence: MultimodalEvidenceBank,
         memory_bank: dict[str, torch.Tensor],
         params: dict[str, dict[str, torch.Tensor]],
@@ -204,7 +209,7 @@ class MultimodalOVHA(nn.Module):
             return diagnostics
         with torch.no_grad():
             zero_bank = {name: torch.zeros_like(memory_bank[name]) for name in self.candidate_names}
-            zero_values = self._candidate_values_with_memory(batch, evidence, zero_bank, params)
+            zero_values = self._candidate_values_with_memory(inputs, evidence, zero_bank, params)
             zero_prediction = (router_weights.unsqueeze(-1) * zero_values).sum(dim=-2)
             full_prediction = (router_weights.unsqueeze(-1) * candidate_values).sum(dim=-2)
             diagnostics["memory_zero_out_delta"] = (full_prediction - zero_prediction).abs().mean()
@@ -214,21 +219,21 @@ class MultimodalOVHA(nn.Module):
                     name: memory_bank[shifted_names[index]]
                     for index, name in enumerate(self.candidate_names)
                 }
-                swap_values = self._candidate_values_with_memory(batch, evidence, swap_bank, params)
+                swap_values = self._candidate_values_with_memory(inputs, evidence, swap_bank, params)
                 swap_prediction = (router_weights.unsqueeze(-1) * swap_values).sum(dim=-2)
                 diagnostics["memory_swap_delta"] = (full_prediction - swap_prediction).abs().mean()
         return diagnostics
 
     def _candidate_values_with_memory(
         self,
-        batch: MultimodalEpisodeBatch,
+        inputs: MultimodalModelInputs,
         evidence: MultimodalEvidenceBank,
         memory_bank: dict[str, torch.Tensor],
         params: dict[str, dict[str, torch.Tensor]],
     ) -> torch.Tensor:
         outputs = {
             name: self.candidate_primitives[name](
-                batch=batch,
+                batch=inputs,
                 memory_slot=memory_bank[name],
                 evidence=evidence,
                 params=params[name],
@@ -298,6 +303,8 @@ def _compose_prediction(
     router_weights: torch.Tensor,
     candidate_names: tuple[str, ...],
     composition: dict[str, Any],
+    admission_gate: torch.Tensor | None = None,
+    residual_gate_logit_bias: nn.ParameterDict | dict[str, torch.Tensor] | None = None,
 ) -> dict[str, Any]:
     if composition["mode"] == "convex_mixture":
         return {
@@ -314,14 +321,37 @@ def _compose_prediction(
     base_value = candidate_outputs[base_candidate].value
     corrected_values = raw_candidate_values.clone()
     residual_gate_by_candidate = {}
+    residual_gate_tensor_by_candidate = {}
+    raw_delta_by_candidate = {}
+    gated_delta_by_candidate = {}
+    gated_corrected_candidate_values_by_candidate = {}
+    ungated_corrected_candidate_values_by_candidate = {}
+    actual_contribution_norm_by_candidate = {}
     y_hat = base_value
     for candidate in residual_candidates:
         candidate_index = candidate_names.index(candidate)
         delta = candidate_outputs[candidate].value
-        gate = torch.sigmoid(router_logits[..., candidate_index : candidate_index + 1])
-        y_hat = y_hat + gate * delta
-        corrected_values[..., candidate_index, :] = base_value + delta
+        gate_logit = router_logits[..., candidate_index : candidate_index + 1]
+        if residual_gate_logit_bias is not None and candidate in residual_gate_logit_bias:
+            gate_logit = gate_logit + residual_gate_logit_bias[candidate].to(dtype=gate_logit.dtype, device=gate_logit.device)
+        raw_gate = torch.sigmoid(gate_logit)
+        if admission_gate is None:
+            admission = torch.ones_like(raw_gate)
+        else:
+            admission = admission_gate[..., candidate_index : candidate_index + 1].to(dtype=raw_gate.dtype, device=raw_gate.device)
+        gate = raw_gate * admission
+        gated_delta = gate * delta
+        gated_corrected = base_value + gated_delta
+        ungated_corrected = base_value + delta
+        y_hat = y_hat + gated_delta
+        corrected_values[..., candidate_index, :] = gated_corrected
         residual_gate_by_candidate[candidate] = gate.mean()
+        residual_gate_tensor_by_candidate[candidate] = gate
+        raw_delta_by_candidate[candidate] = delta
+        gated_delta_by_candidate[candidate] = gated_delta
+        gated_corrected_candidate_values_by_candidate[candidate] = gated_corrected
+        ungated_corrected_candidate_values_by_candidate[candidate] = ungated_corrected
+        actual_contribution_norm_by_candidate[candidate] = gated_delta.norm(dim=-1).mean()
     base_index = candidate_names.index(base_candidate)
     corrected_values[..., base_index, :] = base_value
     return {
@@ -332,6 +362,12 @@ def _compose_prediction(
             "base_candidate": base_candidate,
             "residual_candidates": residual_candidates,
             "residual_gate_by_candidate": residual_gate_by_candidate,
+            "residual_gate_tensor_by_candidate": residual_gate_tensor_by_candidate,
+            "raw_delta_by_candidate": raw_delta_by_candidate,
+            "gated_delta_by_candidate": gated_delta_by_candidate,
+            "gated_corrected_candidate_values_by_candidate": gated_corrected_candidate_values_by_candidate,
+            "ungated_corrected_candidate_values_by_candidate": ungated_corrected_candidate_values_by_candidate,
+            "actual_contribution_norm_by_candidate": actual_contribution_norm_by_candidate,
         },
     }
 
@@ -423,34 +459,6 @@ def _router_weight_policy_diagnostics(router_weight_policy: dict[str, str] | Non
     return None
 
 
-def _candidate_losses(
-    candidate_values: torch.Tensor,
-    candidate_names: tuple[str, ...],
-    target_y: torch.Tensor,
-    target_mask: torch.Tensor,
-) -> dict[str, torch.Tensor]:
-    mask = target_mask.to(dtype=target_y.dtype, device=target_y.device).unsqueeze(-1)
-    denom = mask.sum().clamp_min(1.0)
-    return {
-        name: ((candidate_values[..., index, :] - target_y).square() * mask).sum() / denom
-        for index, name in enumerate(candidate_names)
-    }
-
-
-def _candidate_losses_by_sample(
-    candidate_values: torch.Tensor,
-    candidate_names: tuple[str, ...],
-    target_y: torch.Tensor,
-    target_mask: torch.Tensor,
-) -> dict[str, torch.Tensor]:
-    mask = target_mask.to(dtype=target_y.dtype, device=target_y.device).unsqueeze(-1)
-    denom = mask.sum(dim=-1).clamp_min(1.0)
-    return {
-        name: ((candidate_values[..., index, :] - target_y).square() * mask).sum(dim=-1) / denom
-        for index, name in enumerate(candidate_names)
-    }
-
-
 def _memory_slot_orthogonality(
     memory_bank: dict[str, torch.Tensor],
     candidate_names: tuple[str, ...],
@@ -501,13 +509,11 @@ def _entropy(logits: torch.Tensor) -> torch.Tensor:
 
 def _candidate_diagnostics(
     candidate_outputs: dict[str, CandidateOutput],
-    candidate_losses: dict[str, torch.Tensor],
     reliability: ReliabilityPrior | None,
 ) -> dict[str, dict[str, Any]]:
     diagnostics: dict[str, dict[str, Any]] = {}
     for name, output in candidate_outputs.items():
         values = dict(output.diagnostics)
-        values["candidate_loss"] = candidate_losses[name]
         diagnostics[name] = values
     diagnostics["RCEO"] = dict(reliability.diagnostics) if reliability is not None else {}
     return diagnostics

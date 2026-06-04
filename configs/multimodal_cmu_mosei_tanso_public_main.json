@@ -19,6 +19,13 @@
     "audio_only",
     "vision_only",
     "concat_fusion",
+    "spo_only",
+    "lrio_only",
+    "ovha_tanso_only",
+    "ovha_no_tanso",
+    "ovha_spo_lrio",
+    "ovha_spo_tanso",
+    "ovha_lrio_tanso",
     "ovha_no_lrio",
     "ovha_no_spo",
     "ovha_no_rceo",
@@ -31,7 +38,7 @@
   "allow_hidden_losses": false,
   "losses_by_stage": {
     "T0": ["cache_validation"],
-    "T5": ["task_loss", "candidate_individual_loss", "spo_prototype_diversity", "router_marginal_utility"]
+    "T5": ["task_loss", "candidate_individual_loss", "spo_prototype_diversity", "router_marginal_utility", "residual_norm_shrinkage"]
   },
   "loss_metadata": {
     "candidate_individual_loss": {
@@ -43,6 +50,9 @@
     },
     "router_marginal_utility": {
       "weight": 0.01
+    },
+    "residual_norm_shrinkage": {
+      "weight": 0.001
     }
   },
   "adapter_params_by_candidate": {

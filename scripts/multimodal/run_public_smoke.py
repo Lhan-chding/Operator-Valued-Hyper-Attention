@@ -452,26 +452,44 @@ def _public_loss_components(
     config: MultimodalExperimentConfig,
 ) -> dict[str, torch.Tensor]:
     configured = tuple((config.losses_by_stage or {}).get("T5", ()))
-    available = {
-        "task_loss": _task_loss(output.y_hat, batch),
-        "candidate_individual_loss": (output.candidate_values - batch.target_y.unsqueeze(-2)).square().mean(),
-        "public_alignment_ce": _public_alignment_ce(output.y_hat, batch),
-        "public_contrastive_retrieval": output.y_hat.sum() * 0.0,
-        "spo_prototype_diversity": _candidate_diagnostic_tensor(output, "SPO", "prototype_diversity"),
-        "router_marginal_utility": _router_marginal_utility_loss(output),
-    }
-    return {
-        name: available[name] * _public_loss_weight(config, name)
-        for name in configured
-        if name in available
-    }
+    components: dict[str, torch.Tensor] = {}
+    for name in configured:
+        weight = _public_loss_weight(config, name)
+        if weight == 0.0:
+            continue
+        component = _compute_public_loss_component(name, output, batch)
+        if component is not None:
+            components[name] = component * weight
+    return components
+
+
+def _compute_public_loss_component(
+    name: str,
+    output: MultimodalOVHAOutput,
+    batch: MultimodalEpisodeBatch,
+) -> torch.Tensor | None:
+    if name == "task_loss":
+        return _task_loss(output.y_hat, batch)
+    if name == "candidate_individual_loss":
+        return (output.candidate_values - batch.target_y.unsqueeze(-2)).square().mean()
+    if name == "public_alignment_ce":
+        return _public_alignment_ce(output.y_hat, batch)
+    if name == "public_contrastive_retrieval":
+        return output.y_hat.sum() * 0.0
+    if name == "spo_prototype_diversity":
+        return _candidate_diagnostic_tensor(output, "SPO", "prototype_diversity")
+    if name == "router_marginal_utility":
+        return _router_marginal_utility_loss(output, batch)
+    if name == "residual_norm_shrinkage":
+        return _residual_norm_shrinkage_loss(output)
+    return None
 
 
 def _public_loss_weight(config: MultimodalExperimentConfig, loss_name: str) -> float:
     metadata = (config.loss_metadata or {}).get(loss_name, {})
     if not isinstance(metadata, dict):
         return 0.0 if loss_name == "candidate_individual_loss" else 1.0
-    if loss_name == "candidate_individual_loss" and bool(metadata.get("diagnostic_only", True)):
+    if bool(metadata.get("diagnostic_only", False)):
         return 0.0
     return float(metadata.get("weight", 1.0))
 
@@ -507,7 +525,21 @@ def _candidate_diagnostic_tensor(
     return output.y_hat.sum() * 0.0
 
 
-def _router_marginal_utility_loss(output: MultimodalOVHAOutput) -> torch.Tensor:
+def _router_marginal_utility_loss(output: MultimodalOVHAOutput, batch: MultimodalEpisodeBatch | None = None) -> torch.Tensor:
+    if batch is not None:
+        sample_candidate_loss = _candidate_losses_by_sample_from_values(
+            output.candidate_values,
+            tuple(output.candidate_outputs),
+            batch,
+        )
+        names = tuple(output.candidate_outputs)
+        loss_matrix = torch.stack(
+            [sample_candidate_loss[name].to(dtype=output.y_hat.dtype, device=output.y_hat.device) for name in names],
+            dim=-1,
+        )
+        target = torch.softmax(-loss_matrix.detach(), dim=-1)
+        router_weights = output.router_weights.clamp_min(1e-8)
+        return -(target * router_weights.log()).sum(dim=-1).mean()
     sample_candidate_loss = output.diagnostics.get("candidate_loss_by_sample", {})
     if isinstance(sample_candidate_loss, dict) and sample_candidate_loss:
         names = tuple(output.candidate_outputs)
@@ -537,6 +569,20 @@ def _router_marginal_utility_loss(output: MultimodalOVHAOutput) -> torch.Tensor:
     target = torch.softmax(-loss_vector.detach(), dim=0)
     router_load = output.router_weights.mean(dim=(0, 1)).clamp_min(1e-8)
     return -(target * router_load.log()).sum()
+
+
+def _residual_norm_shrinkage_loss(output: MultimodalOVHAOutput) -> torch.Tensor:
+    contribution_norms = output.diagnostics.get("composition", {}).get("actual_contribution_norm_by_candidate", {})
+    if not isinstance(contribution_norms, dict) or not contribution_norms:
+        return output.y_hat.sum() * 0.0
+    values = [
+        value.to(dtype=output.y_hat.dtype, device=output.y_hat.device)
+        for value in contribution_norms.values()
+        if hasattr(value, "to")
+    ]
+    if not values:
+        return output.y_hat.sum() * 0.0
+    return torch.stack(values).mean()
 
 
 def _public_alignment_ce(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
@@ -594,6 +640,7 @@ def _public_training_diagnostics_row(
 ) -> dict[str, object]:
     diagnostics = output.diagnostics
     _assert_lrio_diagnostic_pairs_match_config(config, diagnostics)
+    candidate_losses = _candidate_losses_from_values(output.candidate_values, tuple(output.candidate_outputs), batch)
     return {
         "artifact_type": artifact_type,
         "config_name": config.name,
@@ -611,11 +658,11 @@ def _public_training_diagnostics_row(
         "router_evidence_logit_norm": _json_ready(diagnostics["router_evidence_logit_norm"]),
         "router_reliability_logit_norm": _json_ready(diagnostics["router_reliability_logit_norm"]),
         "router_logit_parts": _router_logit_part_summary(output.router_logit_parts),
-        "candidate_loss": _json_ready(diagnostics["candidate_loss"]),
+        "candidate_loss": _json_ready(candidate_losses),
         "adapter_params": _json_ready(diagnostics["adapter_params"]),
         "memory_slot_norm": _json_ready(diagnostics["memory_slot_norm"]),
         "stackability_passed": bool(diagnostics["stackability_passed"]),
-        "candidate_diagnostics": _json_ready(diagnostics["candidate_diagnostics"]),
+        "candidate_diagnostics": _json_ready(_candidate_diagnostics_with_losses(diagnostics["candidate_diagnostics"], candidate_losses)),
         "reliability": _json_ready(diagnostics["reliability"]),
         "public_diagnostics": _public_report_diagnostics(config, batch, output),
     }
@@ -645,6 +692,18 @@ def _assert_lrio_diagnostic_pairs_match_config(config: MultimodalExperimentConfi
             "LRIO diagnostics contain unconfigured modality pairs: "
             f"{unexpected}; configured lrio_pairs: {sorted(configured)}"
         )
+
+
+def _candidate_diagnostics_with_losses(
+    candidate_diagnostics: Any,
+    candidate_losses: dict[str, torch.Tensor],
+) -> dict[str, Any]:
+    diagnostics = dict(candidate_diagnostics) if isinstance(candidate_diagnostics, dict) else {}
+    for name, loss in candidate_losses.items():
+        values = dict(diagnostics.get(name, {})) if isinstance(diagnostics.get(name), dict) else {}
+        values["candidate_loss"] = loss
+        diagnostics[name] = values
+    return diagnostics
 
 
 def _pair_key(pair: tuple[str, str]) -> str:
@@ -860,6 +919,33 @@ def _shift_candidate_load(loads: dict[str, float], deltas: dict[str, float]) -> 
 def _task_loss(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
     mask = batch.target_mask.to(dtype=prediction.dtype, device=prediction.device).unsqueeze(-1)
     return ((prediction - batch.target_y).square() * mask).sum() / mask.sum().clamp_min(1.0)
+
+
+def _candidate_losses_from_values(
+    candidate_values: torch.Tensor,
+    candidate_names: tuple[str, ...],
+    batch: MultimodalEpisodeBatch,
+) -> dict[str, torch.Tensor]:
+    mask = batch.target_mask.to(device=candidate_values.device, dtype=candidate_values.dtype).unsqueeze(-1)
+    truth = batch.target_y.to(device=candidate_values.device, dtype=candidate_values.dtype)
+    return {
+        name: ((candidate_values[..., index, :] - truth).square() * mask).sum() / mask.sum().clamp_min(1.0)
+        for index, name in enumerate(candidate_names)
+    }
+
+
+def _candidate_losses_by_sample_from_values(
+    candidate_values: torch.Tensor,
+    candidate_names: tuple[str, ...],
+    batch: MultimodalEpisodeBatch,
+) -> dict[str, torch.Tensor]:
+    mask = batch.target_mask.to(device=candidate_values.device, dtype=candidate_values.dtype)
+    truth = batch.target_y.to(device=candidate_values.device, dtype=candidate_values.dtype)
+    losses: dict[str, torch.Tensor] = {}
+    for index, name in enumerate(candidate_names):
+        error = (candidate_values[..., index, :] - truth).square().mean(dim=-1)
+        losses[name] = error * mask
+    return losses
 
 
 def _parameter_vector(model: MultimodalOVHA) -> torch.Tensor:

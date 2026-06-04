@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 from torch import nn
 
-from moat_ovha_torch.data.multimodal.typed_batch import MultimodalEpisodeBatch
+from moat_ovha_torch.data.multimodal.typed_batch import MultimodalModelInputs
 
 if TYPE_CHECKING:
     from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceBank
@@ -24,7 +24,7 @@ class MultimodalCandidatePrimitive(nn.Module):
 
     def forward(
         self,
-        batch: MultimodalEpisodeBatch,
+        batch: MultimodalModelInputs,
         memory_slot: torch.Tensor,
         evidence: "MultimodalEvidenceBank",
         params: dict[str, torch.Tensor],

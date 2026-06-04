@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from moat_ovha_torch.data.multimodal.typed_batch import MultimodalEpisodeBatch
+from moat_ovha_torch.data.multimodal.typed_batch import MultimodalModelInputs
 from moat_ovha_torch.models.multimodal.operator_bank import MULTIMODAL_EXTENDED_CANDIDATE_NAMES
 
 
@@ -55,16 +55,16 @@ class MultimodalEvidenceEncoder(nn.Module):
         self.alignment_head = nn.Linear(d_model * 2, d_model)
         self.evidence_logit_head = nn.Linear(d_model * 2, len(MULTIMODAL_EXTENDED_CANDIDATE_NAMES))
 
-    def forward(self, batch: MultimodalEpisodeBatch) -> MultimodalEvidenceBank:
-        query_features = self.query_projection(batch.query.x)
+    def forward(self, inputs: MultimodalModelInputs) -> MultimodalEvidenceBank:
+        query_features = self.query_projection(inputs.query.x)
         field_features = {
             name: self.field_projections[name](field.x)
-            for name, field in batch.fields.items()
+            for name, field in inputs.fields.items()
             if name in self.field_projections
         }
         if not field_features:
             raise ValueError("MultimodalEvidenceEncoder requires at least one configured field")
-        pooled = {name: _masked_mean(features, batch.fields[name].mask) for name, features in field_features.items()}
+        pooled = {name: _masked_mean(features, inputs.fields[name].mask) for name, features in field_features.items()}
         global_features = torch.stack(list(pooled.values()), dim=0).mean(dim=0)
         repeated_global = global_features.unsqueeze(1).expand(-1, query_features.shape[1], -1)
         fused = torch.cat([query_features, repeated_global], dim=-1)
@@ -91,7 +91,7 @@ class MultimodalEvidenceEncoder(nn.Module):
         local_features = self.local_head(torch.cat([local_features, repeated_global], dim=-1))
         alignment_features = self.alignment_head(torch.cat([alignment_features, repeated_global], dim=-1))
         explicit_relation_logits, explicit_relation_rate = _explicit_query_type_relation_logits(
-            batch.query.query_type,
+            inputs.query.query_type,
             query_features.shape[:2],
             len(MULTIMODAL_EXTENDED_CANDIDATE_NAMES),
             dtype=query_features.dtype,

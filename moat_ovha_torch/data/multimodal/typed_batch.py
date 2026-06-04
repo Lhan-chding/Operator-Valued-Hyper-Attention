@@ -72,6 +72,41 @@ class BatchContractReport:
 
 
 @dataclass(frozen=True)
+class MultimodalModelInputs:
+    fields: dict[str, TokenField]
+    query: QueryField
+    target_mask: Any
+    task_type: str
+    split: str
+    source_dataset: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "fields": self.fields,
+            "query": self.query,
+            "target_mask": self.target_mask,
+            "task_type": self.task_type,
+            "split": self.split,
+            "source_dataset": self.source_dataset,
+        }
+
+    def keys(self):
+        return self.as_dict().keys()
+
+    def items(self):
+        return self.as_dict().items()
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.as_dict()
+
+    def __getitem__(self, key: str) -> Any:
+        return self.as_dict()[key]
+
+    def __iter__(self):
+        return iter(self.as_dict())
+
+
+@dataclass(frozen=True)
 class MultimodalEpisodeBatch:
     fields: dict[str, TokenField]
     query: QueryField
@@ -84,18 +119,18 @@ class MultimodalEpisodeBatch:
     provenance: ProvenanceBank
     hidden: dict[str, Any] | None = None
 
-    def model_inputs(self) -> dict[str, Any]:
+    def model_inputs(self) -> MultimodalModelInputs:
         contract = validate_multimodal_batch_contract(self)
         if not contract.ok:
             raise ValueError("invalid multimodal batch contract: " + "; ".join(contract.errors))
-        values = {
-            "fields": self.fields,
-            "query": self.query,
-            "target_mask": self.target_mask,
-            "task_type": self.task_type,
-            "split": self.split,
-            "source_dataset": self.source_dataset,
-        }
+        values = MultimodalModelInputs(
+            fields=self.fields,
+            query=self.query,
+            target_mask=self.target_mask,
+            task_type=self.task_type,
+            split=self.split,
+            source_dataset=self.source_dataset,
+        )
         assert_no_multimodal_metadata_leakage(values)
         return values
 

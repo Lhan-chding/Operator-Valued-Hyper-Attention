@@ -6,7 +6,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from moat_ovha_torch.data.multimodal.typed_batch import MultimodalEpisodeBatch
+from moat_ovha_torch.data.multimodal.typed_batch import MultimodalModelInputs
 from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceBank
 from moat_ovha_torch.models.multimodal.operator_bank import MULTIMODAL_CANDIDATE_NAMES
 
@@ -36,7 +36,7 @@ class RCEOReliabilityPrior(nn.Module):
         nn.init.zeros_(self.bias_head.weight)
         nn.init.zeros_(self.bias_head.bias)
 
-    def forward(self, batch: MultimodalEpisodeBatch, evidence: MultimodalEvidenceBank) -> ReliabilityPrior:
+    def forward(self, batch: MultimodalModelInputs, evidence: MultimodalEvidenceBank) -> ReliabilityPrior:
         reliabilities = []
         modality_names = tuple(batch.fields)
         for field in batch.fields.values():

@@ -1158,6 +1158,18 @@ def _ovha_variant_kwargs(
         return {"use_evidence_router": True}
     if baseline_name == "cato_only":
         return {"candidate_names": ("CATO",)}
+    if baseline_name == "spo_only":
+        return {"candidate_names": _require_candidates(active_candidate_names, ("SPO",))}
+    if baseline_name == "lrio_only":
+        return {"candidate_names": _require_candidates(active_candidate_names, ("LRIO",))}
+    if baseline_name == "ovha_tanso_only":
+        return {"candidate_names": _require_candidates(active_candidate_names, ("TANSO",))}
+    if baseline_name in {"ovha_no_tanso", "ovha_spo_lrio"}:
+        return {"candidate_names": _require_candidates(active_candidate_names, ("SPO", "LRIO"))}
+    if baseline_name == "ovha_spo_tanso":
+        return {"candidate_names": _require_candidates(active_candidate_names, ("SPO", "TANSO"))}
+    if baseline_name == "ovha_lrio_tanso":
+        return {"candidate_names": _require_candidates(active_candidate_names, ("LRIO", "TANSO"))}
     if baseline_name == "ovha_no_cato":
         return {"candidate_names": _drop_candidate(active_candidate_names, "CATO")}
     if baseline_name == "ovha_no_lrio":
@@ -1165,6 +1177,13 @@ def _ovha_variant_kwargs(
     if baseline_name == "ovha_no_spo":
         return {"candidate_names": _drop_candidate(active_candidate_names, "SPO")}
     raise ValueError(f"unknown OVHA ablation baseline: {baseline_name}")
+
+
+def _require_candidates(active_candidate_names: tuple[str, ...], required: tuple[str, ...]) -> tuple[str, ...]:
+    missing = tuple(candidate for candidate in required if candidate not in active_candidate_names)
+    if missing:
+        raise ValueError(f"structural ablation requires active candidates {missing}; active={active_candidate_names}")
+    return required
 
 
 def _drop_candidate(active_candidate_names: tuple[str, ...], candidate: str) -> tuple[str, ...]:

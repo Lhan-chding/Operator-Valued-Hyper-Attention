@@ -1915,27 +1915,10 @@ def _canonical_cli_stress_rows() -> list[dict[str, object]]:
 
 
 def _required_baselines_for_task(task: str) -> tuple[str, ...]:
-    if task == "phrase_region_grounding":
-        return (
-            "text_only",
-            "region_only",
-            "concat_fusion",
-            "cato_only",
-            "ovha_no_cato",
-            "ovha_no_rceo",
-            "ovha_no_evidence_router",
-        )
-    if task == "sentiment_emotion":
-        return (
-            "text_only",
-            "audio_only",
-            "vision_only",
-            "concat_fusion",
-            "ovha_no_lrio",
-            "ovha_no_spo",
-            "ovha_no_rceo",
-            "ovha_with_evidence_router",
-        )
+    if task in {"phrase_region_grounding", "sentiment_emotion"}:
+        from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
+
+        return baseline_names_for_task(task)
     return ()
 
 

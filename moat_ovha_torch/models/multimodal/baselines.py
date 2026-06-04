@@ -16,6 +16,13 @@ SENTIMENT_EMOTION_BASELINES = (
     "audio_only",
     "vision_only",
     "concat_fusion",
+    "spo_only",
+    "lrio_only",
+    "ovha_tanso_only",
+    "ovha_no_tanso",
+    "ovha_spo_lrio",
+    "ovha_spo_tanso",
+    "ovha_lrio_tanso",
     "ovha_no_lrio",
     "ovha_no_spo",
     "ovha_no_rceo",
@@ -41,7 +48,19 @@ CONTROLLED_BASELINES = (
 REGION_TEXT_SANITY_PROBES = ("text_only", "region_only", "concat_fusion")
 REGION_TEXT_OVHA_ABLATIONS = ("cato_only", "ovha_no_cato", "ovha_no_rceo", "ovha_no_evidence_router")
 SENTIMENT_EMOTION_SANITY_PROBES = ("text_only", "audio_only", "vision_only", "concat_fusion")
-SENTIMENT_EMOTION_OVHA_ABLATIONS = ("ovha_no_lrio", "ovha_no_spo", "ovha_no_rceo", "ovha_with_evidence_router")
+SENTIMENT_EMOTION_OVHA_ABLATIONS = (
+    "spo_only",
+    "lrio_only",
+    "ovha_tanso_only",
+    "ovha_no_tanso",
+    "ovha_spo_lrio",
+    "ovha_spo_tanso",
+    "ovha_lrio_tanso",
+    "ovha_no_lrio",
+    "ovha_no_spo",
+    "ovha_no_rceo",
+    "ovha_with_evidence_router",
+)
 
 REGION_TEXT_EXTERNAL_REFERENCES = (
     "MDETR",
