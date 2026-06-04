@@ -1742,9 +1742,19 @@ def _ovha_variant_kwargs(
     if baseline_name in {"ovha_no_tanso", "ovha_spo_lrio"}:
         return {"candidate_names": _require_candidates(active_candidate_names, ("SPO", "LRIO"))}
     if baseline_name == "ovha_spo_tanso":
-        return {"candidate_names": _require_candidates(active_candidate_names, ("SPO", "TANSO"))}
+        return {
+            "candidate_names": _require_candidates(active_candidate_names, ("SPO", "TANSO")),
+            "composition_mode": "base_plus_residual",
+            "base_candidate": "SPO",
+            "residual_candidates": ("TANSO",),
+        }
     if baseline_name == "ovha_lrio_tanso":
-        return {"candidate_names": _require_candidates(active_candidate_names, ("LRIO", "TANSO"))}
+        return {
+            "candidate_names": _require_candidates(active_candidate_names, ("LRIO", "TANSO")),
+            "composition_mode": "base_plus_residual",
+            "base_candidate": "TANSO",
+            "residual_candidates": ("LRIO",),
+        }
     if baseline_name == "ovha_no_cato":
         return {"candidate_names": _drop_candidate(active_candidate_names, "CATO")}
     if baseline_name == "ovha_no_lrio":

@@ -234,6 +234,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "ovha_no_tanso",
                 "ovha_no_lrio",
                 "ovha_no_spo",
+                "ovha_spo_tanso",
+                "ovha_lrio_tanso",
                 "ovha_no_rceo",
                 "ovha_with_evidence_router",
             },
@@ -256,6 +258,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "ovha_no_tanso",
                 "ovha_no_lrio",
                 "ovha_no_spo",
+                "ovha_spo_tanso",
+                "ovha_lrio_tanso",
                 "ovha_no_rceo",
                 "ovha_with_evidence_router",
             },
@@ -276,6 +280,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "ovha_no_tanso",
             "ovha_no_lrio",
             "ovha_no_spo",
+            "ovha_spo_tanso",
+            "ovha_lrio_tanso",
             "ovha_no_rceo",
             "ovha_with_evidence_router",
         }
@@ -1132,8 +1138,24 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(module._ovha_variant_kwargs("ovha_tanso_only", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("TANSO",)})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_tanso", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("SPO", "LRIO")})
         self.assertEqual(module._ovha_variant_kwargs("ovha_spo_lrio", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("SPO", "LRIO")})
-        self.assertEqual(module._ovha_variant_kwargs("ovha_spo_tanso", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("SPO", "TANSO")})
-        self.assertEqual(module._ovha_variant_kwargs("ovha_lrio_tanso", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("LRIO", "TANSO")})
+        self.assertEqual(
+            module._ovha_variant_kwargs("ovha_spo_tanso", ("SPO", "LRIO", "TANSO")),
+            {
+                "candidate_names": ("SPO", "TANSO"),
+                "composition_mode": "base_plus_residual",
+                "base_candidate": "SPO",
+                "residual_candidates": ("TANSO",),
+            },
+        )
+        self.assertEqual(
+            module._ovha_variant_kwargs("ovha_lrio_tanso", ("SPO", "LRIO", "TANSO")),
+            {
+                "candidate_names": ("LRIO", "TANSO"),
+                "composition_mode": "base_plus_residual",
+                "base_candidate": "TANSO",
+                "residual_candidates": ("LRIO",),
+            },
+        )
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_rceo"), {"use_reliability_prior": False})
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_evidence_router"), {"use_evidence_router": False})
         self.assertEqual(module._ovha_variant_kwargs("ovha_with_evidence_router"), {"use_evidence_router": True})

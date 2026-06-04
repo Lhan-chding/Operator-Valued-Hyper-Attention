@@ -22,6 +22,8 @@ SENTIMENT_EMOTION_BASELINES = (
     "ovha_no_tanso",
     "ovha_no_lrio",
     "ovha_no_spo",
+    "ovha_spo_tanso",
+    "ovha_lrio_tanso",
     "ovha_no_rceo",
     "ovha_with_evidence_router",
 )
@@ -52,6 +54,8 @@ SENTIMENT_EMOTION_OVHA_ABLATIONS = (
     "ovha_no_tanso",
     "ovha_no_lrio",
     "ovha_no_spo",
+    "ovha_spo_tanso",
+    "ovha_lrio_tanso",
     "ovha_no_rceo",
     "ovha_with_evidence_router",
 )
