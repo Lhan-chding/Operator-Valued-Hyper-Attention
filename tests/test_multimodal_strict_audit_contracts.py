@@ -886,6 +886,15 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertIn("full_minus_oracle_min_loss", public["candidate_oracle_selection"])
         self.assertIn("best_alpha", public["gate_sweep"])
         self.assertIn("best_gamma", public["residual_oracle"])
+        self.assertIn("residual_candidate_loss", public)
+        residual_loss = public["residual_candidate_loss"]
+        self.assertIn("LRIO", residual_loss)
+        self.assertIn("TANSO", residual_loss)
+        for values in residual_loss.values():
+            self.assertIn("raw_delta_loss", values)
+            self.assertIn("gated_corrected_loss", values)
+            self.assertIn("ungated_corrected_loss", values)
+            self.assertIn("actual_contribution_norm", values)
 
     def test_router_marginal_utility_uses_per_sample_candidate_losses(self):
         import torch
@@ -917,6 +926,46 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertLess(
             float(_router_marginal_utility_loss(aligned).detach()),
             float(_router_marginal_utility_loss(uniform).detach()),
+        )
+
+    def test_base_plus_residual_router_utility_uses_residual_gate_oracle(self):
+        import torch
+        from types import SimpleNamespace
+
+        from scripts.multimodal.run_public_smoke import _router_marginal_utility_loss
+
+        batch = SimpleNamespace(
+            target_y=torch.tensor([[[1.0], [0.0]]]),
+            target_mask=torch.ones(1, 2, dtype=torch.bool),
+        )
+        base = torch.zeros(1, 2, 1)
+        delta = torch.ones(1, 2, 1)
+
+        def output_with_gate(gate):
+            return SimpleNamespace(
+                y_hat=base + gate * delta,
+                candidate_outputs={
+                    "SPO": SimpleNamespace(value=base),
+                    "LRIO": SimpleNamespace(value=delta),
+                },
+                candidate_values=torch.stack([base, base + gate * delta], dim=-2),
+                router_weights=torch.full((1, 2, 2), 0.5),
+                diagnostics={
+                    "composition": {
+                        "mode": "base_plus_residual",
+                        "base_candidate": "SPO",
+                        "raw_delta_by_candidate": {"LRIO": delta},
+                        "residual_gate_tensor_by_candidate": {"LRIO": gate},
+                    }
+                },
+            )
+
+        aligned = output_with_gate(torch.tensor([[[0.99], [0.01]]]))
+        uniform = output_with_gate(torch.full((1, 2, 1), 0.5))
+
+        self.assertLess(
+            float(_router_marginal_utility_loss(aligned, batch).detach()),
+            float(_router_marginal_utility_loss(uniform, batch).detach()),
         )
 
     def test_operator_admission_and_memory_differentiation_diagnostics(self):

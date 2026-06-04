@@ -536,6 +536,8 @@ def _candidate_diagnostic_tensor(
 
 
 def _router_marginal_utility_loss(output: MultimodalOVHAOutput, batch: MultimodalEpisodeBatch | None = None) -> torch.Tensor:
+    if batch is not None and output.diagnostics.get("composition", {}).get("mode") == "base_plus_residual":
+        return _residual_oracle_gate_loss(output, batch)
     if batch is not None:
         sample_candidate_loss = _candidate_losses_by_sample_from_values(
             output.candidate_values,
@@ -881,7 +883,39 @@ def _sentiment_candidate_oracle_diagnostics(
         "candidate_oracle_selection": candidate_oracle,
         "gate_sweep": _spo_lrio_gate_sweep(batch, output, candidate_names, full_loss),
         "residual_oracle": _spo_lrio_residual_oracle(batch, output, candidate_names, full_loss),
+        "residual_candidate_loss": _residual_candidate_loss_diagnostics(batch, output),
     }
+
+
+def _residual_candidate_loss_diagnostics(
+    batch: MultimodalEpisodeBatch,
+    output: MultimodalOVHAOutput,
+) -> dict[str, dict[str, float]]:
+    composition = output.diagnostics.get("composition", {})
+    if composition.get("mode") != "base_plus_residual":
+        return {}
+    raw_delta = composition.get("raw_delta_by_candidate", {})
+    gated_corrected = composition.get("gated_corrected_candidate_values_by_candidate", {})
+    ungated_corrected = composition.get("ungated_corrected_candidate_values_by_candidate", {})
+    contribution_norm = composition.get("actual_contribution_norm_by_candidate", {})
+    base_candidate = composition.get("base_candidate")
+    if base_candidate not in output.candidate_outputs or not isinstance(raw_delta, dict):
+        return {}
+    base = output.candidate_outputs[str(base_candidate)].value
+    rows: dict[str, dict[str, float]] = {}
+    for candidate, delta in raw_delta.items():
+        if not hasattr(delta, "to"):
+            continue
+        gated = gated_corrected.get(candidate) if isinstance(gated_corrected, dict) else None
+        ungated = ungated_corrected.get(candidate) if isinstance(ungated_corrected, dict) else None
+        norm = contribution_norm.get(candidate) if isinstance(contribution_norm, dict) else None
+        rows[str(candidate)] = {
+            "raw_delta_loss": _as_float(_task_loss(delta.to(dtype=base.dtype, device=base.device), batch)),
+            "gated_corrected_loss": _as_float(_task_loss(gated, batch)) if hasattr(gated, "to") else 0.0,
+            "ungated_corrected_loss": _as_float(_task_loss(ungated, batch)) if hasattr(ungated, "to") else 0.0,
+            "actual_contribution_norm": _as_float(norm) if hasattr(norm, "to") else 0.0,
+        }
+    return rows
 
 
 def _candidate_oracle_selection(
