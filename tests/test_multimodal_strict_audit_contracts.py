@@ -55,7 +55,7 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertGreaterEqual(float(tanso.diagnostics["shift_magnitude"].detach().cpu()), 0.0)
         self.assertIn("audio_shift_load", tanso.diagnostics)
         self.assertIn("vision_shift_load", tanso.diagnostics)
-        self.assertIn("shift_direction_alignment", tanso.diagnostics)
+        self.assertNotIn("shift_direction_alignment", tanso.diagnostics)
 
     def test_tanso_text_pair_features_are_field_order_invariant(self):
         if not TORCH_AVAILABLE:
@@ -114,13 +114,54 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
             d_model=12,
             memory_tokens=2,
             candidate_names=("SPO", "TANSO"),
+            composition_mode="base_plus_residual",
+            base_candidate="SPO",
+            residual_candidates=("TANSO",),
         )
 
         output = model(batch)
+        spo = output.candidate_outputs["SPO"].value
 
         self.assertEqual(float(output.diagnostics["candidate_diagnostics"]["TANSO"]["nonverbal_source_count"]), 0.0)
         self.assertEqual(float(output.diagnostics["operator_admission_gate"]["TANSO"]), 0.0)
         self.assertTrue(torch.allclose(output.router_weights[..., 1], torch.zeros_like(output.router_weights[..., 1])))
+        self.assertTrue(torch.allclose(output.y_hat, spo, atol=1e-7))
+        self.assertTrue(torch.allclose(output.diagnostics["composition"]["residual_gate_tensor_by_candidate"]["TANSO"], torch.zeros_like(spo), atol=1e-7))
+
+    def test_model_forward_outputs_and_diagnostics_do_not_depend_on_target_y(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for target isolation checks")
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        torch.manual_seed(38)
+        batch = _batch(torch)
+        altered = replace(batch, target_y=-batch.target_y)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=("SPO", "LRIO", "TANSO"),
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+            composition_mode="base_plus_residual",
+            base_candidate="SPO",
+            residual_candidates=("LRIO", "TANSO"),
+        )
+        model.eval()
+
+        with torch.no_grad():
+            original = model(batch)
+            changed = model(altered)
+
+        self.assertTrue(torch.allclose(original.y_hat, changed.y_hat, atol=1e-7))
+        self.assertNotIn("shift_direction_alignment", original.candidate_outputs["TANSO"].diagnostics)
+        self.assertNotIn("candidate_loss", original.diagnostics)
+        self.assertNotIn("candidate_loss_by_sample", original.diagnostics)
+        self.assertNotIn("candidate_loss", original.diagnostics["candidate_diagnostics"]["TANSO"])
+        self.assertEqual(original.diagnostics["composition"]["mode"], changed.diagnostics["composition"]["mode"])
 
     def test_cmu_public_main_uses_reverse_evidence_router_ablation_not_duplicate(self):
         payload = json.loads((ROOT / "configs" / "multimodal_cmu_mosei_public_main.json").read_text())
@@ -678,8 +719,11 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         expected = spo + lrio_gate * lrio_delta
 
         self.assertTrue(torch.allclose(output.y_hat, expected, atol=1e-6))
-        self.assertTrue(torch.allclose(output.candidate_values[..., 1, :], spo + lrio_delta, atol=1e-6))
+        self.assertTrue(torch.allclose(output.candidate_values[..., 1, :], expected, atol=1e-6))
         self.assertEqual(output.diagnostics["composition"]["mode"], "base_plus_residual")
+        self.assertIn("raw_delta_by_candidate", output.diagnostics["composition"])
+        self.assertIn("gated_delta_by_candidate", output.diagnostics["composition"])
+        self.assertIn("ungated_corrected_candidate_values_by_candidate", output.diagnostics["composition"])
 
     def test_cmu_configs_disable_evidence_router_and_use_residual_composition(self):
         import json
@@ -721,6 +765,29 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertIn("router_marginal_utility", components)
         self.assertGreater(float(components["spo_prototype_diversity"].detach()), 0.0)
         self.assertGreaterEqual(float(components["router_marginal_utility"].detach()), 0.0)
+
+    def test_public_loss_components_skip_diagnostic_only_zero_weight_candidate_loss(self):
+        import torch
+        from types import SimpleNamespace
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_smoke import _public_loss_components
+
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_main.json")
+        batch = _batch(torch)
+        output = SimpleNamespace(
+            y_hat=torch.zeros_like(batch.target_y),
+            candidate_values=torch.full((3, 2, len(config.candidate_names), 1), float("nan")),
+            candidate_outputs={name: object() for name in config.candidate_names},
+            diagnostics={},
+            router_weights=torch.full((3, 2, len(config.candidate_names)), 1.0 / len(config.candidate_names)),
+        )
+
+        components = _public_loss_components(output, batch, config)
+
+        self.assertIn("task_loss", components)
+        self.assertNotIn("candidate_individual_loss", components)
+        self.assertTrue(torch.isfinite(components["task_loss"]))
 
     def test_sentiment_public_diagnostics_include_candidate_gate_and_residual_oracles(self):
         import torch
