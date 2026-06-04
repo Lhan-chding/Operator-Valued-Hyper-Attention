@@ -486,8 +486,10 @@ def _compute_public_loss_component(
         return _huber_l1_task_loss(output.y_hat, batch)
     if name == "ordinal_acc5_acc7_auxiliary":
         return _ordinal_acc5_acc7_auxiliary_loss(output.y_hat, batch)
+    if name == "residual_gate_utility_loss":
+        return _residual_gate_utility_loss(output, batch)
     if name == "residual_oracle_gate_loss":
-        return _residual_oracle_gate_loss(output, batch)
+        return _residual_gate_utility_loss(output, batch)
     if name == "tanso_source_oracle_gate_loss":
         return _tanso_source_oracle_gate_loss(output, batch)
     if name == "val_affine_calibration":
@@ -627,24 +629,61 @@ def _ordinal_ce_from_scalar(prediction: torch.Tensor, target: torch.Tensor, *, b
     return torch.nn.functional.cross_entropy(logits, labels)
 
 
-def _residual_oracle_gate_loss(output: MultimodalOVHAOutput, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+def _residual_gate_utility_loss(
+    output: MultimodalOVHAOutput,
+    batch: MultimodalEpisodeBatch,
+    *,
+    tau: float = 0.1,
+    sparse_weight: float = 0.01,
+    overlap_weight: float = 0.01,
+) -> torch.Tensor:
     composition = output.diagnostics.get("composition", {})
-    raw_delta = composition.get("raw_delta_by_candidate", {})
+    gated_delta = composition.get("gated_delta_by_candidate", {})
     gate = composition.get("residual_gate_tensor_by_candidate", {})
-    base_candidate = composition.get("base_candidate")
-    if not isinstance(raw_delta, dict) or not isinstance(gate, dict) or base_candidate not in output.candidate_outputs:
+    if not isinstance(gated_delta, dict) or not isinstance(gate, dict):
         return output.y_hat.sum() * 0.0
-    base = output.candidate_outputs[str(base_candidate)].value
+    target = batch.target_y.to(dtype=output.y_hat.dtype, device=output.y_hat.device)
+    mask = batch.target_mask.to(dtype=output.y_hat.dtype, device=output.y_hat.device).unsqueeze(-1)
+    full_error = (output.y_hat - target).square()
     losses = []
-    for candidate, delta in raw_delta.items():
+    gate_values = []
+    for candidate, delta in gated_delta.items():
         candidate_gate = gate.get(candidate)
         if not hasattr(delta, "to") or not hasattr(candidate_gate, "to"):
             continue
-        target_alpha = _residual_oracle_alpha(base, delta, batch)
-        losses.append(torch.nn.functional.binary_cross_entropy(candidate_gate.clamp(1e-6, 1.0 - 1e-6), target_alpha.detach()))
+        delta = delta.to(dtype=output.y_hat.dtype, device=output.y_hat.device)
+        candidate_gate = candidate_gate.to(dtype=output.y_hat.dtype, device=output.y_hat.device)
+        without_error = (output.y_hat - delta - target).square()
+        utility = ((without_error - full_error) * mask).detach()
+        target_gate = torch.where(
+            utility > 0.0,
+            torch.sigmoid(utility / max(float(tau), 1e-6)),
+            torch.zeros_like(utility),
+        )
+        if target_gate.shape != candidate_gate.shape:
+            target_gate = target_gate.mean(dim=-1, keepdim=True)
+        losses.append(
+            torch.nn.functional.binary_cross_entropy(
+                candidate_gate.clamp(1e-6, 1.0 - 1e-6),
+                target_gate,
+                reduction="none",
+            ).mul(mask).sum() / mask.sum().clamp_min(1.0)
+        )
+        gate_values.append(candidate_gate * mask)
     if not losses:
         return output.y_hat.sum() * 0.0
-    return torch.stack(losses).mean()
+    loss = torch.stack(losses).mean()
+    if gate_values:
+        loss = loss + float(sparse_weight) * torch.stack([value.sum() / mask.sum().clamp_min(1.0) for value in gate_values]).mean()
+    if "LRIO" in gate and "TANSO" in gate:
+        lrio = gate["LRIO"].to(dtype=output.y_hat.dtype, device=output.y_hat.device)
+        tanso = gate["TANSO"].to(dtype=output.y_hat.dtype, device=output.y_hat.device)
+        loss = loss + float(overlap_weight) * ((lrio * tanso * mask).sum() / mask.sum().clamp_min(1.0))
+    return loss
+
+
+def _residual_oracle_gate_loss(output: MultimodalOVHAOutput, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    return _residual_gate_utility_loss(output, batch)
 
 
 def _tanso_source_oracle_gate_loss(output: MultimodalOVHAOutput, batch: MultimodalEpisodeBatch) -> torch.Tensor:
@@ -849,7 +888,8 @@ def _sentiment_public_report_diagnostics(
     batch: MultimodalEpisodeBatch,
     output: MultimodalOVHAOutput,
 ) -> dict[str, object]:
-    loads = _complete_candidate_probability_map(output.diagnostics.get("router_load_by_candidate", {}))
+    candidate_names = tuple(output.candidate_outputs)
+    loads = _complete_candidate_probability_map(output.diagnostics.get("router_load_by_candidate", {}), candidate_names=candidate_names)
     lrio_diag = output.diagnostics.get("candidate_diagnostics", {}).get("LRIO", {})
     spo_diag = output.diagnostics.get("candidate_diagnostics", {}).get("SPO", {})
     missing_fraction = _missing_modality_fraction(batch)
@@ -881,8 +921,9 @@ def _sentiment_candidate_oracle_diagnostics(
     candidate_oracle = _candidate_oracle_selection(batch, output, candidate_names, full_loss)
     return {
         "candidate_oracle_selection": candidate_oracle,
-        "gate_sweep": _spo_lrio_gate_sweep(batch, output, candidate_names, full_loss),
-        "residual_oracle": _spo_lrio_residual_oracle(batch, output, candidate_names, full_loss),
+        "base_residual_gate_sweep": _base_residual_gate_sweep(batch, output, candidate_names, full_loss),
+        "base_residual_oracle": _base_residual_oracle(batch, output, candidate_names, full_loss),
+        "leave_one_residual_out_oracle": _leave_one_residual_out_oracle(batch, output, full_loss),
         "residual_candidate_loss": _residual_candidate_loss_diagnostics(batch, output),
     }
 
@@ -949,60 +990,133 @@ def _candidate_oracle_selection(
     }
 
 
-def _spo_lrio_gate_sweep(
+def _base_residual_gate_sweep(
     batch: MultimodalEpisodeBatch,
     output: MultimodalOVHAOutput,
     candidate_names: tuple[str, ...],
     full_loss: torch.Tensor,
 ) -> dict[str, object]:
-    if "SPO" not in candidate_names or "LRIO" not in candidate_names:
-        return {"available": False, "reason": "SPO and LRIO candidates are both required"}
-    spo = output.candidate_values[..., candidate_names.index("SPO"), :]
-    lrio = output.candidate_values[..., candidate_names.index("LRIO"), :]
+    composition = output.diagnostics.get("composition", {})
+    if composition.get("mode") != "base_plus_residual":
+        return {"available": False, "reason": "base_plus_residual composition is required"}
+    base_candidate = str(composition.get("base_candidate"))
+    residual_candidates = tuple(str(name) for name in composition.get("residual_candidates", ()) if str(name) in output.candidate_outputs)
+    raw_delta = composition.get("raw_delta_by_candidate", {})
+    if base_candidate not in output.candidate_outputs or not residual_candidates or not isinstance(raw_delta, dict):
+        return {"available": False, "reason": "base candidate and residual deltas are required"}
+    base = output.candidate_outputs[base_candidate].value
+    named_losses: dict[str, float] = {f"{base_candidate}-only": _as_float(_task_loss(base, batch))}
     rows = []
-    for alpha in _oracle_grid():
-        prediction = (1.0 - alpha) * spo + alpha * lrio
-        rows.append({"alpha": alpha, "loss": _as_float(_task_loss(prediction, batch))})
+    for gates in _residual_gate_grid(residual_candidates):
+        prediction = base
+        active = []
+        for candidate, gamma in gates.items():
+            delta = raw_delta.get(candidate)
+            if not hasattr(delta, "to"):
+                continue
+            if gamma > 0.0:
+                active.append(candidate)
+            prediction = prediction + float(gamma) * delta.to(dtype=base.dtype, device=base.device)
+        label = "+".join((base_candidate, *active)) if active else f"{base_candidate}-only"
+        loss = _as_float(_task_loss(prediction, batch))
+        rows.append({"gates": dict(gates), "label": label, "loss": loss})
+        if all(gamma in {0.0, 1.0} for gamma in gates.values()):
+            named_losses[label] = loss
+    for candidate in residual_candidates:
+        value = output.candidate_outputs[candidate].value
+        named_losses[f"{candidate}-only"] = _as_float(_task_loss(value, batch))
     best = min(rows, key=lambda row: float(row["loss"]))
     full_loss_float = _as_float(full_loss)
     return {
         "available": True,
+        "base_candidate": base_candidate,
+        "residual_candidates": residual_candidates,
+        "named_losses": named_losses,
         "grid": rows,
-        "best_alpha": best["alpha"],
+        "best_gates": best["gates"],
+        "best_label": best["label"],
         "best_loss": best["loss"],
         "full_minus_best_gate_loss": full_loss_float - float(best["loss"]),
     }
 
 
-def _spo_lrio_residual_oracle(
+def _base_residual_oracle(
     batch: MultimodalEpisodeBatch,
     output: MultimodalOVHAOutput,
     candidate_names: tuple[str, ...],
     full_loss: torch.Tensor,
 ) -> dict[str, object]:
-    if "SPO" not in candidate_names or "LRIO" not in candidate_names:
-        return {"available": False, "reason": "SPO and LRIO candidates are both required"}
-    spo = output.candidate_outputs["SPO"].value
-    if output.diagnostics.get("composition", {}).get("mode") == "base_plus_residual":
-        lrio_delta = output.candidate_outputs["LRIO"].value
-        delta_source = "lrio_candidate_delta"
-    else:
-        lrio_delta = output.candidate_outputs["LRIO"].value - spo
-        delta_source = "lrio_minus_spo_candidate_value"
-    rows = []
-    for gamma in _oracle_grid():
-        prediction = spo + gamma * lrio_delta
-        rows.append({"gamma": gamma, "loss": _as_float(_task_loss(prediction, batch))})
-    best = min(rows, key=lambda row: float(row["loss"]))
+    composition = output.diagnostics.get("composition", {})
+    if composition.get("mode") != "base_plus_residual":
+        return {"available": False, "reason": "base_plus_residual composition is required"}
+    base_candidate = str(composition.get("base_candidate"))
+    raw_delta = composition.get("raw_delta_by_candidate", {})
+    residual_candidates = tuple(str(name) for name in composition.get("residual_candidates", ()) if str(name) in output.candidate_outputs)
+    if base_candidate not in output.candidate_outputs or not isinstance(raw_delta, dict):
+        return {"available": False, "reason": "base candidate and residual deltas are required"}
+    base = output.candidate_outputs[base_candidate].value
+    base_loss = _task_loss(base, batch)
+    rows = {}
+    utility = {}
+    for candidate in residual_candidates:
+        delta = raw_delta.get(candidate)
+        if not hasattr(delta, "to"):
+            continue
+        candidate_prediction = base + delta.to(dtype=base.dtype, device=base.device)
+        candidate_loss = _task_loss(candidate_prediction, batch)
+        rows[candidate] = {
+            "base_plus_residual_loss": _as_float(candidate_loss),
+            "base_minus_candidate_loss": _as_float(base_loss - candidate_loss),
+        }
+        utility[candidate] = _as_float(base_loss - candidate_loss)
     full_loss_float = _as_float(full_loss)
     return {
         "available": True,
-        "delta_source": delta_source,
-        "grid": rows,
-        "best_gamma": best["gamma"],
-        "best_loss": best["loss"],
-        "full_minus_best_residual_loss": full_loss_float - float(best["loss"]),
+        "base_candidate": base_candidate,
+        "residual_candidates": residual_candidates,
+        "base_loss": _as_float(base_loss),
+        "full_loss": full_loss_float,
+        "residual_utility": utility,
+        "candidate_rows": rows,
     }
+
+
+def _leave_one_residual_out_oracle(
+    batch: MultimodalEpisodeBatch,
+    output: MultimodalOVHAOutput,
+    full_loss: torch.Tensor,
+) -> dict[str, object]:
+    composition = output.diagnostics.get("composition", {})
+    gated_delta = composition.get("gated_delta_by_candidate", {})
+    if not isinstance(gated_delta, dict) or not gated_delta:
+        return {}
+    full_loss_float = _as_float(full_loss)
+    rows = {}
+    for candidate, delta in gated_delta.items():
+        if not hasattr(delta, "to"):
+            continue
+        without_prediction = output.y_hat - delta.to(dtype=output.y_hat.dtype, device=output.y_hat.device)
+        without_loss = _as_float(_task_loss(without_prediction, batch))
+        rows[str(candidate)] = {
+            "loss_without_candidate": without_loss,
+            "full_loss": full_loss_float,
+            "leave_one_out_utility": without_loss - full_loss_float,
+            "candidate_helped_full_prediction": without_loss > full_loss_float,
+        }
+    return rows
+
+
+def _residual_gate_grid(residual_candidates: tuple[str, ...]) -> tuple[dict[str, float], ...]:
+    if not residual_candidates:
+        return ({},)
+    rows = [{}]
+    for candidate in residual_candidates:
+        rows = [
+            {**row, candidate: gamma}
+            for row in rows
+            for gamma in _oracle_grid()
+        ]
+    return tuple(rows)
 
 
 def _oracle_grid() -> tuple[float, ...]:
@@ -1038,9 +1152,9 @@ def _candidate_diag_float(
     return default
 
 
-def _shift_candidate_load(loads: dict[str, float], deltas: dict[str, float]) -> dict[str, float]:
-    shifted = {candidate: max(0.0, loads.get(candidate, 0.0) + deltas.get(candidate, 0.0)) for candidate in ("TLEO", "SPO", "LRIO", "CATO")}
-    return _complete_candidate_probability_map(shifted)
+def _shift_candidate_load(loads: dict[str, float], deltas: dict[str, float], candidate_names: tuple[str, ...] = ("TLEO", "SPO", "LRIO", "CATO")) -> dict[str, float]:
+    shifted = {candidate: max(0.0, loads.get(candidate, 0.0) + deltas.get(candidate, 0.0)) for candidate in candidate_names}
+    return _complete_candidate_probability_map(shifted, candidate_names=candidate_names)
 
 
 def _task_loss(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
@@ -1347,9 +1461,9 @@ def _robustness_router_load(row: dict[str, object], corruption_type: str) -> dic
     return _complete_candidate_probability_map(_probe_router_load_by_candidate(str(row.get("model"))))
 
 
-def _robustness_candidate_loss(score: float) -> dict[str, float]:
+def _robustness_candidate_loss(score: float, candidate_names: tuple[str, ...] = ("TLEO", "SPO", "LRIO", "CATO")) -> dict[str, float]:
     loss = max(0.0, 1.0 - score)
-    return {candidate: loss for candidate in ("TLEO", "SPO", "LRIO", "CATO")}
+    return {candidate: loss for candidate in candidate_names}
 
 
 def _write_smoke_statistics_preview(
@@ -1824,7 +1938,7 @@ def _sentiment_smoke_metrics(
         "missing_modality_performance_drop": missing_drop,
         "corruption_robustness_auc": max(0.0, min(1.0, 1.0 - missing_drop)),
         "router_load_by_corruption_type": {
-            "clean": _complete_candidate_probability_map(router_load_by_candidate)
+            "clean": _complete_candidate_probability_map(router_load_by_candidate, candidate_names=config.candidate_names)
         },
         "lrio_rank_entropy": _candidate_diagnostic_metric(diagnostics, "LRIO", "rank_entropy"),
         "spo_prototype_entropy": _candidate_diagnostic_metric(diagnostics, "SPO", "prototype_entropy"),
@@ -1886,14 +2000,18 @@ def _missing_corruption_key(batch: MultimodalEpisodeBatch) -> str:
     return f"{modality}_missing_smoke"
 
 
-def _complete_candidate_probability_map(values: Any) -> dict[str, float]:
+def _complete_candidate_probability_map(values: Any, candidate_names: tuple[str, ...] = ("TLEO", "SPO", "LRIO", "CATO")) -> dict[str, float]:
+    candidates = tuple(str(candidate) for candidate in candidate_names)
+    if not candidates:
+        return {}
     loads = {
         candidate: _candidate_probability(values, candidate, default=0.0)
-        for candidate in ("TLEO", "SPO", "LRIO", "CATO")
+        for candidate in candidates
     }
     total = sum(loads.values())
     if total <= 0.0:
-        return {candidate: 0.25 for candidate in loads}
+        uniform = 1.0 / float(len(loads))
+        return {candidate: uniform for candidate in loads}
     return {candidate: value / total for candidate, value in loads.items()}
 
 

@@ -210,7 +210,7 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
 
         self.assertIn("huber_l1_task_loss", t5_losses)
         self.assertIn("ordinal_acc5_acc7_auxiliary", t5_losses)
-        self.assertIn("residual_oracle_gate_loss", t5_losses)
+        self.assertIn("residual_gate_utility_loss", t5_losses)
         self.assertIn("tanso_source_oracle_gate_loss", t5_losses)
         self.assertIn("val_affine_calibration", t5_losses)
         self.assertGreater(payload["loss_metadata"]["huber_l1_task_loss"]["weight"], 0.0)
@@ -230,7 +230,7 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         for token in (
             "_huber_l1_task_loss",
             "_ordinal_acc5_acc7_auxiliary_loss",
-            "_residual_oracle_gate_loss",
+            "_residual_gate_utility_loss",
             "_tanso_source_oracle_gate_loss",
         ):
             self.assertIn(token, smoke)
@@ -316,6 +316,19 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertIn("self.key_proj = nn.ModuleDict", cato)
         self.assertIn("self.value_proj = nn.ModuleDict", cato)
         self.assertIn("_source_transport_marginal_error", cato)
+
+    def test_public_runners_expose_dynamic_tanso_diagnostics_and_prediction_artifact_hooks(self):
+        smoke = (ROOT / "scripts" / "multimodal" / "run_public_smoke.py").read_text()
+        main = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()
+
+        self.assertIn("def _complete_candidate_probability_map(values: Any, candidate_names:", smoke)
+        self.assertIn("def _shift_candidate_load(loads: dict[str, float], deltas: dict[str, float], candidate_names:", smoke)
+        self.assertNotIn('for candidate in ("TLEO", "SPO", "LRIO", "CATO")', smoke)
+        self.assertIn("base_residual_gate_sweep", smoke)
+        self.assertIn("leave_one_residual_out_oracle", smoke)
+        self.assertIn("def _per_sample_prediction_rows(", main)
+        self.assertIn('per_sample_predictions_path = artifact_root / "per_sample_predictions.jsonl"', main)
+        self.assertIn('"per_sample_predictions": _artifact_descriptor(per_sample_predictions_path)', main)
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "Torch is not installed; strict multimodal audit tests skipped.")
@@ -904,6 +917,28 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertNotIn("candidate_individual_loss", components)
         self.assertTrue(torch.isfinite(components["task_loss"]))
 
+    def test_candidate_probability_maps_are_dynamic_and_include_tanso(self):
+        from scripts.multimodal.run_public_smoke import _complete_candidate_probability_map, _shift_candidate_load
+
+        loads = _complete_candidate_probability_map(
+            {"SPO": 0.2, "LRIO": 0.3, "TANSO": 0.5},
+            candidate_names=("SPO", "LRIO", "TANSO"),
+        )
+
+        self.assertEqual(set(loads), {"SPO", "LRIO", "TANSO"})
+        self.assertAlmostEqual(sum(loads.values()), 1.0, places=6)
+        self.assertGreater(loads["TANSO"], 0.0)
+        self.assertNotIn("TLEO", loads)
+        self.assertNotIn("CATO", loads)
+
+        shifted = _shift_candidate_load(
+            {"SPO": 0.2, "LRIO": 0.3, "TANSO": 0.5},
+            {"TANSO": 0.1},
+            candidate_names=("SPO", "LRIO", "TANSO"),
+        )
+        self.assertEqual(set(shifted), {"SPO", "LRIO", "TANSO"})
+        self.assertGreater(shifted["TANSO"], loads["TANSO"])
+
     def test_sentiment_public_diagnostics_include_candidate_gate_and_residual_oracles(self):
         import torch
 
@@ -934,11 +969,19 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         public = row["public_diagnostics"]
 
         self.assertIn("candidate_oracle_selection", public)
-        self.assertIn("gate_sweep", public)
-        self.assertIn("residual_oracle", public)
+        self.assertIn("base_residual_gate_sweep", public)
+        self.assertIn("base_residual_oracle", public)
+        self.assertIn("leave_one_residual_out_oracle", public)
         self.assertIn("full_minus_oracle_min_loss", public["candidate_oracle_selection"])
-        self.assertIn("best_alpha", public["gate_sweep"])
-        self.assertIn("best_gamma", public["residual_oracle"])
+        self.assertIn("named_losses", public["base_residual_gate_sweep"])
+        self.assertIn("SPO+LRIO", public["base_residual_gate_sweep"]["named_losses"])
+        self.assertIn("SPO+TANSO", public["base_residual_gate_sweep"]["named_losses"])
+        self.assertIn("SPO+LRIO+TANSO", public["base_residual_gate_sweep"]["named_losses"])
+        self.assertIn("TANSO-only", public["base_residual_gate_sweep"]["named_losses"])
+        self.assertIn("LRIO-only", public["base_residual_gate_sweep"]["named_losses"])
+        self.assertIn("residual_utility", public["base_residual_oracle"])
+        self.assertIn("LRIO", public["leave_one_residual_out_oracle"])
+        self.assertIn("TANSO", public["leave_one_residual_out_oracle"])
         self.assertIn("residual_candidate_loss", public)
         residual_loss = public["residual_candidate_loss"]
         self.assertIn("LRIO", residual_loss)
@@ -948,6 +991,47 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
             self.assertIn("gated_corrected_loss", values)
             self.assertIn("ungated_corrected_loss", values)
             self.assertIn("actual_contribution_norm", values)
+
+    def test_main_runner_exports_per_sample_prediction_rows(self):
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+        from scripts.multimodal.run_public_main import _per_sample_prediction_rows
+
+        torch.manual_seed(51)
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_main.json")
+        batch = _batch(torch)
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "audio": 4, "vision": 3},
+            query_dim=6,
+            output_dim=1,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=config.candidate_names,
+            use_evidence_router=config.use_evidence_router,
+            lrio_pairs=config.lrio_pairs,
+            composition_mode=config.composition_mode,
+            base_candidate=config.base_candidate,
+            residual_candidates=config.residual_candidates,
+        )
+        with torch.no_grad():
+            output = model(batch)
+
+        rows = _per_sample_prediction_rows(config, batch, output, model_name="ovha_full", seed=301)
+
+        self.assertEqual(len(rows), int(batch.target_y.shape[0]))
+        row = rows[0]
+        self.assertEqual(row["sample_id"], batch.provenance.source_id[0])
+        self.assertIn("truth", row)
+        self.assertIn("prediction_full", row)
+        self.assertIn("prediction_by_candidate", row)
+        self.assertIn("base_prediction", row)
+        self.assertIn("raw_delta_by_candidate", row)
+        self.assertIn("gated_delta_by_candidate", row)
+        self.assertIn("residual_gate_by_candidate", row)
+        self.assertIn("LRIO", row["raw_delta_by_candidate"])
+        self.assertIn("TANSO", row["raw_delta_by_candidate"])
 
     def test_router_marginal_utility_uses_per_sample_candidate_losses(self):
         import torch

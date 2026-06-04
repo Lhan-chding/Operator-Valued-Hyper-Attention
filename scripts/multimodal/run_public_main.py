@@ -148,10 +148,12 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     raw_metrics_path = artifact_root / "raw_metrics.jsonl"
     diagnostics_path = artifact_root / "diagnostics.jsonl"
     robustness_rows_path = artifact_root / "robustness_rows.jsonl"
+    per_sample_predictions_path = artifact_root / "per_sample_predictions.jsonl"
 
     raw_rows: list[dict[str, Any]] = []
     diagnostics_rows: list[dict[str, Any]] = []
     robustness_rows: list[dict[str, Any]] = []
+    per_sample_prediction_rows: list[dict[str, Any]] = []
     seed_reports: list[dict[str, Any]] = []
     selected_seeds = _selected_seeds(config, args.pilot_seed)
     pilot_seed_subset = len(selected_seeds) != len(config.seeds)
@@ -183,11 +185,13 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         raw_rows.extend(seed_report["raw_rows"])
         diagnostics_rows.extend(seed_report["diagnostics_rows"])
         robustness_rows.extend(seed_report["robustness_rows"])
+        per_sample_prediction_rows.extend(seed_report["per_sample_prediction_rows"])
         seed_reports.append(seed_report["summary"])
 
     _write_jsonl(raw_metrics_path, raw_rows)
     _write_jsonl(diagnostics_path, diagnostics_rows)
     _write_jsonl(robustness_rows_path, robustness_rows)
+    _write_jsonl(per_sample_predictions_path, per_sample_prediction_rows)
 
     payload = {
         "ok": True,
@@ -210,12 +214,14 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "raw_metrics": len(raw_rows),
             "diagnostics": len(diagnostics_rows),
             "robustness_rows": len(robustness_rows),
+            "per_sample_predictions": len(per_sample_prediction_rows),
         },
         "seed_reports": seed_reports,
         "artifacts": {
             "raw_metrics": _artifact_descriptor(raw_metrics_path),
             "diagnostics": _artifact_descriptor(diagnostics_path),
             "robustness_rows": _artifact_descriptor(robustness_rows_path),
+            "per_sample_predictions": _artifact_descriptor(per_sample_predictions_path),
         },
         "warnings": [],
     }
@@ -334,8 +340,15 @@ def _run_seed(
         device=device,
         batch_size=int(args.batch_size),
     )
+    per_sample_prediction_rows = _per_sample_prediction_rows(
+        config,
+        eval_batch,
+        eval_output,
+        model_name="ovha_full",
+        seed=seed,
+    )
 
-    baseline_rows, baseline_robustness_rows, baseline_summaries = _baseline_rows(
+    baseline_rows, baseline_robustness_rows, baseline_summaries, baseline_prediction_rows = _baseline_rows(
         config,
         train_batch=train_batch,
         selection_batch=selection_batch,
@@ -357,6 +370,7 @@ def _run_seed(
     )
     raw_rows.extend(baseline_rows)
     robustness_rows.extend(baseline_robustness_rows)
+    per_sample_prediction_rows.extend(baseline_prediction_rows)
     _print_progress(
         "seed:done",
         seed=seed,
@@ -368,6 +382,7 @@ def _run_seed(
         "raw_rows": raw_rows,
         "diagnostics_rows": diagnostics_rows,
         "robustness_rows": robustness_rows,
+        "per_sample_prediction_rows": per_sample_prediction_rows,
         "summary": {
             "seed": seed,
             "ovha_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial_parameters).item()),
@@ -1224,6 +1239,89 @@ def _ovha_raw_metric_row(
     )
 
 
+def _per_sample_prediction_rows(
+    config: MultimodalExperimentConfig,
+    batch: MultimodalEpisodeBatch,
+    output: MultimodalOVHAOutput | None,
+    *,
+    model_name: str,
+    seed: int,
+    prediction: torch.Tensor | None = None,
+) -> list[dict[str, Any]]:
+    prediction_tensor = output.y_hat if output is not None else prediction
+    if prediction_tensor is None:
+        return []
+    prediction_tensor = prediction_tensor.detach().cpu()
+    target = batch.target_y.detach().cpu()
+    mask = batch.target_mask.detach().cpu()
+    rows: list[dict[str, Any]] = []
+    composition = output.diagnostics.get("composition", {}) if output is not None and isinstance(output.diagnostics, dict) else {}
+    base_candidate = str(composition.get("base_candidate", ""))
+    base_prediction = None
+    prediction_by_candidate: dict[str, torch.Tensor] = {}
+    if output is not None:
+        prediction_by_candidate = {
+            name: candidate_output.value.detach().cpu()
+            for name, candidate_output in output.candidate_outputs.items()
+        }
+        if base_candidate in output.candidate_outputs:
+            base_prediction = output.candidate_outputs[base_candidate].value.detach().cpu()
+    raw_delta = _sample_tensor_map(composition.get("raw_delta_by_candidate", {}))
+    gated_delta = _sample_tensor_map(composition.get("gated_delta_by_candidate", {}))
+    residual_gate = _sample_tensor_map(composition.get("residual_gate_tensor_by_candidate", {}))
+    for index, sample_id in enumerate(batch.provenance.source_id):
+        row = {
+            "artifact_type": "public_main_per_sample_prediction",
+            "evidence_scope": "public_main_per_sample_diagnostics",
+            "dataset": config.dataset_name,
+            "task": config.task_type,
+            "split": batch.split,
+            "seed": int(seed),
+            "model": model_name,
+            "sample_index": index,
+            "sample_id": str(sample_id),
+            "target_mask": _tensor_payload(mask[index]),
+            "truth": _tensor_payload(target[index]),
+            "prediction_full": _tensor_payload(prediction_tensor[index]),
+            "prediction_by_model": {model_name: _tensor_payload(prediction_tensor[index])},
+            "prediction_by_candidate": {
+                name: _tensor_payload(value[index])
+                for name, value in prediction_by_candidate.items()
+                if value.shape[0] > index
+            },
+            "base_candidate": base_candidate or None,
+            "base_prediction": _tensor_payload(base_prediction[index]) if base_prediction is not None and base_prediction.shape[0] > index else None,
+            "raw_delta_by_candidate": _indexed_tensor_map(raw_delta, index),
+            "gated_delta_by_candidate": _indexed_tensor_map(gated_delta, index),
+            "residual_gate_by_candidate": _indexed_tensor_map(residual_gate, index),
+        }
+        rows.append(row)
+    return rows
+
+
+def _sample_tensor_map(values: Any) -> dict[str, torch.Tensor]:
+    if not isinstance(values, dict):
+        return {}
+    return {
+        str(key): value.detach().cpu()
+        for key, value in values.items()
+        if hasattr(value, "detach")
+    }
+
+
+def _indexed_tensor_map(values: dict[str, torch.Tensor], index: int) -> dict[str, Any]:
+    return {
+        name: _tensor_payload(value[index])
+        for name, value in values.items()
+        if value.shape[0] > index
+    }
+
+
+def _tensor_payload(value: torch.Tensor) -> Any:
+    payload = value.detach().cpu().tolist()
+    return payload
+
+
 def _baseline_rows(
     config: MultimodalExperimentConfig,
     *,
@@ -1244,10 +1342,11 @@ def _baseline_rows(
     early_stopping_patience: int,
     weight_decay: float,
     device: torch.device,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     robustness_rows: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
+    per_sample_prediction_rows: list[dict[str, Any]] = []
     for baseline_name in config.baseline_names:
         baseline_protocol = baseline_protocol_for_name(config.task_type, str(baseline_name))
         if str(baseline_name) in ovha_ablation_names_for_task(config.task_type):
@@ -1302,6 +1401,15 @@ def _baseline_rows(
                     batch_size=batch_size,
                 )
             )
+            per_sample_prediction_rows.extend(
+                _per_sample_prediction_rows(
+                    config,
+                    eval_batch,
+                    eval_output,
+                    model_name=str(baseline_name),
+                    seed=seed,
+                )
+            )
             summaries.append({**summary, "model": str(baseline_name)})
             continue
 
@@ -1348,7 +1456,7 @@ def _baseline_rows(
                 post_prediction=eval_prediction,
                 calibrator=calibrator,
             )
-        router_load = _probe_router_load_by_candidate(str(baseline_name))
+        router_load = _uniform_candidate_load(config.candidate_names)
         rows.append(
             _raw_metric_row(
                 config,
@@ -1363,9 +1471,19 @@ def _baseline_rows(
                 hardware=hardware,
                 router_load_by_candidate=router_load,
                 router_entropy=torch.zeros((), dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device),
-                candidate_loss={candidate: loss for candidate in ("TLEO", "SPO", "LRIO", "CATO")},
+                candidate_loss={candidate: loss for candidate in config.candidate_names},
                 diagnostics=calibration_diagnostics,
                 model_protocol=f"{baseline_protocol}_public_main_v1",
+            )
+        )
+        per_sample_prediction_rows.extend(
+            _per_sample_prediction_rows(
+                config,
+                eval_batch,
+                None,
+                model_name=str(baseline_name),
+                seed=seed,
+                prediction=eval_prediction,
             )
         )
         robustness_rows.extend(
@@ -1382,7 +1500,7 @@ def _baseline_rows(
             )
         )
         summaries.append({**summary, "model": str(baseline_name)})
-    return rows, robustness_rows, summaries
+    return rows, robustness_rows, summaries, per_sample_prediction_rows
 
 
 def _train_ovha_ablation(
@@ -1769,7 +1887,7 @@ def _public_main_metrics(
             "missing_modality_performance_drop": missing_drop,
             "corruption_robustness_auc": max(0.0, min(1.0, 1.0 - missing_drop)),
             "router_load_by_corruption_type": {
-                "clean": _complete_candidate_probability_map(router_load_by_candidate)
+                "clean": _complete_candidate_probability_map(router_load_by_candidate, candidate_names=config.candidate_names)
             },
             "lrio_rank_entropy": _candidate_diagnostic_metric(diagnostics, "LRIO", "rank_entropy"),
             "spo_prototype_entropy": _candidate_diagnostic_metric(diagnostics, "SPO", "prototype_entropy"),
@@ -1873,8 +1991,8 @@ def _baseline_robustness_rows(
                 raw_metric_path=raw_metric_path,
                 corruption_type=corruption_type,
                 score=_bounded_score_from_loss(loss),
-                router_load_by_candidate=_probe_router_load_by_candidate(baseline_name),
-                candidate_loss={candidate: loss for candidate in ("TLEO", "SPO", "LRIO", "CATO")},
+                router_load_by_candidate=_uniform_candidate_load(config.candidate_names),
+                candidate_loss={candidate: loss for candidate in config.candidate_names},
                 model_reliability=None,
             )
         )
@@ -1911,13 +2029,20 @@ def _robustness_row(
         "rceo_reliability": rceo_reliability,
         "rceo_reliability_source": "model_reliability_prior" if model_reliability is not None else "not_applicable_no_model_reliability",
         "rceo_observed_reliability": score,
-        "router_load_by_candidate": _complete_candidate_probability_map(router_load_by_candidate),
+        "router_load_by_candidate": _complete_candidate_probability_map(router_load_by_candidate, candidate_names=config.candidate_names),
         "candidate_loss": _json_ready(candidate_loss),
         "source_raw_metric_path": str(raw_metric_path),
     }
     if corruption_type.startswith("hard_negative_"):
         row["mismatch_source_id"] = f"{batch.provenance.source_id[0]}::mismatch"
     return row
+
+
+def _uniform_candidate_load(candidate_names: tuple[str, ...]) -> dict[str, float]:
+    if not candidate_names:
+        return {}
+    weight = 1.0 / float(len(candidate_names))
+    return {candidate: weight for candidate in candidate_names}
 
 
 def _corrupted_batch(batch: MultimodalEpisodeBatch, corruption_type: str) -> MultimodalEpisodeBatch:

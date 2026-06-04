@@ -73,7 +73,7 @@
       "residual_norm_shrinkage",
       "huber_l1_task_loss",
       "ordinal_acc5_acc7_auxiliary",
-      "residual_oracle_gate_loss",
+      "residual_gate_utility_loss",
       "tanso_source_oracle_gate_loss",
       "val_affine_calibration"
     ]
@@ -101,7 +101,7 @@
     "ordinal_acc5_acc7_auxiliary": {
       "weight": 0.05
     },
-    "residual_oracle_gate_loss": {
+    "residual_gate_utility_loss": {
       "weight": 0.01
     },
     "tanso_source_oracle_gate_loss": {
