@@ -21,6 +21,9 @@ from moat_ovha_torch.models.multimodal.primitives.base import CandidateOutput
 from moat_ovha_torch.models.multimodal.reliability_prior import RCEOReliabilityPrior, ReliabilityPrior
 
 
+RESIDUAL_UTILITY_ADMISSION_THRESHOLD = 0.5
+
+
 @dataclass(frozen=True)
 class MultimodalOVHAOutput:
     y_hat: torch.Tensor
@@ -328,6 +331,8 @@ def _compose_prediction(
     gated_corrected_candidate_values_by_candidate = {}
     ungated_corrected_candidate_values_by_candidate = {}
     actual_contribution_norm_by_candidate = {}
+    residual_utility_score_by_candidate = {}
+    residual_utility_admission_by_candidate = {}
     y_hat = base_value
     for candidate in residual_candidates:
         candidate_index = candidate_names.index(candidate)
@@ -340,7 +345,9 @@ def _compose_prediction(
             admission = torch.ones_like(raw_gate)
         else:
             admission = admission_gate[..., candidate_index : candidate_index + 1].to(dtype=raw_gate.dtype, device=raw_gate.device)
-        gate = raw_gate * admission
+        utility_hard_admission = (raw_gate >= RESIDUAL_UTILITY_ADMISSION_THRESHOLD).to(dtype=raw_gate.dtype)
+        utility_admission = utility_hard_admission.detach() - raw_gate.detach() + raw_gate
+        gate = raw_gate * admission * utility_admission
         gated_delta = gate * delta
         gated_corrected = base_value + gated_delta
         ungated_corrected = base_value + delta
@@ -353,6 +360,8 @@ def _compose_prediction(
         gated_corrected_candidate_values_by_candidate[candidate] = gated_corrected
         ungated_corrected_candidate_values_by_candidate[candidate] = ungated_corrected
         actual_contribution_norm_by_candidate[candidate] = gated_delta.norm(dim=-1).mean()
+        residual_utility_score_by_candidate[candidate] = raw_gate.mean()
+        residual_utility_admission_by_candidate[candidate] = utility_hard_admission.mean()
     base_index = candidate_names.index(base_candidate)
     corrected_values[..., base_index, :] = base_value
     return {
@@ -364,6 +373,9 @@ def _compose_prediction(
             "residual_candidates": residual_candidates,
             "residual_gate_by_candidate": residual_gate_by_candidate,
             "residual_gate_tensor_by_candidate": residual_gate_tensor_by_candidate,
+            "residual_utility_threshold": RESIDUAL_UTILITY_ADMISSION_THRESHOLD,
+            "residual_utility_score_by_candidate": residual_utility_score_by_candidate,
+            "residual_utility_admission_by_candidate": residual_utility_admission_by_candidate,
             "raw_delta_by_candidate": raw_delta_by_candidate,
             "gated_delta_by_candidate": gated_delta_by_candidate,
             "gated_corrected_candidate_values_by_candidate": gated_corrected_candidate_values_by_candidate,

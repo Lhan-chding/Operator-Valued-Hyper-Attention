@@ -47,11 +47,7 @@ from scripts.multimodal.run_public_smoke import (
     _parameter_count,
     _parameter_vector,
     _probe_router_load_by_candidate,
-    _candidate_diagnostic_tensor,
-    _huber_l1_task_loss,
-    _ordinal_acc5_acc7_auxiliary_loss,
     _public_loss_components,
-    _public_loss_weight,
     _public_training_diagnostics_row,
     _replace_cache_root,
     _same_feature_probe_inputs,
@@ -409,26 +405,6 @@ def _fit_public_ovha_model(
     weight_decay: float,
     device: torch.device,
 ) -> dict[str, Any]:
-    protocol = _active_residual_training_protocol(config, tuple(model.candidate_names), train_steps)
-    if protocol.get("mode") == "two_stage_base_then_residual":
-        return _fit_two_stage_residual_model(
-            config,
-            model,
-            protocol=protocol,
-            fit_batch_std=fit_batch_std,
-            val_batch_std=val_batch_std,
-            seed=seed,
-            sampling_seed=sampling_seed,
-            model_name=model_name,
-            train_steps=train_steps,
-            learning_rate=learning_rate,
-            progress_interval=progress_interval,
-            batch_size=batch_size,
-            eval_interval=eval_interval,
-            early_stopping_patience=early_stopping_patience,
-            weight_decay=weight_decay,
-            device=device,
-        )
     return _fit_single_stage_ovha_model(
         config,
         model,
@@ -446,33 +422,6 @@ def _fit_public_ovha_model(
         weight_decay=weight_decay,
         device=device,
     )
-
-
-def _active_residual_training_protocol(
-    config: MultimodalExperimentConfig,
-    active_candidate_names: tuple[str, ...],
-    train_steps: int,
-) -> dict[str, Any]:
-    protocol = dict(config.residual_training_protocol or {})
-    if protocol.get("mode") != "two_stage_base_then_residual" or int(train_steps) < 2:
-        return {"mode": "single_stage_joint"}
-    base_candidate = str(protocol.get("base_candidate", config.base_candidate))
-    residual_candidates = tuple(
-        candidate
-        for candidate in tuple(str(item) for item in protocol.get("residual_candidates", config.residual_candidates))
-        if candidate in active_candidate_names
-    )
-    if base_candidate not in active_candidate_names or not residual_candidates:
-        return {"mode": "single_stage_joint"}
-    return {
-        **protocol,
-        "mode": "two_stage_base_then_residual",
-        "base_candidate": base_candidate,
-        "residual_candidates": residual_candidates,
-        "base_stage_fraction": float(protocol.get("base_stage_fraction", 0.35)),
-        "freeze_base_candidate_during_residual_stage": bool(protocol.get("freeze_base_candidate_during_residual_stage", True)),
-        "freeze_shared_backbone_during_residual_stage": bool(protocol.get("freeze_shared_backbone_during_residual_stage", True)),
-    }
 
 
 def _fit_single_stage_ovha_model(
@@ -521,63 +470,6 @@ def _fit_single_stage_ovha_model(
     )
 
 
-def _fit_two_stage_residual_model(
-    config: MultimodalExperimentConfig,
-    model: MultimodalOVHA,
-    *,
-    protocol: dict[str, Any],
-    fit_batch_std: MultimodalEpisodeBatch,
-    val_batch_std: MultimodalEpisodeBatch,
-    seed: int,
-    sampling_seed: int,
-    model_name: str,
-    train_steps: int,
-    learning_rate: float,
-    progress_interval: int,
-    batch_size: int,
-    eval_interval: int,
-    early_stopping_patience: int,
-    weight_decay: float,
-    device: torch.device,
-) -> dict[str, Any]:
-    base_steps = max(1, min(int(train_steps) - 1, int(round(int(train_steps) * float(protocol["base_stage_fraction"])))))
-    residual_steps = int(train_steps) - base_steps
-    return _run_ovha_training_stages(
-        config,
-        model,
-        stages=(
-            {
-                "stage": "base_pretrain",
-                "steps": base_steps,
-                "loss_mode": "base",
-                "trainable_scope": "base_without_residuals",
-                "protocol": protocol,
-            },
-            {
-                "stage": "residual_admission",
-                "steps": residual_steps,
-                "loss_mode": "public",
-                "trainable_scope": "residuals_and_admission",
-                "protocol": protocol,
-            },
-        ),
-        fit_batch_std=fit_batch_std,
-        val_batch_std=val_batch_std,
-        seed=seed,
-        sampling_seed=sampling_seed,
-        model_name=model_name,
-        train_steps=train_steps,
-        learning_rate=learning_rate,
-        progress_interval=progress_interval,
-        batch_size=batch_size,
-        eval_interval=eval_interval,
-        early_stopping_patience=early_stopping_patience,
-        weight_decay=weight_decay,
-        device=device,
-        training_protocol="two_stage_base_then_residual",
-    )
-
-
 def _run_ovha_training_stages(
     config: MultimodalExperimentConfig,
     model: MultimodalOVHA,
@@ -621,12 +513,8 @@ def _run_ovha_training_stages(
         stage_steps = int(stage["steps"])
         if stage_steps <= 0:
             continue
-        trainable_count = _set_two_stage_trainable_scope(
-            model,
-            stage_name,
-            protocol=dict(stage.get("protocol") or {}),
-            trainable_scope=str(stage.get("trainable_scope", "all")),
-        )
+        _set_all_parameters_trainable(model)
+        trainable_count = _trainable_parameter_count(model)
         optimizer = torch.optim.AdamW(
             [parameter for parameter in model.parameters() if parameter.requires_grad],
             lr=learning_rate,
@@ -652,10 +540,7 @@ def _run_ovha_training_stages(
             train_step_batch = _move_batch_to_device(_sample_batch(fit_batch_std, batch_size, batch_generator), device)
             optimizer.zero_grad(set_to_none=True)
             output = model(train_step_batch)
-            if stage.get("loss_mode") == "base":
-                components = _base_stage_loss_components(output, train_step_batch, config, dict(stage.get("protocol") or {}))
-            else:
-                components = _public_loss_components(output, train_step_batch, config)
+            components = _public_loss_components(output, train_step_batch, config)
             total_loss = torch.stack([value for value in components.values()]).sum()
             total_loss.backward()
             grad_norm = _grad_l2_norm(model)
@@ -736,93 +621,6 @@ def _run_ovha_training_stages(
         "training_protocol": training_protocol,
         "stage_history": stage_history,
     }
-
-
-def _base_stage_loss_components(
-    output: MultimodalOVHAOutput,
-    batch: MultimodalEpisodeBatch,
-    config: MultimodalExperimentConfig,
-    protocol: dict[str, Any],
-) -> dict[str, torch.Tensor]:
-    base_candidate = str(protocol.get("base_candidate", config.base_candidate or ""))
-    if base_candidate not in output.candidate_outputs:
-        return _public_loss_components(output, batch, config)
-    base_prediction = output.candidate_outputs[base_candidate].value
-    configured = tuple((config.losses_by_stage or {}).get("T5", ()))
-    components: dict[str, torch.Tensor] = {}
-    for name in configured:
-        weight = _public_loss_weight(config, name)
-        if weight == 0.0:
-            continue
-        if name == "task_loss":
-            components[name] = _task_loss(base_prediction, batch) * weight
-        elif name == "huber_l1_task_loss":
-            components[name] = _huber_l1_task_loss(base_prediction, batch) * weight
-        elif name == "ordinal_acc5_acc7_auxiliary":
-            components[name] = _ordinal_acc5_acc7_auxiliary_loss(base_prediction, batch) * weight
-        elif name == "spo_prototype_diversity" and base_candidate == "SPO":
-            components[name] = _candidate_diagnostic_tensor(output, "SPO", "prototype_diversity") * weight
-    if not components:
-        components["task_loss"] = _task_loss(base_prediction, batch)
-    return components
-
-
-def _set_two_stage_trainable_scope(
-    model: MultimodalOVHA,
-    stage: str,
-    *,
-    protocol: dict[str, Any],
-    trainable_scope: str,
-) -> int:
-    if trainable_scope == "all" or stage == "joint":
-        _set_all_parameters_trainable(model)
-        return _trainable_parameter_count(model)
-    residual_candidates = tuple(str(candidate) for candidate in protocol.get("residual_candidates", ()))
-    base_candidate = str(protocol.get("base_candidate", ""))
-    freeze_base = bool(protocol.get("freeze_base_candidate_during_residual_stage", True))
-    freeze_shared_backbone = bool(protocol.get("freeze_shared_backbone_during_residual_stage", True))
-    for name, parameter in model.named_parameters():
-        if stage == "base_pretrain":
-            parameter.requires_grad = not _is_residual_candidate_parameter(name, residual_candidates)
-        elif stage == "residual_admission":
-            if freeze_shared_backbone:
-                parameter.requires_grad = False
-            if _is_residual_candidate_parameter(name, residual_candidates) or _is_residual_admission_parameter(name, residual_candidates):
-                parameter.requires_grad = True
-            if freeze_base and _is_candidate_parameter(name, base_candidate):
-                parameter.requires_grad = False
-        else:
-            parameter.requires_grad = True
-    count = _trainable_parameter_count(model)
-    if count <= 0:
-        raise ValueError(f"no trainable parameters for OVHA training stage {stage}")
-    return count
-
-
-def _is_residual_candidate_parameter(name: str, residual_candidates: tuple[str, ...]) -> bool:
-    if any(_is_candidate_parameter(name, candidate) for candidate in residual_candidates):
-        return True
-    if "LRIO" in residual_candidates and "lrio_pair_" in name:
-        return True
-    return False
-
-
-def _is_residual_admission_parameter(name: str, residual_candidates: tuple[str, ...]) -> bool:
-    if name.startswith("joint_router_adapter.router."):
-        return True
-    return any(name == f"residual_gate_logit_bias.{candidate}" for candidate in residual_candidates)
-
-
-def _is_candidate_parameter(name: str, candidate: str) -> bool:
-    if not candidate:
-        return False
-    fragments = (
-        f"candidate_primitives.{candidate}.",
-        f"candidate_projects.{candidate}.",
-        f"slot_embeddings.{candidate}",
-        f"heads.{candidate}.",
-    )
-    return any(fragment in name for fragment in fragments)
 
 
 def _set_all_parameters_trainable(model: torch.nn.Module) -> None:
