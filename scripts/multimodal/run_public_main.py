@@ -33,6 +33,7 @@ from moat_ovha_torch.models.multimodal.baselines import (
     ovha_ablation_names_for_task,
 )
 from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA, MultimodalOVHAOutput
+from moat_ovha_torch.models.multimodal.primitives.base import CandidateOutput
 from scripts.multimodal.run_public_smoke import (
     _as_float,
     _complete_candidate_probability_map,
@@ -283,22 +284,20 @@ def _run_seed(
     )
     model.eval()
     with torch.no_grad():
-        eval_batch_std_device = _move_batch_to_device(eval_batch_std, device)
-        val_batch_std_device = _move_batch_to_device(val_batch_std, device)
+        inference_batch_size = _eval_batch_size(int(args.batch_size))
         val_output = _destandardize_output(
-            model(val_batch_std_device),
-            target_mean.to(device=device),
-            target_std.to(device=device),
+            _predict_ovha_on_device(model, val_batch_std, device, batch_size=inference_batch_size),
+            target_mean,
+            target_std,
         )
         calibrator = _fit_affine_calibrator(val_output.y_hat.detach().cpu(), selection_batch)
         eval_output = _destandardize_output(
-            model(eval_batch_std_device),
-            target_mean.to(device=device),
-            target_std.to(device=device),
+            _predict_ovha_on_device(model, eval_batch_std, device, batch_size=inference_batch_size),
+            target_mean,
+            target_std,
         )
-        eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std_device, eval_batch)
+        eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std, eval_batch)
         eval_output = _apply_affine_calibration(eval_output, calibrator, config, eval_batch)
-        eval_output = _move_ovha_output_to_device(eval_output, torch.device("cpu"))
     elapsed = time.perf_counter() - seed_started_at
     hardware = _hardware_metadata(device, elapsed)
     raw_rows = [
@@ -333,6 +332,7 @@ def _run_seed(
         target_mean=target_mean,
         target_std=target_std,
         device=device,
+        batch_size=int(args.batch_size),
     )
 
     baseline_rows, baseline_robustness_rows, baseline_summaries = _baseline_rows(
@@ -869,6 +869,92 @@ def _evaluate_linear_task_loss_on_device(
     return weighted_loss / max(1.0, total_weight)
 
 
+def _predict_ovha_on_device(
+    model: MultimodalOVHA,
+    batch: MultimodalEpisodeBatch,
+    device: torch.device,
+    *,
+    batch_size: int,
+) -> MultimodalOVHAOutput:
+    total = int(batch.target_y.shape[0])
+    if total <= 0:
+        raise ValueError("cannot run OVHA inference on an empty batch")
+    was_training = model.training
+    model.eval()
+    outputs: list[MultimodalOVHAOutput] = []
+    sizes: list[int] = []
+    with torch.no_grad():
+        for start in range(0, total, max(1, int(batch_size))):
+            stop = min(total, start + max(1, int(batch_size)))
+            indices = torch.arange(start, stop, device=batch.target_y.device)
+            chunk = _move_batch_to_device(_slice_batch(batch, indices), device)
+            output = _move_ovha_output_to_device(model(chunk), torch.device("cpu"))
+            outputs.append(output)
+            sizes.append(int(stop - start))
+    if was_training:
+        model.train()
+    return _merge_ovha_outputs(outputs, sizes)
+
+
+def _merge_ovha_outputs(outputs: list[MultimodalOVHAOutput], sizes: list[int]) -> MultimodalOVHAOutput:
+    if not outputs:
+        raise ValueError("cannot merge empty OVHA output list")
+    first = outputs[0]
+    candidate_names = tuple(first.candidate_outputs)
+    return MultimodalOVHAOutput(
+        y_hat=torch.cat([output.y_hat for output in outputs], dim=0),
+        candidate_values=torch.cat([output.candidate_values for output in outputs], dim=0),
+        router_weights=torch.cat([output.router_weights for output in outputs], dim=0),
+        router_logits=torch.cat([output.router_logits for output in outputs], dim=0),
+        router_logit_parts=_merge_chunk_values([output.router_logit_parts for output in outputs], sizes),
+        candidate_outputs={
+            name: _merge_candidate_outputs([output.candidate_outputs[name] for output in outputs], sizes)
+            for name in candidate_names
+        },
+        reliability_prior=None,
+        diagnostics=_merge_chunk_values([output.diagnostics for output in outputs], sizes),
+        evidence=None,
+    )
+
+
+def _merge_candidate_outputs(outputs: list[CandidateOutput], sizes: list[int]) -> CandidateOutput:
+    return CandidateOutput(
+        value=torch.cat([output.value for output in outputs], dim=0),
+        feature=torch.cat([output.feature for output in outputs], dim=0),
+        diagnostics=_merge_chunk_values([output.diagnostics for output in outputs], sizes),
+    )
+
+
+def _merge_chunk_values(values: list[Any], sizes: list[int]) -> Any:
+    first = values[0]
+    if torch.is_tensor(first):
+        tensors = [value.detach().cpu() for value in values]
+        if first.ndim > 0 and all(tensor.shape[:1] == (size,) for tensor, size in zip(tensors, sizes)):
+            return torch.cat(tensors, dim=0)
+        if all(tensor.numel() == 1 for tensor in tensors):
+            total = float(sum(sizes))
+            return sum(tensor.reshape(()) * (float(size) / total) for tensor, size in zip(tensors, sizes))
+        return tensors[0]
+    if isinstance(first, dict):
+        keys = set().union(*(value.keys() for value in values if isinstance(value, dict)))
+        merged: dict[str, Any] = {}
+        for key in keys:
+            key_pairs = [
+                (value[key], size)
+                for value, size in zip(values, sizes)
+                if isinstance(value, dict) and key in value
+            ]
+            merged[key] = _merge_chunk_values(
+                [value for value, _ in key_pairs],
+                [size for _, size in key_pairs],
+            )
+        return merged
+    if isinstance(first, (int, float)):
+        total = float(sum(sizes))
+        return sum(float(value) * (float(size) / total) for value, size in zip(values, sizes))
+    return first
+
+
 def _eval_batch_size(train_batch_size: int) -> int:
     return max(1, int(train_batch_size) * 8)
 
@@ -1213,6 +1299,7 @@ def _baseline_rows(
                     raw_metric_path=raw_metrics_path,
                     model_name=str(baseline_name),
                     device=device,
+                    batch_size=batch_size,
                 )
             )
             summaries.append({**summary, "model": str(baseline_name)})
@@ -1363,22 +1450,20 @@ def _train_ovha_ablation(
     )
     model.eval()
     with torch.no_grad():
-        val_batch_std_device = _move_batch_to_device(val_batch_std, device)
+        inference_batch_size = _eval_batch_size(int(batch_size))
         val_output = _destandardize_output(
-            model(val_batch_std_device),
-            target_mean.to(device=device),
-            target_std.to(device=device),
+            _predict_ovha_on_device(model, val_batch_std, device, batch_size=inference_batch_size),
+            target_mean,
+            target_std,
         )
         calibrator = _fit_affine_calibrator(val_output.y_hat.detach().cpu(), selection_batch)
-        eval_batch_std_device = _move_batch_to_device(eval_batch_std, device)
         eval_output = _destandardize_output(
-            model(eval_batch_std_device),
-            target_mean.to(device=device),
-            target_std.to(device=device),
+            _predict_ovha_on_device(model, eval_batch_std, device, batch_size=inference_batch_size),
+            target_mean,
+            target_std,
         )
-        eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std_device, eval_batch)
+        eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std, eval_batch)
         eval_output = _apply_affine_calibration(eval_output, calibrator, config, eval_batch)
-        eval_output = _move_ovha_output_to_device(eval_output, torch.device("cpu"))
     return model, eval_output, {
         "baseline_optimizer_steps": int(fit_summary["optimizer_steps"]),
         "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial).item()),
@@ -1705,26 +1790,31 @@ def _ovha_robustness_rows(
     target_mean: torch.Tensor | None = None,
     target_std: torch.Tensor | None = None,
     device: torch.device | None = None,
+    batch_size: int = 128,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     device = device or next(model.parameters()).device
     model.eval()
     for corruption_type in ("clean", *DEFAULT_REQUIRED_STRESS_TARGETS):
         corrupted = _corrupted_batch(batch, corruption_type)
-        corrupted_device = _move_batch_to_device(corrupted, device)
-        model_batch = corrupted_device
+        model_batch = corrupted
         if target_mean is not None and target_std is not None:
             model_batch = _standardize_batch_targets(
-                corrupted_device,
-                target_mean.to(device=device),
-                target_std.to(device=device),
+                corrupted,
+                target_mean,
+                target_std,
             )
         with torch.no_grad():
-            output = model(model_batch)
+            output = _predict_ovha_on_device(
+                model,
+                model_batch,
+                device,
+                batch_size=_eval_batch_size(int(batch_size)),
+            )
             if target_mean is not None and target_std is not None:
-                output = _destandardize_output(output, target_mean.to(device=device), target_std.to(device=device))
-                output = _with_raw_space_candidate_diagnostics(output, model_batch, corrupted_device)
-            loss = _task_loss(output.y_hat, corrupted_device)
+                output = _destandardize_output(output, target_mean, target_std)
+                output = _with_raw_space_candidate_diagnostics(output, model_batch, corrupted)
+            loss = _task_loss(output.y_hat, corrupted)
         rows.append(
             _robustness_row(
                 config,
