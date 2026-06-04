@@ -218,16 +218,18 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertEqual(payload["loss_metadata"]["val_affine_calibration"]["stage"], "validation_postfit")
 
     def test_cmu_public_main_declares_two_stage_residual_training_protocol(self):
-        payload = json.loads((ROOT / "configs" / "multimodal_cmu_mosei_public_main.json").read_text())
-        protocol = payload["residual_training_protocol"]
+        for config_name in ("multimodal_cmu_mosei_public_main.json", "multimodal_cmu_mosei_tanso_public_main.json"):
+            with self.subTest(config_name=config_name):
+                payload = json.loads((ROOT / "configs" / config_name).read_text())
+                protocol = payload["residual_training_protocol"]
 
-        self.assertEqual(protocol["mode"], "two_stage_base_then_residual")
-        self.assertEqual(protocol["base_candidate"], "SPO")
-        self.assertEqual(protocol["residual_candidates"], ["LRIO", "TANSO"])
-        self.assertGreater(protocol["base_stage_fraction"], 0.0)
-        self.assertLess(protocol["base_stage_fraction"], 1.0)
-        self.assertTrue(protocol["freeze_base_candidate_during_residual_stage"])
-        self.assertTrue(protocol["freeze_shared_backbone_during_residual_stage"])
+                self.assertEqual(protocol["mode"], "two_stage_base_then_residual")
+                self.assertEqual(protocol["base_candidate"], "SPO")
+                self.assertEqual(protocol["residual_candidates"], ["LRIO", "TANSO"])
+                self.assertGreater(protocol["base_stage_fraction"], 0.0)
+                self.assertLess(protocol["base_stage_fraction"], 1.0)
+                self.assertTrue(protocol["freeze_base_candidate_during_residual_stage"])
+                self.assertTrue(protocol["freeze_shared_backbone_during_residual_stage"])
 
     def test_public_runner_implements_metric_aligned_losses_and_val_calibration(self):
         runner = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()

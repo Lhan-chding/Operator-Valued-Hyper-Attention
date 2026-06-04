@@ -47,7 +47,11 @@ from scripts.multimodal.run_public_smoke import (
     _parameter_count,
     _parameter_vector,
     _probe_router_load_by_candidate,
+    _candidate_diagnostic_tensor,
+    _huber_l1_task_loss,
+    _ordinal_acc5_acc7_auxiliary_loss,
     _public_loss_components,
+    _public_loss_weight,
     _public_training_diagnostics_row,
     _replace_cache_root,
     _same_feature_probe_inputs,
@@ -264,80 +268,23 @@ def _run_seed(
         **_ovha_composition_kwargs(config, config.candidate_names),
     ).to(device)
     initial_parameters = _parameter_vector(model)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.learning_rate), weight_decay=float(args.weight_decay))
-    max_grad_norm = 0.0
-    final_loss = 0.0
-    best_val_loss = float("inf")
-    best_step = 0
-    best_state = _clone_state_dict(model)
-    stale_evals = 0
-    batch_generator = torch.Generator(device=fit_batch_std.target_y.device)
-    batch_generator.manual_seed(int(seed) + 17)
-    model.train()
-    train_started_at = time.perf_counter()
-    _print_progress(
-        "model:start",
+    fit_summary = _fit_public_ovha_model(
+        config,
+        model,
+        fit_batch_std=fit_batch_std,
+        val_batch_std=val_batch_std,
         seed=seed,
-        model="ovha_full",
-        steps=int(args.train_steps),
+        sampling_seed=int(seed) + 17,
+        model_name="ovha_full",
+        train_steps=int(args.train_steps),
         learning_rate=float(args.learning_rate),
+        progress_interval=progress_interval,
+        batch_size=int(args.batch_size),
+        eval_interval=int(args.eval_interval),
+        early_stopping_patience=int(args.early_stopping_patience),
+        weight_decay=float(args.weight_decay),
+        device=device,
     )
-    for step in range(1, int(args.train_steps) + 1):
-        train_step_batch = _move_batch_to_device(
-            _sample_batch(fit_batch_std, int(args.batch_size), batch_generator),
-            device,
-        )
-        optimizer.zero_grad(set_to_none=True)
-        output = model(train_step_batch)
-        components = _public_loss_components(output, train_step_batch, config)
-        total_loss = torch.stack([value for value in components.values()]).sum()
-        total_loss.backward()
-        max_grad_norm = max(max_grad_norm, _grad_l2_norm(model))
-        optimizer.step()
-        final_loss = _as_float(total_loss)
-        if _should_validate(step, int(args.train_steps), int(args.eval_interval)):
-            val_loss = _evaluate_task_loss_on_device(
-                model,
-                val_batch_std,
-                device,
-                batch_size=_eval_batch_size(int(args.batch_size)),
-            )
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_step = step
-                best_state = _clone_state_dict(model)
-                stale_evals = 0
-            else:
-                stale_evals += 1
-            if int(args.early_stopping_patience) > 0 and stale_evals >= int(args.early_stopping_patience):
-                _print_progress(
-                    "model:early_stop",
-                    seed=seed,
-                    model="ovha_full",
-                    step=step,
-                    best_step=best_step,
-                    best_val_loss=f"{best_val_loss:.6g}",
-                )
-                break
-        if _should_log_progress(step, int(args.train_steps), progress_interval):
-            _print_step_progress(
-                seed=seed,
-                model="ovha_full",
-                step=step,
-                total_steps=int(args.train_steps),
-                loss=final_loss,
-                started_at=train_started_at,
-            )
-    _print_progress(
-        "model:done",
-        seed=seed,
-        model="ovha_full",
-        steps=int(args.train_steps),
-        loss=f"{final_loss:.6g}",
-        elapsed=f"{time.perf_counter() - train_started_at:.1f}s",
-    )
-
-    model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
         eval_batch_std_device = _move_batch_to_device(eval_batch_std, device)
@@ -364,7 +311,7 @@ def _run_seed(
             eval_batch,
             eval_output,
             seed=seed,
-            training_steps=int(args.train_steps),
+            training_steps=int(fit_summary["optimizer_steps"]),
             parameter_count=_parameter_count(model),
             raw_metrics_path=raw_metrics_path,
             hardware=hardware,
@@ -428,11 +375,13 @@ def _run_seed(
         "summary": {
             "seed": seed,
             "ovha_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial_parameters).item()),
-            "ovha_max_grad_norm": max_grad_norm,
-            "ovha_best_val_task_loss": best_val_loss,
-            "ovha_best_checkpoint_step": best_step,
-            "ovha_training_protocol": "mini_batch_validation_best_checkpoint",
+            "ovha_max_grad_norm": float(fit_summary["max_grad_norm"]),
+            "ovha_best_val_task_loss": float(fit_summary["best_val_loss"]),
+            "ovha_best_checkpoint_step": int(fit_summary["best_step"]),
+            "ovha_training_protocol": str(fit_summary["training_protocol"]),
             "ovha_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
+            "ovha_optimizer_steps": int(fit_summary["optimizer_steps"]),
+            "ovha_stage_history": fit_summary["stage_history"],
             "ovha_batch_size": int(args.batch_size),
             "ovha_selection_split": args.selection_split,
             "ovha_target_standardized": True,
@@ -440,6 +389,449 @@ def _run_seed(
             "baseline_summaries": baseline_summaries,
         },
     }
+
+
+def _fit_public_ovha_model(
+    config: MultimodalExperimentConfig,
+    model: MultimodalOVHA,
+    *,
+    fit_batch_std: MultimodalEpisodeBatch,
+    val_batch_std: MultimodalEpisodeBatch,
+    seed: int,
+    sampling_seed: int,
+    model_name: str,
+    train_steps: int,
+    learning_rate: float,
+    progress_interval: int,
+    batch_size: int,
+    eval_interval: int,
+    early_stopping_patience: int,
+    weight_decay: float,
+    device: torch.device,
+) -> dict[str, Any]:
+    protocol = _active_residual_training_protocol(config, tuple(model.candidate_names), train_steps)
+    if protocol.get("mode") == "two_stage_base_then_residual":
+        return _fit_two_stage_residual_model(
+            config,
+            model,
+            protocol=protocol,
+            fit_batch_std=fit_batch_std,
+            val_batch_std=val_batch_std,
+            seed=seed,
+            sampling_seed=sampling_seed,
+            model_name=model_name,
+            train_steps=train_steps,
+            learning_rate=learning_rate,
+            progress_interval=progress_interval,
+            batch_size=batch_size,
+            eval_interval=eval_interval,
+            early_stopping_patience=early_stopping_patience,
+            weight_decay=weight_decay,
+            device=device,
+        )
+    return _fit_single_stage_ovha_model(
+        config,
+        model,
+        fit_batch_std=fit_batch_std,
+        val_batch_std=val_batch_std,
+        seed=seed,
+        sampling_seed=sampling_seed,
+        model_name=model_name,
+        train_steps=train_steps,
+        learning_rate=learning_rate,
+        progress_interval=progress_interval,
+        batch_size=batch_size,
+        eval_interval=eval_interval,
+        early_stopping_patience=early_stopping_patience,
+        weight_decay=weight_decay,
+        device=device,
+    )
+
+
+def _active_residual_training_protocol(
+    config: MultimodalExperimentConfig,
+    active_candidate_names: tuple[str, ...],
+    train_steps: int,
+) -> dict[str, Any]:
+    protocol = dict(config.residual_training_protocol or {})
+    if protocol.get("mode") != "two_stage_base_then_residual" or int(train_steps) < 2:
+        return {"mode": "single_stage_joint"}
+    base_candidate = str(protocol.get("base_candidate", config.base_candidate))
+    residual_candidates = tuple(
+        candidate
+        for candidate in tuple(str(item) for item in protocol.get("residual_candidates", config.residual_candidates))
+        if candidate in active_candidate_names
+    )
+    if base_candidate not in active_candidate_names or not residual_candidates:
+        return {"mode": "single_stage_joint"}
+    return {
+        **protocol,
+        "mode": "two_stage_base_then_residual",
+        "base_candidate": base_candidate,
+        "residual_candidates": residual_candidates,
+        "base_stage_fraction": float(protocol.get("base_stage_fraction", 0.35)),
+        "freeze_base_candidate_during_residual_stage": bool(protocol.get("freeze_base_candidate_during_residual_stage", True)),
+        "freeze_shared_backbone_during_residual_stage": bool(protocol.get("freeze_shared_backbone_during_residual_stage", True)),
+    }
+
+
+def _fit_single_stage_ovha_model(
+    config: MultimodalExperimentConfig,
+    model: MultimodalOVHA,
+    *,
+    fit_batch_std: MultimodalEpisodeBatch,
+    val_batch_std: MultimodalEpisodeBatch,
+    seed: int,
+    sampling_seed: int,
+    model_name: str,
+    train_steps: int,
+    learning_rate: float,
+    progress_interval: int,
+    batch_size: int,
+    eval_interval: int,
+    early_stopping_patience: int,
+    weight_decay: float,
+    device: torch.device,
+) -> dict[str, Any]:
+    return _run_ovha_training_stages(
+        config,
+        model,
+        stages=(
+            {
+                "stage": "joint",
+                "steps": int(train_steps),
+                "loss_mode": "public",
+                "trainable_scope": "all",
+            },
+        ),
+        fit_batch_std=fit_batch_std,
+        val_batch_std=val_batch_std,
+        seed=seed,
+        sampling_seed=sampling_seed,
+        model_name=model_name,
+        train_steps=train_steps,
+        learning_rate=learning_rate,
+        progress_interval=progress_interval,
+        batch_size=batch_size,
+        eval_interval=eval_interval,
+        early_stopping_patience=early_stopping_patience,
+        weight_decay=weight_decay,
+        device=device,
+        training_protocol="mini_batch_validation_best_checkpoint",
+    )
+
+
+def _fit_two_stage_residual_model(
+    config: MultimodalExperimentConfig,
+    model: MultimodalOVHA,
+    *,
+    protocol: dict[str, Any],
+    fit_batch_std: MultimodalEpisodeBatch,
+    val_batch_std: MultimodalEpisodeBatch,
+    seed: int,
+    sampling_seed: int,
+    model_name: str,
+    train_steps: int,
+    learning_rate: float,
+    progress_interval: int,
+    batch_size: int,
+    eval_interval: int,
+    early_stopping_patience: int,
+    weight_decay: float,
+    device: torch.device,
+) -> dict[str, Any]:
+    base_steps = max(1, min(int(train_steps) - 1, int(round(int(train_steps) * float(protocol["base_stage_fraction"])))))
+    residual_steps = int(train_steps) - base_steps
+    return _run_ovha_training_stages(
+        config,
+        model,
+        stages=(
+            {
+                "stage": "base_pretrain",
+                "steps": base_steps,
+                "loss_mode": "base",
+                "trainable_scope": "base_without_residuals",
+                "protocol": protocol,
+            },
+            {
+                "stage": "residual_admission",
+                "steps": residual_steps,
+                "loss_mode": "public",
+                "trainable_scope": "residuals_and_admission",
+                "protocol": protocol,
+            },
+        ),
+        fit_batch_std=fit_batch_std,
+        val_batch_std=val_batch_std,
+        seed=seed,
+        sampling_seed=sampling_seed,
+        model_name=model_name,
+        train_steps=train_steps,
+        learning_rate=learning_rate,
+        progress_interval=progress_interval,
+        batch_size=batch_size,
+        eval_interval=eval_interval,
+        early_stopping_patience=early_stopping_patience,
+        weight_decay=weight_decay,
+        device=device,
+        training_protocol="two_stage_base_then_residual",
+    )
+
+
+def _run_ovha_training_stages(
+    config: MultimodalExperimentConfig,
+    model: MultimodalOVHA,
+    *,
+    stages: tuple[dict[str, Any], ...],
+    fit_batch_std: MultimodalEpisodeBatch,
+    val_batch_std: MultimodalEpisodeBatch,
+    seed: int,
+    sampling_seed: int,
+    model_name: str,
+    train_steps: int,
+    learning_rate: float,
+    progress_interval: int,
+    batch_size: int,
+    eval_interval: int,
+    early_stopping_patience: int,
+    weight_decay: float,
+    device: torch.device,
+    training_protocol: str,
+) -> dict[str, Any]:
+    max_grad_norm = 0.0
+    final_loss = 0.0
+    best_val_loss = float("inf")
+    best_step = 0
+    best_state = _clone_state_dict(model)
+    optimizer_steps = 0
+    stage_history: list[dict[str, Any]] = []
+    batch_generator = torch.Generator(device=fit_batch_std.target_y.device)
+    batch_generator.manual_seed(int(sampling_seed))
+    started_at = time.perf_counter()
+    _print_progress(
+        "model:start",
+        seed=seed,
+        model=model_name,
+        steps=train_steps,
+        learning_rate=learning_rate,
+        protocol=training_protocol,
+    )
+    for stage in stages:
+        stage_name = str(stage["stage"])
+        stage_steps = int(stage["steps"])
+        if stage_steps <= 0:
+            continue
+        trainable_count = _set_two_stage_trainable_scope(
+            model,
+            stage_name,
+            protocol=dict(stage.get("protocol") or {}),
+            trainable_scope=str(stage.get("trainable_scope", "all")),
+        )
+        optimizer = torch.optim.AdamW(
+            [parameter for parameter in model.parameters() if parameter.requires_grad],
+            lr=learning_rate,
+            weight_decay=weight_decay,
+        )
+        stage_started_at = time.perf_counter()
+        stage_grad_norm = 0.0
+        stage_loss = 0.0
+        stage_best_val_loss = float("inf")
+        stage_best_step = 0
+        stale_evals = 0
+        model.train()
+        _print_progress(
+            "model:stage_start",
+            seed=seed,
+            model=model_name,
+            stage=stage_name,
+            steps=stage_steps,
+            trainable_parameters=trainable_count,
+        )
+        for stage_step in range(1, stage_steps + 1):
+            optimizer_steps += 1
+            train_step_batch = _move_batch_to_device(_sample_batch(fit_batch_std, batch_size, batch_generator), device)
+            optimizer.zero_grad(set_to_none=True)
+            output = model(train_step_batch)
+            if stage.get("loss_mode") == "base":
+                components = _base_stage_loss_components(output, train_step_batch, config, dict(stage.get("protocol") or {}))
+            else:
+                components = _public_loss_components(output, train_step_batch, config)
+            total_loss = torch.stack([value for value in components.values()]).sum()
+            total_loss.backward()
+            grad_norm = _grad_l2_norm(model)
+            max_grad_norm = max(max_grad_norm, grad_norm)
+            stage_grad_norm = max(stage_grad_norm, grad_norm)
+            optimizer.step()
+            final_loss = _as_float(total_loss)
+            stage_loss = final_loss
+            if _should_validate(optimizer_steps, train_steps, eval_interval) or stage_step == stage_steps:
+                val_loss = _evaluate_task_loss_on_device(
+                    model,
+                    val_batch_std,
+                    device,
+                    batch_size=_eval_batch_size(batch_size),
+                )
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_step = optimizer_steps
+                    best_state = _clone_state_dict(model)
+                    stale_evals = 0
+                else:
+                    stale_evals += 1
+                if val_loss < stage_best_val_loss:
+                    stage_best_val_loss = val_loss
+                    stage_best_step = optimizer_steps
+                if early_stopping_patience > 0 and stale_evals >= early_stopping_patience:
+                    _print_progress(
+                        "model:early_stop",
+                        seed=seed,
+                        model=model_name,
+                        stage=stage_name,
+                        step=optimizer_steps,
+                        best_step=best_step,
+                        best_val_loss=f"{best_val_loss:.6g}",
+                    )
+                    break
+            if _should_log_progress(optimizer_steps, train_steps, progress_interval):
+                _print_step_progress(
+                    seed=seed,
+                    model=model_name,
+                    step=optimizer_steps,
+                    total_steps=train_steps,
+                    loss=final_loss,
+                    started_at=started_at,
+                )
+        stage_history.append(
+            {
+                "stage": stage_name,
+                "optimizer_steps": stage_step,
+                "global_optimizer_step_end": optimizer_steps,
+                "loss_mode": str(stage.get("loss_mode")),
+                "trainable_scope": str(stage.get("trainable_scope")),
+                "trainable_parameter_count": trainable_count,
+                "max_grad_norm": stage_grad_norm,
+                "final_loss": stage_loss,
+                "best_val_task_loss": stage_best_val_loss,
+                "best_checkpoint_step": stage_best_step,
+                "elapsed_seconds": time.perf_counter() - stage_started_at,
+            }
+        )
+    model.load_state_dict(best_state)
+    _set_all_parameters_trainable(model)
+    _print_progress(
+        "model:done",
+        seed=seed,
+        model=model_name,
+        steps=optimizer_steps,
+        loss=f"{final_loss:.6g}",
+        elapsed=f"{time.perf_counter() - started_at:.1f}s",
+        protocol=training_protocol,
+    )
+    return {
+        "optimizer_steps": optimizer_steps,
+        "max_grad_norm": max_grad_norm,
+        "final_loss": final_loss,
+        "best_val_loss": best_val_loss,
+        "best_step": best_step,
+        "training_protocol": training_protocol,
+        "stage_history": stage_history,
+    }
+
+
+def _base_stage_loss_components(
+    output: MultimodalOVHAOutput,
+    batch: MultimodalEpisodeBatch,
+    config: MultimodalExperimentConfig,
+    protocol: dict[str, Any],
+) -> dict[str, torch.Tensor]:
+    base_candidate = str(protocol.get("base_candidate", config.base_candidate or ""))
+    if base_candidate not in output.candidate_outputs:
+        return _public_loss_components(output, batch, config)
+    base_prediction = output.candidate_outputs[base_candidate].value
+    configured = tuple((config.losses_by_stage or {}).get("T5", ()))
+    components: dict[str, torch.Tensor] = {}
+    for name in configured:
+        weight = _public_loss_weight(config, name)
+        if weight == 0.0:
+            continue
+        if name == "task_loss":
+            components[name] = _task_loss(base_prediction, batch) * weight
+        elif name == "huber_l1_task_loss":
+            components[name] = _huber_l1_task_loss(base_prediction, batch) * weight
+        elif name == "ordinal_acc5_acc7_auxiliary":
+            components[name] = _ordinal_acc5_acc7_auxiliary_loss(base_prediction, batch) * weight
+        elif name == "spo_prototype_diversity" and base_candidate == "SPO":
+            components[name] = _candidate_diagnostic_tensor(output, "SPO", "prototype_diversity") * weight
+    if not components:
+        components["task_loss"] = _task_loss(base_prediction, batch)
+    return components
+
+
+def _set_two_stage_trainable_scope(
+    model: MultimodalOVHA,
+    stage: str,
+    *,
+    protocol: dict[str, Any],
+    trainable_scope: str,
+) -> int:
+    if trainable_scope == "all" or stage == "joint":
+        _set_all_parameters_trainable(model)
+        return _trainable_parameter_count(model)
+    residual_candidates = tuple(str(candidate) for candidate in protocol.get("residual_candidates", ()))
+    base_candidate = str(protocol.get("base_candidate", ""))
+    freeze_base = bool(protocol.get("freeze_base_candidate_during_residual_stage", True))
+    freeze_shared_backbone = bool(protocol.get("freeze_shared_backbone_during_residual_stage", True))
+    for name, parameter in model.named_parameters():
+        if stage == "base_pretrain":
+            parameter.requires_grad = not _is_residual_candidate_parameter(name, residual_candidates)
+        elif stage == "residual_admission":
+            if freeze_shared_backbone:
+                parameter.requires_grad = False
+            if _is_residual_candidate_parameter(name, residual_candidates) or _is_residual_admission_parameter(name, residual_candidates):
+                parameter.requires_grad = True
+            if freeze_base and _is_candidate_parameter(name, base_candidate):
+                parameter.requires_grad = False
+        else:
+            parameter.requires_grad = True
+    count = _trainable_parameter_count(model)
+    if count <= 0:
+        raise ValueError(f"no trainable parameters for OVHA training stage {stage}")
+    return count
+
+
+def _is_residual_candidate_parameter(name: str, residual_candidates: tuple[str, ...]) -> bool:
+    if any(_is_candidate_parameter(name, candidate) for candidate in residual_candidates):
+        return True
+    if "LRIO" in residual_candidates and "lrio_pair_" in name:
+        return True
+    return False
+
+
+def _is_residual_admission_parameter(name: str, residual_candidates: tuple[str, ...]) -> bool:
+    if name.startswith("joint_router_adapter.router."):
+        return True
+    return any(name == f"residual_gate_logit_bias.{candidate}" for candidate in residual_candidates)
+
+
+def _is_candidate_parameter(name: str, candidate: str) -> bool:
+    if not candidate:
+        return False
+    fragments = (
+        f"candidate_primitives.{candidate}.",
+        f"candidate_projects.{candidate}.",
+        f"slot_embeddings.{candidate}",
+        f"heads.{candidate}.",
+    )
+    return any(fragment in name for fragment in fragments)
+
+
+def _set_all_parameters_trainable(model: torch.nn.Module) -> None:
+    for parameter in model.parameters():
+        parameter.requires_grad = True
+
+
+def _trainable_parameter_count(model: torch.nn.Module) -> int:
+    return sum(int(parameter.numel()) for parameter in model.parameters() if parameter.requires_grad)
 
 
 def _split_train_val_batch(
@@ -1154,77 +1546,23 @@ def _train_ovha_ablation(
         **model_kwargs,
     ).to(device)
     initial = _parameter_vector(model)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    max_grad_norm = 0.0
-    final_loss = 0.0
-    best_val_loss = float("inf")
-    best_step = 0
-    best_state = _clone_state_dict(model)
-    stale_evals = 0
-    batch_generator = torch.Generator(device=fit_batch_std.target_y.device)
-    batch_generator.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name) + 17)
-    model.train()
-    started_at = time.perf_counter()
-    _print_progress(
-        "model:start",
+    fit_summary = _fit_public_ovha_model(
+        config,
+        model,
+        fit_batch_std=fit_batch_std,
+        val_batch_std=val_batch_std,
         seed=seed,
-        model=baseline_name,
-        steps=train_steps,
+        sampling_seed=int(seed) + _stable_baseline_seed_offset(baseline_name) + 17,
+        model_name=baseline_name,
+        train_steps=train_steps,
         learning_rate=learning_rate,
-        protocol="mini_batch_validation_best_checkpoint",
+        progress_interval=progress_interval,
+        batch_size=batch_size,
+        eval_interval=eval_interval,
+        early_stopping_patience=early_stopping_patience,
+        weight_decay=weight_decay,
+        device=device,
     )
-    for step in range(1, train_steps + 1):
-        train_step_batch = _move_batch_to_device(_sample_batch(fit_batch_std, batch_size, batch_generator), device)
-        optimizer.zero_grad(set_to_none=True)
-        output = model(train_step_batch)
-        components = _public_loss_components(output, train_step_batch, config)
-        total_loss = torch.stack([value for value in components.values()]).sum()
-        total_loss.backward()
-        max_grad_norm = max(max_grad_norm, _grad_l2_norm(model))
-        optimizer.step()
-        final_loss = _as_float(total_loss)
-        if _should_validate(step, train_steps, eval_interval):
-            val_loss = _evaluate_task_loss_on_device(
-                model,
-                val_batch_std,
-                device,
-                batch_size=_eval_batch_size(batch_size),
-            )
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_step = step
-                best_state = _clone_state_dict(model)
-                stale_evals = 0
-            else:
-                stale_evals += 1
-            if early_stopping_patience > 0 and stale_evals >= early_stopping_patience:
-                _print_progress(
-                    "model:early_stop",
-                    seed=seed,
-                    model=baseline_name,
-                    step=step,
-                    best_step=best_step,
-                    best_val_loss=f"{best_val_loss:.6g}",
-                )
-                break
-        if _should_log_progress(step, train_steps, progress_interval):
-            _print_step_progress(
-                seed=seed,
-                model=baseline_name,
-                step=step,
-                total_steps=train_steps,
-                loss=final_loss,
-                started_at=started_at,
-            )
-    _print_progress(
-        "model:done",
-        seed=seed,
-        model=baseline_name,
-        steps=train_steps,
-        loss=f"{final_loss:.6g}",
-        elapsed=f"{time.perf_counter() - started_at:.1f}s",
-    )
-    model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
         val_batch_std_device = _move_batch_to_device(val_batch_std, device)
@@ -1244,14 +1582,15 @@ def _train_ovha_ablation(
         eval_output = _apply_affine_calibration(eval_output, calibrator, config, eval_batch)
         eval_output = _move_ovha_output_to_device(eval_output, torch.device("cpu"))
     return model, eval_output, {
-        "baseline_optimizer_steps": train_steps,
+        "baseline_optimizer_steps": int(fit_summary["optimizer_steps"]),
         "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial).item()),
-        "baseline_grad_l2_norm": max_grad_norm,
-        "baseline_train_loss_final": final_loss,
-        "baseline_best_val_task_loss": best_val_loss,
-        "baseline_best_checkpoint_step": best_step,
-        "baseline_training_protocol": "mini_batch_validation_best_checkpoint",
+        "baseline_grad_l2_norm": float(fit_summary["max_grad_norm"]),
+        "baseline_train_loss_final": float(fit_summary["final_loss"]),
+        "baseline_best_val_task_loss": float(fit_summary["best_val_loss"]),
+        "baseline_best_checkpoint_step": int(fit_summary["best_step"]),
+        "baseline_training_protocol": str(fit_summary["training_protocol"]),
         "baseline_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
+        "baseline_stage_history": fit_summary["stage_history"],
         "baseline_batch_size": batch_size,
         "baseline_validation_fraction": validation_fraction,
         "baseline_selection_split": selection_batch.split,

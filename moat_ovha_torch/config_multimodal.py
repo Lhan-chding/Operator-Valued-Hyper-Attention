@@ -63,6 +63,7 @@ class MultimodalExperimentConfig:
     composition_mode: str = "convex_mixture"
     base_candidate: str | None = None
     residual_candidates: tuple[str, ...] = ()
+    residual_training_protocol: dict[str, Any] | None = None
 
     @classmethod
     def from_file(cls, path: Path | str) -> "MultimodalExperimentConfig":
@@ -101,6 +102,11 @@ class MultimodalExperimentConfig:
             composition_mode=str(mapping.get("composition_mode", "convex_mixture")),
             base_candidate=str(mapping["base_candidate"]) if mapping.get("base_candidate") is not None else None,
             residual_candidates=tuple(str(candidate) for candidate in mapping.get("residual_candidates", ())),
+            residual_training_protocol=(
+                dict(mapping["residual_training_protocol"])
+                if isinstance(mapping.get("residual_training_protocol"), dict)
+                else None
+            ),
         )
         config.validate()
         return config
@@ -137,6 +143,7 @@ class MultimodalExperimentConfig:
                 + ", ".join(forbidden)
             )
         _validate_composition_config(self)
+        _validate_residual_training_protocol(self)
 
 
 def _expected_training_stages(task_type: str, robustness_corruptions: tuple[str, ...]) -> tuple[str, ...]:
@@ -193,6 +200,28 @@ def _validate_composition_config(config: MultimodalExperimentConfig) -> None:
     ]
     if invalid:
         raise ValueError("base_plus_residual residual_candidates must be active non-base candidates: " + ", ".join(invalid))
+
+
+def _validate_residual_training_protocol(config: MultimodalExperimentConfig) -> None:
+    protocol = config.residual_training_protocol
+    if protocol is None:
+        return
+    mode = str(protocol.get("mode", ""))
+    if mode not in {"single_stage_joint", "two_stage_base_then_residual"}:
+        raise ValueError("residual_training_protocol.mode must be single_stage_joint or two_stage_base_then_residual")
+    if mode == "single_stage_joint":
+        return
+    if config.composition_mode != "base_plus_residual":
+        raise ValueError("two_stage_base_then_residual requires base_plus_residual composition")
+    base_candidate = str(protocol.get("base_candidate", config.base_candidate))
+    if base_candidate != config.base_candidate:
+        raise ValueError("residual_training_protocol.base_candidate must match base_candidate")
+    residual_candidates = tuple(str(candidate) for candidate in protocol.get("residual_candidates", config.residual_candidates))
+    if residual_candidates != config.residual_candidates:
+        raise ValueError("residual_training_protocol.residual_candidates must match residual_candidates")
+    fraction = float(protocol.get("base_stage_fraction", 0.0))
+    if not 0.0 < fraction < 1.0:
+        raise ValueError("residual_training_protocol.base_stage_fraction must be between 0 and 1")
 
 
 def _validate_robustness_corruptions(robustness_corruptions: tuple[str, ...]) -> None:

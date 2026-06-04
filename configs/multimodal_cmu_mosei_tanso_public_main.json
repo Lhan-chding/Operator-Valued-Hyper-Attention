@@ -39,6 +39,17 @@
     "LRIO",
     "TANSO"
   ],
+  "residual_training_protocol": {
+    "mode": "two_stage_base_then_residual",
+    "base_candidate": "SPO",
+    "residual_candidates": [
+      "LRIO",
+      "TANSO"
+    ],
+    "base_stage_fraction": 0.35,
+    "freeze_base_candidate_during_residual_stage": true,
+    "freeze_shared_backbone_during_residual_stage": true
+  },
   "baseline_names": [
     "text_only",
     "audio_only",
