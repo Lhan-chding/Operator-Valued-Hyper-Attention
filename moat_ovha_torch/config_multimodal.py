@@ -260,7 +260,7 @@ def _pair_tuple(value: Any) -> tuple[tuple[str, str], ...]:
 def _validate_candidate_names(candidate_names: tuple[str, ...]) -> None:
     if not candidate_names:
         raise ValueError("candidate_names must contain at least one v1 candidate")
-    allowed = {"TLEO", "SPO", "LRIO", "CATO", "TANSO", "TANSOBase", "TANSOShift"}
+    allowed = {"TLEO", "SPO", "LRIO", "CATO", "PRSO", "SRO", "TANSO", "TANSOBase", "TANSOShift"}
     invalid = sorted(set(candidate_names) - allowed)
     if invalid:
         raise ValueError("candidate_names contains unknown v1 candidate(s): " + ", ".join(invalid))

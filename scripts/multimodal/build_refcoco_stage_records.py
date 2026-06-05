@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import pickle
+import random
 import sys
 from typing import Any
 
@@ -138,7 +140,12 @@ def _read_instances(path: Path) -> dict[str, dict[int, Any]]:
         bbox = annotation.get("bbox")
         if not isinstance(bbox, list) or len(bbox) != 4:
             raise ValueError(f"annotation {ann_id} bbox must be COCO [x,y,w,h]")
-        normalized = {"id": ann_id, "image_id": image_id, "bbox": [float(value) for value in bbox]}
+        normalized = {
+            "id": ann_id,
+            "image_id": image_id,
+            "category_id": annotation.get("category_id"),
+            "bbox": [float(value) for value in bbox],
+        }
         annotation_by_id[ann_id] = normalized
         annotations_by_image.setdefault(image_id, []).append(normalized)
     for image_annotations in annotations_by_image.values():
@@ -214,9 +221,10 @@ def _record_for_sentence(
     if token_count <= 0:
         raise ValueError(f"sentence {sent_id} has no tokens")
     source_id = f"{dataset_name}::image{base['image_id']}::ann{base['ann_id']}::sent{sent_id}"
-    candidate_boxes, candidate_ann_ids, target_region_index = _candidate_regions(
+    candidate_boxes, candidate_ann_ids, target_region_index, candidate_permutation_seed = _candidate_regions_balanced(
         base,
         max_candidate_regions=max_candidate_regions,
+        source_id=source_id,
     )
     return {
         "source_id": source_id,
@@ -227,6 +235,7 @@ def _record_for_sentence(
         "candidate_region_boxes": candidate_boxes,
         "candidate_region_annotation_ids": candidate_ann_ids,
         "target_region_index": target_region_index,
+        "candidate_permutation_seed": candidate_permutation_seed,
         "candidate_region_source": candidate_region_source,
         "box_coordinate_convention": box_coordinate_convention,
         "original_split": split,
@@ -234,11 +243,13 @@ def _record_for_sentence(
     }
 
 
-def _candidate_regions(
+def _candidate_regions_balanced(
     base: dict[str, Any],
     *,
     max_candidate_regions: int,
-) -> tuple[list[list[float]], list[int], int]:
+    source_id: str,
+    hard_negative_policy: str = "same_category_then_spatial_then_random",
+) -> tuple[list[list[float]], list[int], int, int]:
     target_ann_id = int(base["ann_id"])
     width = float(base["image_width"])
     height = float(base["image_height"])
@@ -248,12 +259,82 @@ def _candidate_regions(
         raise ValueError(f"target annotation {target_ann_id} missing from image candidate annotations")
     target_annotation = target[0]
     distractors = [annotation for annotation in annotations if int(annotation["id"]) != target_ann_id]
-    selected = [target_annotation, *distractors[: max_candidate_regions - 1]]
-    selected.sort(key=lambda item: int(item["id"]))
+    slot_count = min(max_candidate_regions, len(distractors) + 1)
+    rng, seed = _stable_rng(source_id)
+    distractors = _select_hard_distractors(
+        target_annotation,
+        distractors,
+        k=slot_count - 1,
+        rng=rng,
+        policy=hard_negative_policy,
+    )
+    target_region_index = rng.randrange(slot_count)
+    selected: list[dict[str, Any] | None] = [None] * slot_count
+    selected[target_region_index] = target_annotation
+    distractor_index = 0
+    for slot in range(slot_count):
+        if selected[slot] is None:
+            selected[slot] = distractors[distractor_index]
+            distractor_index += 1
+    concrete_selected = [annotation for annotation in selected if annotation is not None]
+    if len(concrete_selected) != slot_count:
+        raise ValueError("balanced candidate construction produced an empty candidate slot")
+    selected = concrete_selected
     candidate_ann_ids = [int(annotation["id"]) for annotation in selected]
-    target_region_index = candidate_ann_ids.index(target_ann_id)
     candidate_boxes = [_normalize_coco_bbox(annotation["bbox"], width, height) for annotation in selected]
-    return candidate_boxes, candidate_ann_ids, target_region_index
+    return candidate_boxes, candidate_ann_ids, target_region_index, seed
+
+
+def _stable_rng(source_id: str) -> tuple[random.Random, int]:
+    seed = int(hashlib.sha256(source_id.encode("utf-8")).hexdigest()[:16], 16)
+    return random.Random(seed), seed
+
+
+def _select_hard_distractors(
+    target: dict[str, Any],
+    distractors: list[dict[str, Any]],
+    *,
+    k: int,
+    rng: random.Random,
+    policy: str,
+) -> list[dict[str, Any]]:
+    if k <= 0:
+        return []
+    if policy != "same_category_then_spatial_then_random":
+        shuffled = list(distractors)
+        rng.shuffle(shuffled)
+        return shuffled[:k]
+    selected: list[dict[str, Any]] = []
+    remaining = list(distractors)
+
+    same_category = [
+        annotation
+        for annotation in remaining
+        if annotation.get("category_id") is not None and annotation.get("category_id") == target.get("category_id")
+    ]
+    same_category.sort(key=lambda item: (_bbox_center_distance(target["bbox"], item["bbox"]), int(item["id"])))
+    selected.extend(same_category[:k])
+    selected_ids = {int(annotation["id"]) for annotation in selected}
+    remaining = [annotation for annotation in remaining if int(annotation["id"]) not in selected_ids]
+
+    if len(selected) < k:
+        spatial = sorted(remaining, key=lambda item: (_bbox_center_distance(target["bbox"], item["bbox"]), int(item["id"])))
+        selected.extend(spatial[: k - len(selected)])
+        selected_ids = {int(annotation["id"]) for annotation in selected}
+        remaining = [annotation for annotation in remaining if int(annotation["id"]) not in selected_ids]
+
+    if len(selected) < k:
+        rng.shuffle(remaining)
+        selected.extend(remaining[: k - len(selected)])
+    return selected[:k]
+
+
+def _bbox_center_distance(left: list[float], right: list[float]) -> float:
+    lx, ly, lw, lh = (float(value) for value in left)
+    rx, ry, rw, rh = (float(value) for value in right)
+    lcx, lcy = lx + 0.5 * lw, ly + 0.5 * lh
+    rcx, rcy = rx + 0.5 * rw, ry + 0.5 * rh
+    return (lcx - rcx) ** 2 + (lcy - rcy) ** 2
 
 
 def _normalize_coco_bbox(bbox: list[float], width: float, height: float) -> list[float]:

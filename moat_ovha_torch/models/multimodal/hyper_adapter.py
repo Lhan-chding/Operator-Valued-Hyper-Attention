@@ -22,6 +22,8 @@ TANSO_ALLOWED_ADAPTER_PARAMS = (
 )
 
 ALLOWED_V1_ADAPTER_PARAMS = {
+    "PRSO": ("alignment_temperature", "scale", "bias"),
+    "SRO": ("scale", "bias"),
     "TLEO": ("lengthscale", "local_temperature", "scale", "bias"),
     "SPO": ("prototype_temperature", "prototype_logits_shift", "scale", "bias"),
     "LRIO": ("rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"),
@@ -159,6 +161,10 @@ class MultimodalHyperAdapter(nn.Module):
 
 
 def _candidate_query_feature(name: str, evidence: MultimodalEvidenceBank) -> torch.Tensor:
+    if name == "PRSO":
+        return evidence.alignment_features
+    if name == "SRO":
+        return evidence.local_features
     if name == "TLEO":
         return evidence.local_features
     if name == "SPO":
@@ -205,6 +211,17 @@ def _router_query_features(
 def _params_for_name(name: str, raw: torch.Tensor) -> dict[str, torch.Tensor]:
     scale = 1.0 + 0.5 * torch.tanh(raw[..., 0:1])
     bias = 0.25 * torch.tanh(raw[..., 1:2])
+    if name == "PRSO":
+        return {
+            "alignment_temperature": torch.nn.functional.softplus(raw[..., 2:3]) + 1e-3,
+            "scale": scale,
+            "bias": bias,
+        }
+    if name == "SRO":
+        return {
+            "scale": scale,
+            "bias": bias,
+        }
     if name == "TLEO":
         return {
             "lengthscale": torch.nn.functional.softplus(raw[..., 2:3]) + 1e-3,

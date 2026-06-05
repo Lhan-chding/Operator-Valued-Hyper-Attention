@@ -46,6 +46,10 @@ class MultimodalOperatorMemory(nn.Module):
 
 
 def _candidate_episode_feature(name: str, evidence: MultimodalEvidenceBank) -> torch.Tensor:
+    if name == "PRSO":
+        return evidence.alignment_features.mean(dim=1)
+    if name == "SRO":
+        return evidence.local_features.mean(dim=1)
     if name == "TLEO":
         return evidence.local_features.mean(dim=1)
     if name == "SPO":

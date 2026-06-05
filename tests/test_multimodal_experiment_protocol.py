@@ -146,7 +146,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     )
                     self.assertEqual(config.lrio_pairs, expected_lrio_pairs)
                 else:
-                    self.assertEqual(config.candidate_names, ("TLEO", "SPO", "LRIO", "CATO"))
+                    self.assertEqual(config.candidate_names, ("PRSO", "SRO", "TLEO", "CATO"))
                 self.assertGreaterEqual(len(config.seeds), 5)
                 self.assertEqual(len(set(config.seeds)), len(config.seeds))
                 self.assertEqual(set(config.eval_splits), {"val", "test"})
@@ -666,10 +666,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(public_smoke["seeds"], [201, 202, 203])
         self.assertEqual(public_smoke["optimizer_steps"], 3)
         self.assertEqual(public_smoke["eval_smoke_rows"], 3)
-        self.assertEqual(public_smoke["eval_smoke_baseline_rows"], 21)
+        self.assertEqual(public_smoke["eval_smoke_baseline_rows"], 24)
         self.assertEqual(public_smoke["baseline_training_status"], "trained_smoke")
         self.assertEqual(public_smoke["baseline_smoke_training_steps"], 1)
-        self.assertEqual(public_smoke["baseline_optimizer_steps"], 21)
+        self.assertEqual(public_smoke["baseline_optimizer_steps"], 24)
         self.assertIn("smoke_raw_metrics", public_smoke["artifacts"])
         self.assertIn("smoke_baseline_raw_metrics", public_smoke["artifacts"])
         self.assertIn("smoke_statistics_preview", public_smoke["artifacts"])
@@ -812,9 +812,12 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(runbook["required_real_inputs"]["sentiment"]["split"], "test")
 
     def test_public_main_artifact_validator_requires_config_seed_model_coverage_and_rejects_smoke(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             config_path = ROOT / "configs" / "multimodal_refcoco_public_main.json"
+            config = MultimodalExperimentConfig.from_file(config_path)
             raw_metrics = tmp_path / "raw_metrics.jsonl"
             diagnostics = tmp_path / "diagnostics.jsonl"
             robustness_rows = tmp_path / "robustness_rows.jsonl"
@@ -839,7 +842,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "task": "phrase_region_grounding",
                     "split": "test",
                     "seed": 201,
-                    "model": "ovha_full",
+                    "model": config.main_model_name,
                     "corruption_type": "image_blur",
                     "corruption_strength": 0.4,
                     "score": 0.74,
@@ -889,7 +892,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "evidence_scope": "public_smoke_only_not_topconf_main_table",
                 "not_topconf_main_table": True,
             }
-            rows = [row for row in rows if not (row["model"] == "ovha_full" and row["seed"] == 205)]
+            rows = [row for row in rows if not (row["model"] == config.main_model_name and row["seed"] == 205)]
             raw_metrics.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n")
             bad_result = subprocess.run(
                 [
@@ -927,7 +930,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertFalse(bad_payload["ok"])
         joined = "\n".join(bad_payload["errors"])
         self.assertIn("not_topconf_main_table rows cannot enter public main artifacts", joined)
-        self.assertIn("missing configured seed coverage for model ovha_full: 205", joined)
+        self.assertIn(f"missing configured seed coverage for model {config.main_model_name}: 205", joined)
 
     def test_public_main_runner_writes_non_smoke_main_artifacts_and_passes_preflight(self):
         if importlib.util.find_spec("torch") is None:
@@ -1010,12 +1013,18 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["mode"], "public_main_training")
         self.assertIn("[public-main:start]", result.stderr)
-        self.assertIn("[public-main:train] seed=201 model=ovha_full step=1/1", result.stderr)
-        self.assertIn("[public-main:model:done] seed=201 model=ovha_full", result.stderr)
+        self.assertIn(
+            "[public-main:train] seed=201 model=ovha_refcoco_prso_sro_tleo_cato_primary step=1/1",
+            result.stderr,
+        )
+        self.assertIn(
+            "[public-main:model:done] seed=201 model=ovha_refcoco_prso_sro_tleo_cato_primary",
+            result.stderr,
+        )
         self.assertIn("[public-main:model:start] seed=201 model=text_only", result.stderr)
         self.assertEqual(payload["seed_count"], 5)
         self.assertEqual(payload["artifacts"]["raw_metrics"]["path"], str(raw_metrics))
-        self.assertEqual(len(raw_rows), 5 * 8)
+        self.assertEqual(len(raw_rows), 5 * 9)
         self.assertEqual({row["artifact_type"] for row in raw_rows}, {"public_main_raw_metric"})
         self.assertEqual({row["evidence_scope"] for row in raw_rows}, {"public_main_table"})
         self.assertEqual({row["public_metrics_scope"] for row in raw_rows}, {"public_main_metrics"})
@@ -1116,9 +1125,15 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(payload["configured_seed_count"], 5)
         self.assertEqual(payload["seed_count"], 1)
         self.assertEqual(payload["seeds"], [203])
-        self.assertIn("[public-main:train] seed=203 model=ovha_full step=1/1", result.stderr)
-        self.assertNotIn("[public-main:train] seed=201 model=ovha_full step=1/1", result.stderr)
-        self.assertEqual(len(raw_rows), 8)
+        self.assertIn(
+            "[public-main:train] seed=203 model=ovha_refcoco_prso_sro_tleo_cato_primary step=1/1",
+            result.stderr,
+        )
+        self.assertNotIn(
+            "[public-main:train] seed=201 model=ovha_refcoco_prso_sro_tleo_cato_primary step=1/1",
+            result.stderr,
+        )
+        self.assertEqual(len(raw_rows), 9)
         self.assertEqual({row["seed"] for row in raw_rows}, {203})
 
     def test_public_main_internal_ovha_ablation_variant_mapping_is_structural(self):
@@ -1457,8 +1472,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             stages["T5"]["loss_names_observed"],
             [
                 "public_alignment_ce",
+                "residual_gate_utility_loss",
                 "router_marginal_utility",
-                "spo_prototype_diversity",
                 "task_loss",
             ],
         )
@@ -1479,9 +1494,11 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(diagnostic["task"], "phrase_region_grounding")
         self.assertTrue(diagnostic["stackability_passed"])
         self.assertEqual(set(diagnostic["router_logit_parts"]), {"memory", "evidence", "reliability"})
-        self.assertEqual(set(diagnostic["router_load_by_candidate"]), {"TLEO", "SPO", "LRIO", "CATO"})
-        self.assertEqual(set(diagnostic["candidate_loss"]), {"TLEO", "SPO", "LRIO", "CATO"})
-        self.assertEqual(set(diagnostic["memory_slot_norm"]), {"TLEO", "SPO", "LRIO", "CATO"})
+        self.assertEqual(set(diagnostic["router_load_by_candidate"]), {"PRSO", "SRO", "TLEO", "CATO"})
+        self.assertEqual(set(diagnostic["candidate_loss"]), {"PRSO", "SRO", "TLEO", "CATO"})
+        self.assertEqual(set(diagnostic["memory_slot_norm"]), {"PRSO", "SRO", "TLEO", "CATO"})
+        self.assertIn("PRSO_alignment_temperature", diagnostic["adapter_params"])
+        self.assertIn("SRO_scale", diagnostic["adapter_params"])
         self.assertIn("CATO_alignment_temperature", diagnostic["adapter_params"])
         self.assertIn("candidate_loss", diagnostic["candidate_diagnostics"]["CATO"])
         self.assertIn("corruption_response", diagnostic["candidate_diagnostics"]["RCEO"])
@@ -1856,7 +1873,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(smoke_raw["hardware"]["device"], "cpu")
         self.assertGreaterEqual(smoke_raw["hardware"]["wall_clock_hours"], 0.0)
         self.assertIn("production main tables should use 5 seeds", smoke_raw["seed_count_rationale"])
-        self.assertEqual(set(smoke_raw["public_metrics"]), set(REGION_TEXT_REQUIRED_PUBLIC_METRICS))
+        self.assertTrue(set(REGION_TEXT_REQUIRED_PUBLIC_METRICS).issubset(set(smoke_raw["public_metrics"])))
+        self.assertIn("candidate_iou_at_0_5", smoke_raw["public_metrics"])
         self.assertEqual(
             smoke_raw["public_metrics_scope"],
             "region_text_smoke_real_metrics_not_topconf_main_table",
@@ -1886,7 +1904,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 row["frozen_feature_extractor_version"],
                 {"region": "clip-region-test", "text": "clip-text-test"},
             )
-            self.assertEqual(set(row["public_metrics"]), set(REGION_TEXT_REQUIRED_PUBLIC_METRICS))
+            self.assertTrue(set(REGION_TEXT_REQUIRED_PUBLIC_METRICS).issubset(set(row["public_metrics"])))
+            self.assertIn("candidate_iou_at_0_5", row["public_metrics"])
             self.assertEqual(
                 row["public_metrics_scope"],
                 "region_text_smoke_real_metrics_not_topconf_main_table",
@@ -4429,7 +4448,7 @@ def _public_main_metric_rows(config_path: Path, raw_metrics: Path) -> list[dict[
     from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
 
     config = MultimodalExperimentConfig.from_file(config_path)
-    models = ("ovha_full", *config.baseline_names)
+    models = (config.main_model_name, *config.baseline_names)
     rows = []
     for model_index, model in enumerate(models):
         for seed_index, seed in enumerate(config.seeds):

@@ -460,7 +460,7 @@ def _validate_candidate_subset(candidate_names: tuple[str, ...]) -> None:
     allowed = set(MULTIMODAL_EXTENDED_CANDIDATE_NAMES)
     invalid = sorted(name for name in candidate_names if name not in allowed)
     if invalid:
-        raise ValueError(f"MultimodalOVHA candidates must be TLEO/SPO/LRIO/CATO/TANSO/TANSOBase/TANSOShift: {invalid}")
+        raise ValueError(f"MultimodalOVHA candidates must be TLEO/SPO/LRIO/CATO/PRSO/SRO/TANSO/TANSOBase/TANSOShift: {invalid}")
     if len(set(candidate_names)) != len(candidate_names):
         raise ValueError("MultimodalOVHA candidate_names must not contain duplicates")
 
@@ -492,6 +492,10 @@ def _memory_slot_orthogonality(
 
 def _adapter_param_diagnostics(params: dict[str, dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
     diagnostics = {}
+    if "PRSO" in params:
+        diagnostics["PRSO_alignment_temperature"] = params["PRSO"]["alignment_temperature"].mean()
+    if "SRO" in params:
+        diagnostics["SRO_scale"] = params["SRO"]["scale"].mean()
     if "TLEO" in params:
         diagnostics["TLEO_lengthscale"] = params["TLEO"]["lengthscale"].mean()
     if "SPO" in params:

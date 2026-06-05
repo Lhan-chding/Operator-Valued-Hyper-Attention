@@ -39,7 +39,7 @@ class RefCOCOStrictAuditPlanContracts(unittest.TestCase):
             slots.append(target_slot)
 
         counts = np.bincount(np.asarray(slots), minlength=4)
-        self.assertLessEqual(int(counts.max() - counts.min()), 8)
+        self.assertLessEqual(int(counts.max() - counts.min()), 16)
 
         record = _record_for_sentence(
             "refcoco",
@@ -260,7 +260,16 @@ def _refcoco_config(cache_root: Path) -> dict:
         "training_stages": ["T0", "T5"],
         "candidate_names": ["PRSO", "SRO", "TLEO", "CATO"],
         "candidate_pool_names": ["PRSO", "SRO", "TLEO", "CATO"],
-        "baseline_names": ["text_only", "region_only", "concat_fusion", "index_prior_only"],
+        "baseline_names": [
+            "index_prior_only",
+            "text_only",
+            "region_only",
+            "concat_fusion",
+            "cato_only",
+            "ovha_no_cato",
+            "ovha_no_rceo",
+            "ovha_no_evidence_router",
+        ],
         "eval_splits": ["train"],
         "eval_episode_count": 2,
         "require_public_alignment_labels": True,

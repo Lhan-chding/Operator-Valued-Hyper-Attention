@@ -6,14 +6,17 @@ from torch import nn
 from moat_ovha_torch.models.multimodal.primitives.alignment_transport import CATOPrimitive
 from moat_ovha_torch.models.multimodal.primitives.base import CandidateOutput
 from moat_ovha_torch.models.multimodal.primitives.low_rank_interaction import LRIOPrimitive
+from moat_ovha_torch.models.multimodal.primitives.phrase_region_similarity import PRSOPrimitive
 from moat_ovha_torch.models.multimodal.primitives.semantic_prototype import SPOPrimitive
+from moat_ovha_torch.models.multimodal.primitives.spatial_relation_geometry import SROPrimitive
 from moat_ovha_torch.models.multimodal.primitives.text_anchored_shift import TANSOPrimitive
 from moat_ovha_torch.models.multimodal.primitives.typed_local_evidence import TLEOPrimitive
 
 
 MULTIMODAL_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
+REGION_TEXT_CANDIDATE_NAMES = ("PRSO", "SRO", "TLEO", "CATO")
 TANSO_CANDIDATE_NAMES = ("TANSO", "TANSOBase", "TANSOShift")
-MULTIMODAL_EXTENDED_CANDIDATE_NAMES = MULTIMODAL_CANDIDATE_NAMES + TANSO_CANDIDATE_NAMES
+MULTIMODAL_EXTENDED_CANDIDATE_NAMES = tuple(dict.fromkeys(MULTIMODAL_CANDIDATE_NAMES + REGION_TEXT_CANDIDATE_NAMES + TANSO_CANDIDATE_NAMES))
 FORBIDDEN_V1_STACK_NAMES = ("RCEO", "MMRO", "CTRO", "TLDO", "OMRO")
 
 
@@ -24,7 +27,7 @@ def assert_candidate_names(names: tuple[str, ...] | list[str]) -> None:
     allowed = set(MULTIMODAL_EXTENDED_CANDIDATE_NAMES)
     invalid = sorted(name for name in values if name not in allowed)
     if invalid:
-        raise ValueError(f"Only TLEO / SPO / LRIO / CATO / TANSO/TANSOBase/TANSOShift may enter the candidate stack: {invalid}")
+        raise ValueError(f"Only TLEO / SPO / LRIO / CATO / PRSO / SRO / TANSO/TANSOBase/TANSOShift may enter the candidate stack: {invalid}")
 
 
 def assert_stackable(outputs: dict[str, CandidateOutput], batch_size: int, q_count: int, dy: int) -> None:
@@ -57,6 +60,10 @@ def make_candidate_bank(
     for name in candidate_names:
         if name == "TLEO":
             modules[name] = TLEOPrimitive(d_model, output_dim)
+        elif name == "PRSO":
+            modules[name] = PRSOPrimitive(d_model, output_dim)
+        elif name == "SRO":
+            modules[name] = SROPrimitive(d_model, output_dim)
         elif name == "SPO":
             modules[name] = SPOPrimitive(d_model, output_dim)
         elif name == "LRIO":

@@ -4,6 +4,7 @@ import torch
 from torch import nn
 
 from moat_ovha_torch.models.multimodal.primitives.base import CandidateOutput, MultimodalCandidatePrimitive, apply_scale_bias
+from moat_ovha_torch.models.multimodal.primitives.phrase_region_similarity import _fit_output_dim, _masked_mean
 
 
 class CATOPrimitive(MultimodalCandidatePrimitive):
@@ -28,6 +29,8 @@ class CATOPrimitive(MultimodalCandidatePrimitive):
         self.head = nn.Linear(d_model, output_dim)
 
     def forward(self, batch, memory_slot: torch.Tensor, evidence, params: dict[str, torch.Tensor], output_dim: int) -> CandidateOutput:
+        if "text" in evidence.field_features and "region" in evidence.field_features and output_dim == int(evidence.field_features["region"].shape[1]):
+            return self._forward_region_alignment(batch, evidence, params, output_dim)
         temperature = params["alignment_temperature"].clamp_min(1e-4)
         transported_sources = []
         source_gate_logits = []
@@ -146,6 +149,43 @@ class CATOPrimitive(MultimodalCandidatePrimitive):
             return self.query_proj[name], self.key_proj[name], self.value_proj[name], self.source_gate[name]
         return self.shared_query_proj, self.shared_key_proj, self.shared_value_proj, self.shared_source_gate
 
+    def _forward_region_alignment(self, batch, evidence, params: dict[str, torch.Tensor], output_dim: int) -> CandidateOutput:
+        text = evidence.field_features["text"]
+        region = evidence.field_features["region"]
+        region_field = batch.fields["region"]
+        phrase = _masked_mean(text, batch.fields["text"].mask).unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1)
+        q_proj, k_proj, _v_proj, _gate_proj = self._modules_for("region")
+        query = q_proj(phrase)
+        key = k_proj(region)
+        temperature = params["alignment_temperature"].clamp_min(0.05)
+        logits = torch.matmul(query, key.transpose(1, 2)) / temperature
+        logits = logits + _region_geometry_bias(region_field.pos, dtype=logits.dtype, device=logits.device).unsqueeze(1)
+        region_mask = region_field.mask.to(device=logits.device)
+        logits = logits.masked_fill(~region_mask.unsqueeze(1), -1e9)
+        value = apply_scale_bias(_fit_output_dim(logits, output_dim), params)
+        weights = torch.softmax(logits, dim=-1)
+        feature = self.norm(torch.matmul(weights, region))
+        diagnostics = {
+            "alignment_entropy": -(weights * weights.clamp_min(1e-12).log()).sum(dim=-1).mean(),
+            "token_alignment_entropy": -(weights * weights.clamp_min(1e-12).log()).sum(dim=-1).mean(),
+            "top_k_alignment": weights.argmax(dim=-1).to(dtype=torch.float32).mean(),
+            "source_top_k_gate": torch.zeros((), dtype=value.dtype, device=value.device),
+            "transport_marginal_error": (weights.sum(dim=-1) - 1.0).abs().mean(),
+            "alignment_temperature": params.get("alignment_temperature"),
+            "transport_scale": params.get("transport_scale"),
+            "source_modality": ("region",),
+            "source_gate": {"region": torch.ones((), dtype=value.dtype, device=value.device)},
+            "valid_source_rate": {"region": region_mask.any(dim=1).to(dtype=value.dtype).mean()},
+            "source_token_marginal": {"region": weights.mean(dim=(0, 1))},
+            "query_token_marginal": {"region": weights.sum(dim=-1).mean()},
+            "null_mass": torch.zeros((), dtype=value.dtype, device=value.device),
+            "learned_null_mass": torch.zeros((), dtype=value.dtype, device=value.device),
+            "invalid_source_rate": (~region_mask.any(dim=1)).to(dtype=value.dtype).mean(),
+            "direct_region_logits": True,
+            "candidate": self.name,
+        }
+        return CandidateOutput(value=value, feature=feature, diagnostics=diagnostics)
+
 
 def _position_bias(query_pos: torch.Tensor, source_pos: torch.Tensor, *, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
     pos_dims = min(int(query_pos.shape[-1]), int(source_pos.shape[-1]))
@@ -192,5 +232,16 @@ def _transport_scale_error(transport_scale: torch.Tensor | None, device: torch.d
 
 def _field_quality(field, *, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
     if field.quality is None:
-        return field.mask.to(dtype=dtype, device=device).mean(dim=1, keepdim=True)
+        return field.mask.to(device=device).any(dim=1, keepdim=True).to(dtype=dtype)
     return field.quality.to(dtype=dtype, device=device).reshape(field.quality.shape[0], -1).mean(dim=1, keepdim=True)
+
+
+def _region_geometry_bias(pos: torch.Tensor, *, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    geometry = pos.to(dtype=dtype, device=device)
+    if int(geometry.shape[-1]) < 9:
+        return torch.zeros(geometry.shape[0], geometry.shape[1], dtype=dtype, device=device)
+    cx = geometry[..., 4]
+    cy = geometry[..., 5]
+    area = geometry[..., 8].clamp_min(0.0)
+    center_distance = (cx - 0.5).square() + (cy - 0.5).square()
+    return 0.01 * area - 0.01 * center_distance

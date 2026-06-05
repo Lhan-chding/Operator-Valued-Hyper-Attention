@@ -7,8 +7,11 @@
   "output_dir": "outputs/multimodal/refcoco_public_smoke",
   "seeds": [201, 202, 203],
   "training_stages": ["T0", "T5"],
-  "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
+  "main_model_name": "ovha_refcoco_prso_sro_tleo_cato_primary",
+  "candidate_names": ["PRSO", "SRO", "TLEO", "CATO"],
+  "candidate_pool_names": ["PRSO", "SRO", "TLEO", "CATO"],
   "baseline_names": [
+    "index_prior_only",
     "text_only",
     "region_only",
     "concat_fusion",
@@ -25,24 +28,28 @@
   "require_public_alignment_labels": true,
   "losses_by_stage": {
     "T0": ["cache_validation"],
-    "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss", "spo_prototype_diversity", "router_marginal_utility"]
+    "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss", "router_marginal_utility", "residual_gate_utility_loss"]
   },
   "loss_metadata": {
     "candidate_individual_loss": {
       "weight": 0.0,
       "diagnostic_only": true
     },
-    "spo_prototype_diversity": {
-      "weight": 0.001
-    },
     "router_marginal_utility": {
+      "weight": 0.01
+    },
+    "residual_gate_utility_loss": {
       "weight": 0.01
     }
   },
   "adapter_params_by_candidate": {
+    "PRSO": ["alignment_temperature", "scale", "bias"],
+    "SRO": ["scale", "bias"],
     "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
-    "SPO": ["prototype_temperature", "prototype_logits_shift", "scale", "bias"],
-    "LRIO": ["rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"],
     "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"]
-  }
+  },
+  "use_evidence_router": false,
+  "composition_mode": "base_plus_residual",
+  "base_candidate": "PRSO",
+  "residual_candidates": ["SRO", "TLEO", "CATO"]
 }

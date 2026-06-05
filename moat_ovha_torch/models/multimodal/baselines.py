@@ -42,7 +42,7 @@ CONTROLLED_BASELINES = (
     "concat_transformer",
 )
 
-REGION_TEXT_SANITY_PROBES = ("text_only", "region_only", "concat_fusion")
+REGION_TEXT_SANITY_PROBES = ("index_prior_only", "text_only", "region_only", "concat_fusion")
 REGION_TEXT_OVHA_ABLATIONS = ("cato_only", "ovha_no_cato", "ovha_no_rceo", "ovha_no_evidence_router")
 SENTIMENT_EMOTION_SANITY_PROBES = ("text_only", "audio_only", "vision_only", "concat_fusion")
 SENTIMENT_EMOTION_OVHA_ABLATIONS = (

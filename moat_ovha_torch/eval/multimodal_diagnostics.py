@@ -19,6 +19,7 @@ REQUIRED_DIAGNOSTIC_KEYS = (
     "stackability_passed",
 )
 MULTIMODAL_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
+KNOWN_CANDIDATE_NAMES = (*MULTIMODAL_CANDIDATE_NAMES, "PRSO", "SRO")
 REQUIRED_ROUTER_LOGIT_PARTS = ("memory", "evidence", "reliability")
 REQUIRED_ROUTER_LOGIT_NORM_KEYS = (
     "router_memory_logit_norm",
@@ -30,9 +31,13 @@ REQUIRED_ADAPTER_PARAM_KEYS = (
     "SPO_temperature",
     "LRIO_rank_entropy",
     "CATO_alignment_temperature",
+    "PRSO_alignment_temperature",
+    "SRO_scale",
 )
 
 CANDIDATE_DIAGNOSTIC_KEYS = {
+    "PRSO": ("alignment_entropy", "direct_region_logits", "candidate_loss"),
+    "SRO": ("spatial_relation_geometry", "direct_region_logits", "candidate_loss"),
     "TLEO": ("lengthscale", "local_entropy", "local_window_size", "candidate_loss"),
     "SPO": ("prototype_entropy", "top_prototype", "prototype_temperature", "candidate_loss"),
     "LRIO": ("rank_entropy", "rank_top_k", "pair_interaction_strength", "candidate_loss"),
@@ -109,7 +114,7 @@ def _require_nested_keys(row: dict[str, Any], parent: str, keys: tuple[str, ...]
 def _active_candidate_names(row: dict[str, Any]) -> tuple[str, ...]:
     raw = row.get("active_candidate_names", row.get("candidate_names"))
     if isinstance(raw, (list, tuple)) and raw:
-        active = tuple(str(name) for name in raw if str(name) in MULTIMODAL_CANDIDATE_NAMES)
+        active = tuple(str(name) for name in raw if str(name) in KNOWN_CANDIDATE_NAMES)
         if active:
             return active
     return MULTIMODAL_CANDIDATE_NAMES
@@ -121,6 +126,8 @@ def _adapter_param_keys(active_candidates: tuple[str, ...]) -> tuple[str, ...]:
         "SPO": "SPO_temperature",
         "LRIO": "LRIO_rank_entropy",
         "CATO": "CATO_alignment_temperature",
+        "PRSO": "PRSO_alignment_temperature",
+        "SRO": "SRO_scale",
     }
     return tuple(by_candidate[name] for name in active_candidates if name in by_candidate)
 

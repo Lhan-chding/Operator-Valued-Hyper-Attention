@@ -38,10 +38,13 @@ class RCEOReliabilityPrior(nn.Module):
 
     def forward(self, batch: MultimodalModelInputs, evidence: MultimodalEvidenceBank) -> ReliabilityPrior:
         reliabilities = []
+        valid_fractions = {}
         modality_names = tuple(batch.fields)
-        for field in batch.fields.values():
+        for name, field in batch.fields.items():
+            mask = field.mask.to(dtype=evidence.query_features.dtype, device=evidence.query_features.device)
+            valid_fractions[name] = mask.mean()
             if field.quality is None:
-                quality = field.mask.to(dtype=evidence.query_features.dtype, device=evidence.query_features.device).mean(dim=1, keepdim=True)
+                quality = mask.any(dim=1, keepdim=True).to(dtype=evidence.query_features.dtype)
             else:
                 quality = field.quality.to(dtype=evidence.query_features.dtype, device=evidence.query_features.device).reshape(field.quality.shape[0], -1).mean(dim=1, keepdim=True)
             reliabilities.append(quality.clamp(0.0, 1.0))
@@ -58,6 +61,20 @@ class RCEOReliabilityPrior(nn.Module):
             "sample_modality_reliability_mean": modality_reliability.mean(dim=-1),
             "sample_modality_reliability_gap_mean": reliability_gap_mean.squeeze(-1),
             "modality_names": modality_names,
+            "modality_valid_fraction": valid_fractions,
+            "candidate_valid_fraction": valid_fractions.get(
+                "region",
+                torch.zeros((), dtype=modality_reliability.dtype, device=modality_reliability.device),
+            ),
+            "text_token_valid_fraction": valid_fractions.get(
+                "text",
+                torch.zeros((), dtype=modality_reliability.dtype, device=modality_reliability.device),
+            ),
+            "region_candidate_valid_mask": (
+                batch.fields["region"].mask.to(device=modality_reliability.device)
+                if "region" in batch.fields
+                else None
+            ),
             "pair_reliability": _diagnostic_pair_map(pair_names, pair_reliability),
             "reliability_bias_norm": bias.norm(dim=-1).mean(),
             "operator_logit_bias_norm": bias.norm(dim=-1).mean(),

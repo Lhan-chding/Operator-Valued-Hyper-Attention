@@ -981,7 +981,9 @@ def _should_validate(step: int, train_steps: int, eval_interval: int) -> bool:
     return step == 1 or step == train_steps or step % interval == 0
 
 
-def _target_standardizer(batch: MultimodalEpisodeBatch) -> tuple[torch.Tensor, torch.Tensor]:
+def _target_standardizer(batch: MultimodalEpisodeBatch) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    if _is_region_task(batch.task_type):
+        return None, None
     mask = batch.target_mask.to(dtype=batch.target_y.dtype, device=batch.target_y.device).unsqueeze(-1)
     denom = mask.sum(dim=(0, 1), keepdim=True).clamp_min(1.0)
     mean = (batch.target_y * mask).sum(dim=(0, 1), keepdim=True) / denom
@@ -992,9 +994,11 @@ def _target_standardizer(batch: MultimodalEpisodeBatch) -> tuple[torch.Tensor, t
 
 def _standardize_batch_targets(
     batch: MultimodalEpisodeBatch,
-    target_mean: torch.Tensor,
-    target_std: torch.Tensor,
+    target_mean: torch.Tensor | None,
+    target_std: torch.Tensor | None,
 ) -> MultimodalEpisodeBatch:
+    if target_mean is None or target_std is None:
+        return batch
     target_y = (batch.target_y - target_mean) / target_std
     supervision = replace(
         batch.supervision,
@@ -1014,9 +1018,11 @@ def _standardize_optional_tensor(value: Any, target_mean: torch.Tensor, target_s
 
 def _destandardize_output(
     output: MultimodalOVHAOutput,
-    target_mean: torch.Tensor,
-    target_std: torch.Tensor,
+    target_mean: torch.Tensor | None,
+    target_std: torch.Tensor | None,
 ) -> MultimodalOVHAOutput:
+    if target_mean is None or target_std is None:
+        return output
     return _transform_ovha_output_target_space(
         output,
         prediction_transform=lambda value: value * target_std + target_mean,
@@ -1159,6 +1165,11 @@ def _candidate_losses_from_values(
     candidate_names: tuple[str, ...],
     batch: MultimodalEpisodeBatch,
 ) -> dict[str, torch.Tensor]:
+    if _is_region_task(batch.task_type):
+        return {
+            name: _task_loss(candidate_values[..., index, :], batch)
+            for index, name in enumerate(candidate_names)
+        }
     mask = batch.target_mask.to(device=candidate_values.device, dtype=candidate_values.dtype).unsqueeze(-1)
     truth = batch.target_y.to(device=candidate_values.device, dtype=candidate_values.dtype).unsqueeze(-2)
     losses: dict[str, torch.Tensor] = {}
@@ -1174,8 +1185,29 @@ def _candidate_losses_by_sample_from_values(
     batch: MultimodalEpisodeBatch,
 ) -> dict[str, torch.Tensor]:
     mask = batch.target_mask.to(device=candidate_values.device, dtype=candidate_values.dtype)
-    truth = batch.target_y.to(device=candidate_values.device, dtype=candidate_values.dtype)
     losses: dict[str, torch.Tensor] = {}
+    if _is_region_task(batch.task_type):
+        labels = batch.supervision.region_targets
+        if labels is None:
+            return {name: torch.zeros(mask.shape[0], dtype=candidate_values.dtype, device=candidate_values.device) for name in candidate_names}
+        labels = labels.to(device=candidate_values.device, dtype=torch.long)
+        if labels.ndim == 1:
+            labels = labels.unsqueeze(1)
+        if labels.ndim > 2:
+            labels = labels.reshape(labels.shape[0], -1)
+        if labels.shape[1] == 1 and candidate_values.shape[1] > 1:
+            labels = labels.expand(-1, candidate_values.shape[1])
+        labels = labels[:, : candidate_values.shape[1]].contiguous()
+        for index, name in enumerate(candidate_names):
+            logits = candidate_values[..., index, :]
+            ce = torch.nn.functional.cross_entropy(
+                logits[:, : labels.shape[1], :].reshape(-1, logits.shape[-1]),
+                labels.reshape(-1),
+                reduction="none",
+            ).reshape(labels.shape)
+            losses[name] = (ce * mask[:, : labels.shape[1]]).sum(dim=1) / mask[:, : labels.shape[1]].sum(dim=1).clamp_min(1.0)
+        return losses
+    truth = batch.target_y.to(device=candidate_values.device, dtype=candidate_values.dtype)
     for index, name in enumerate(candidate_names):
         error = (candidate_values[..., index, :] - truth).square().mean(dim=-1)
         losses[name] = (error * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
@@ -1197,9 +1229,11 @@ def _candidate_value_stats_from_values(
 
 def _destandardize_prediction(
     prediction: torch.Tensor,
-    target_mean: torch.Tensor,
-    target_std: torch.Tensor,
+    target_mean: torch.Tensor | None,
+    target_std: torch.Tensor | None,
 ) -> torch.Tensor:
+    if target_mean is None or target_std is None:
+        return prediction
     return prediction * target_std + target_mean
 
 
@@ -1560,15 +1594,15 @@ def _baseline_rows(
             selection_batch_device = _move_batch_to_device(selection_batch_std, device)
             selection_prediction = _destandardize_prediction(
                 _baseline_prediction(str(baseline_name), model, selection_batch_device),
-                target_mean.to(device=device),
-                target_std.to(device=device),
+                target_mean.to(device=device) if target_mean is not None else None,
+                target_std.to(device=device) if target_std is not None else None,
             )
             calibrator = _fit_affine_calibrator(selection_prediction.detach().cpu(), selection_batch)
             eval_batch_device = _move_batch_to_device(eval_batch_std, device)
             pre_calibration_prediction = _destandardize_prediction(
                 _baseline_prediction(str(baseline_name), model, eval_batch_device),
-                target_mean.to(device=device),
-                target_std.to(device=device),
+                target_mean.to(device=device) if target_mean is not None else None,
+                target_std.to(device=device) if target_std is not None else None,
             )
             eval_prediction = _apply_affine_calibration_to_prediction(pre_calibration_prediction, calibrator)
             loss = _task_loss(eval_prediction, _move_batch_to_device(eval_batch, device))
@@ -1719,7 +1753,7 @@ def _train_ovha_ablation(
         "baseline_batch_size": batch_size,
         "baseline_validation_fraction": validation_fraction,
         "baseline_selection_split": selection_batch.split,
-        "baseline_target_standardized": True,
+        "baseline_target_standardized": target_mean is not None and target_std is not None,
         "baseline_variant": {"candidate_names": active_candidate_names, **variant_kwargs},
     }
 
@@ -1917,7 +1951,7 @@ def _train_linear_baseline(
         "baseline_batch_size": batch_size,
         "baseline_validation_fraction": validation_fraction,
         "baseline_selection_split": selection_batch.split,
-        "baseline_target_standardized": True,
+        "baseline_target_standardized": target_mean is not None and target_std is not None,
         "baseline_weight_decay": weight_decay,
         "_target_mean": target_mean,
         "_target_std": target_std,
@@ -2012,6 +2046,10 @@ def _public_main_metrics(
         cato_loss = _candidate_loss_value(candidate_loss, "CATO", default=task_loss)
         metrics = {
             "acc_at_0_5": region_metrics["acc_at_0_5"],
+            "region_recall_at_1": region_metrics["region_recall_at_1"],
+            "region_recall_at_5": region_metrics["region_recall_at_5"],
+            "candidate_iou_at_0_5": region_metrics["candidate_iou_at_0_5"],
+            "mean_candidate_iou": region_metrics["mean_candidate_iou"],
             "recall_at_1": region_metrics["recall_at_1"],
             "recall_at_5": region_metrics["recall_at_5"],
             "mean_iou": region_metrics["mean_iou"],
@@ -2022,7 +2060,14 @@ def _public_main_metrics(
             "cato_top_alignment_accuracy": region_metrics["phrase_region_topk_accuracy"],
             "null_unmatched_rate": _null_unmatched_rate(batch),
         }
-        return {name: metrics[name] for name in REGION_TEXT_REQUIRED_PUBLIC_METRICS}
+        required = {name: metrics[name] for name in REGION_TEXT_REQUIRED_PUBLIC_METRICS}
+        return {
+            **required,
+            "region_recall_at_1": metrics["region_recall_at_1"],
+            "region_recall_at_5": metrics["region_recall_at_5"],
+            "candidate_iou_at_0_5": metrics["candidate_iou_at_0_5"],
+            "mean_candidate_iou": metrics["mean_candidate_iou"],
+        }
     if _is_sentiment_task(config.task_type):
         standard = mosei_standard_metrics(prediction, batch.target_y, batch.target_mask)
         missing_drop = _missing_modality_fraction(batch)
@@ -2320,6 +2365,7 @@ def _bounded_score_from_loss(loss: torch.Tensor) -> float:
 
 
 def _region_text_metrics(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> dict[str, float]:
+    iou_metrics = _candidate_box_iou_metrics(prediction, batch)
     region_targets = batch.supervision.region_targets
     if region_targets is not None and prediction.shape[-1] > 1:
         labels = region_targets.to(device=prediction.device, dtype=torch.long)
@@ -2337,18 +2383,52 @@ def _region_text_metrics(prediction: torch.Tensor, batch: MultimodalEpisodeBatch
             recall1 = (top1[valid] == labels[valid]).to(dtype=torch.float32).mean()
             recall5 = (topk[valid] == labels[valid].unsqueeze(-1)).any(dim=-1).to(dtype=torch.float32).mean()
             return {
-                "acc_at_0_5": _as_float(recall1),
+                "acc_at_0_5": iou_metrics["candidate_iou_at_0_5"],
+                "region_recall_at_1": _as_float(recall1),
+                "region_recall_at_5": _as_float(recall5),
+                "candidate_iou_at_0_5": iou_metrics["candidate_iou_at_0_5"],
+                "mean_candidate_iou": iou_metrics["mean_candidate_iou"],
                 "recall_at_1": _as_float(recall1),
                 "recall_at_5": _as_float(recall5),
-                "mean_iou": _bbox_mean_iou(prediction, batch),
+                "mean_iou": iou_metrics["mean_candidate_iou"],
                 "phrase_region_topk_accuracy": _as_float(recall1),
             }
     return {
-        "acc_at_0_5": 0.0,
+        "acc_at_0_5": iou_metrics["candidate_iou_at_0_5"],
+        "region_recall_at_1": 0.0,
+        "region_recall_at_5": 0.0,
+        "candidate_iou_at_0_5": iou_metrics["candidate_iou_at_0_5"],
+        "mean_candidate_iou": iou_metrics["mean_candidate_iou"],
         "recall_at_1": 0.0,
         "recall_at_5": 0.0,
-        "mean_iou": _bbox_mean_iou(prediction, batch),
+        "mean_iou": iou_metrics["mean_candidate_iou"],
         "phrase_region_topk_accuracy": 0.0,
+    }
+
+
+def _candidate_box_iou_metrics(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> dict[str, float]:
+    candidate_boxes = batch.supervision.candidate_region_boxes
+    target = batch.supervision.bbox_targets
+    if candidate_boxes is None or target is None or prediction.shape[-1] <= 1:
+        mean_iou = _bbox_mean_iou(prediction, batch)
+        return {"candidate_iou_at_0_5": float(mean_iou >= 0.5) if mean_iou > 0.0 else 0.0, "mean_candidate_iou": mean_iou}
+    boxes = candidate_boxes.to(device=prediction.device, dtype=torch.float32)
+    truth = target.to(device=prediction.device, dtype=torch.float32)
+    if truth.ndim == 2:
+        truth = truth.unsqueeze(1)
+    if truth.shape[1] == 1 and prediction.shape[1] > 1:
+        truth = truth.expand(-1, prediction.shape[1], -1)
+    query_count = min(int(prediction.shape[1]), int(truth.shape[1]))
+    valid = batch.target_mask.to(dtype=torch.bool, device=prediction.device)[:, :query_count]
+    if not bool(valid.any()):
+        return {"candidate_iou_at_0_5": 0.0, "mean_candidate_iou": 0.0}
+    top1 = prediction[:, :query_count, :].argmax(dim=-1)
+    gather_index = top1.unsqueeze(-1).expand(-1, -1, 4)
+    pred_boxes = torch.gather(boxes, dim=1, index=gather_index)
+    iou = _box_iou(pred_boxes[valid], truth[:, :query_count, :][valid])
+    return {
+        "candidate_iou_at_0_5": _as_float((iou >= 0.5).to(dtype=torch.float32).mean()),
+        "mean_candidate_iou": _as_float(iou.mean()),
     }
 
 

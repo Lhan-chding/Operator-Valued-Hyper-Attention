@@ -4,6 +4,8 @@ import torch
 from torch import nn
 
 from moat_ovha_torch.models.multimodal.primitives.base import CandidateOutput, MultimodalCandidatePrimitive, apply_scale_bias
+from moat_ovha_torch.models.multimodal.primitives.phrase_region_similarity import _fit_output_dim, _masked_mean
+from moat_ovha_torch.models.multimodal.primitives.spatial_relation_geometry import _region_geometry
 
 
 class TLEOPrimitive(MultimodalCandidatePrimitive):
@@ -21,10 +23,16 @@ class TLEOPrimitive(MultimodalCandidatePrimitive):
         self.shared_value_proj = nn.Linear(d_model, d_model)
         self.shared_source_gate = nn.Linear(d_model + 1, 1)
         self.memory_gate = nn.Linear(d_model * 2, d_model)
+        self.text_region_query = nn.Linear(d_model, d_model)
+        self.text_region_key = nn.Linear(d_model, d_model)
+        self.region_query = nn.Linear(d_model, d_model)
+        self.region_key = nn.Linear(d_model, d_model)
         self.norm = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, output_dim)
 
     def forward(self, batch, memory_slot: torch.Tensor, evidence, params: dict[str, torch.Tensor], output_dim: int) -> CandidateOutput:
+        if "text" in evidence.field_features and "region" in evidence.field_features and output_dim == int(evidence.field_features["region"].shape[1]):
+            return self._forward_region_local_context(batch, memory_slot, evidence, params, output_dim)
         local_values = []
         local_entropies = []
         source_gate_logits = []
@@ -98,6 +106,48 @@ class TLEOPrimitive(MultimodalCandidatePrimitive):
             return self.query_proj[name], self.key_proj[name], self.value_proj[name], self.source_gate[name]
         return self.shared_query_proj, self.shared_key_proj, self.shared_value_proj, self.shared_source_gate
 
+    def _forward_region_local_context(self, batch, memory_slot: torch.Tensor, evidence, params: dict[str, torch.Tensor], output_dim: int) -> CandidateOutput:
+        text = evidence.field_features["text"]
+        region = evidence.field_features["region"]
+        region_field = batch.fields["region"]
+        region_mask = region_field.mask.to(device=region.device)
+        phrase = _masked_mean(text, batch.fields["text"].mask)
+        base_query = self.text_region_query(phrase)
+        base_key = self.text_region_key(region)
+        base = (base_query.unsqueeze(1) * base_key).sum(dim=-1) / max(region.shape[-1] ** 0.5, 1.0)
+
+        geometry = _region_geometry(region_field.pos, dtype=region.dtype, device=region.device)
+        geo_dist = _pairwise_geometry_distance(geometry)
+        semantic = torch.matmul(self.region_query(region), self.region_key(region).transpose(1, 2)) / max(region.shape[-1] ** 0.5, 1.0)
+        lengthscale = params["lengthscale"].mean(dim=1).clamp_min(1e-4).unsqueeze(-1)
+        temperature = params["local_temperature"].mean(dim=1).clamp_min(1e-4).unsqueeze(-1)
+        kernel = -geo_dist / lengthscale.square().clamp_min(1e-6) + semantic / temperature
+        pair_mask = region_mask.unsqueeze(1) & region_mask.unsqueeze(2)
+        kernel = kernel.masked_fill(~pair_mask, -1e9)
+        weights = torch.softmax(kernel, dim=-1)
+        weights = torch.where(region_mask.unsqueeze(-1), weights, torch.zeros_like(weights))
+        local = torch.matmul(weights, base.unsqueeze(-1)).squeeze(-1)
+        logits = (base + params.get("transport_scale", torch.ones_like(base.unsqueeze(1))).mean(dim=1) * local).unsqueeze(1)
+        logits = logits.masked_fill(~region_mask.unsqueeze(1), -1e9)
+        value = apply_scale_bias(_fit_output_dim(logits, output_dim), params)
+        summary_weights = torch.softmax(logits, dim=-1)
+        memory = memory_slot.mean(dim=1).unsqueeze(1)
+        feature = self.norm(torch.matmul(summary_weights, region) + self.memory_gate(torch.cat([torch.matmul(summary_weights, region), memory], dim=-1)))
+        diagnostics = {
+            "lengthscale": params.get("lengthscale"),
+            "local_temperature": params.get("local_temperature"),
+            "local_entropy": -(weights * weights.clamp_min(1e-12).log()).sum(dim=-1)[region_mask].mean(),
+            "local_window_size": torch.as_tensor(float(region.shape[1]), dtype=value.dtype, device=value.device),
+            "modality_kernel_count": torch.as_tensor(1.0, dtype=value.dtype, device=value.device),
+            "modality_kernel_names": ("region",),
+            "modality_gate": {"region": torch.ones((), dtype=value.dtype, device=value.device)},
+            "valid_source_rate": {"region": region_mask.any(dim=1).to(dtype=value.dtype).mean()},
+            "region_local_context": True,
+            "direct_region_logits": True,
+            "candidate": self.name,
+        }
+        return CandidateOutput(value=value, feature=feature, diagnostics=diagnostics)
+
 
 def _local_kernel_logits(
     query: torch.Tensor,
@@ -120,5 +170,13 @@ def _local_kernel_logits(
 
 def _field_quality(field, *, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
     if field.quality is None:
-        return field.mask.to(dtype=dtype, device=device).mean(dim=1, keepdim=True)
+        return field.mask.to(device=device).any(dim=1, keepdim=True).to(dtype=dtype)
     return field.quality.to(dtype=dtype, device=device).reshape(field.quality.shape[0], -1).mean(dim=1, keepdim=True)
+
+
+def _pairwise_geometry_distance(geometry: torch.Tensor) -> torch.Tensor:
+    centers = geometry[..., 4:6]
+    sizes = geometry[..., 6:8]
+    center_distance = (centers.unsqueeze(2) - centers.unsqueeze(1)).square().sum(dim=-1)
+    size_distance = (sizes.unsqueeze(2) - sizes.unsqueeze(1)).square().sum(dim=-1)
+    return center_distance + 0.25 * size_distance

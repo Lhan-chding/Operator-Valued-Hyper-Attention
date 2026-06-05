@@ -176,12 +176,21 @@ def _write_split_cache_files(
         "region": manifest.raw_root / "features" / "region_mask.npy",
     }
     feature_shards: dict[str, np.ndarray] = {}
+    selected_records = [records_by_source_id[source_id] for source_id in source_ids]
     for modality, source in feature_sources.items():
         shard = _load_and_select_rows(source, row_indices, artifact_name=f"{modality} features")
         feature_shards[modality] = shard
         mask = _load_optional_mask(mask_sources[modality], row_indices, shard, artifact_name=f"{modality} mask")
         _write_array(root / "token_fields" / f"{modality}_{split}.npy", shard)
-        _write_position_and_mask_artifacts(root, modality, split, shard, mask)
+        if modality == "region":
+            candidate_region_count = _candidate_region_count(shard, split)
+            region_pos, region_mask_from_boxes = _region_positions_from_records(selected_records, candidate_region_count)
+            if mask is None:
+                mask = np.ones(region_mask_from_boxes.shape, dtype=bool)
+            _write_array(root / "positions" / f"region_pos_{split}.npy", region_pos)
+            _write_array(root / "masks" / f"region_mask_{split}.npy", mask & region_mask_from_boxes)
+        else:
+            _write_position_and_mask_artifacts(root, modality, split, shard, mask)
     token_manifest = {
         "text": {
             "x": f"token_fields/text_{split}.npy",
@@ -208,9 +217,9 @@ def _write_split_cache_files(
         split,
         retained_source_ids=set(source_ids),
     )
-    selected_records = [records_by_source_id[source_id] for source_id in source_ids]
     candidate_region_count = _candidate_region_count(feature_shards["region"], split)
     target_region_indices = _target_region_indices(selected_records, candidate_region_count)
+    candidate_region_boxes = _candidate_region_boxes(selected_records, candidate_region_count)
     _write_array(
         root / "supervision" / f"task_labels_{split}.npy",
         _region_distribution_targets(target_region_indices, candidate_region_count),
@@ -222,6 +231,7 @@ def _write_split_cache_files(
         target_region_indices,
     )
     _write_array(root / "supervision" / f"bbox_targets_{split}.npy", _bbox_targets(selected_records))
+    _write_array(root / "supervision" / f"candidate_region_boxes_{split}.npy", candidate_region_boxes)
     _write_array(root / "supervision" / f"region_targets_{split}.npy", target_region_indices.reshape(-1, 1))
     _write_corruption_metadata(root / "supervision" / f"corruption_{split}.parquet", split, source_ids)
 
@@ -250,6 +260,31 @@ def _write_position_and_mask_artifacts(
         mask = np.ones((sample_count, token_count), dtype=bool)
     _write_array(root / "positions" / f"{modality}_pos_{split}.npy", positions)
     _write_array(root / "masks" / f"{modality}_mask_{split}.npy", mask)
+
+
+def _region_positions_from_records(
+    records: list[dict[str, Any]],
+    candidate_region_count: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    pos = np.zeros((len(records), candidate_region_count, 9), dtype=np.float32)
+    mask = np.zeros((len(records), candidate_region_count), dtype=bool)
+    for row_index, record in enumerate(records):
+        boxes = record.get("candidate_region_boxes", [])
+        if not isinstance(boxes, list):
+            raise ValueError(f"candidate_region_boxes must be a list for source_id: {record.get('source_id')}")
+        if not boxes:
+            mask[row_index, :] = True
+            continue
+        for candidate_index, box in enumerate(boxes[:candidate_region_count]):
+            x1, y1, x2, y2 = (float(value) for value in box)
+            width = max(0.0, x2 - x1)
+            height = max(0.0, y2 - y1)
+            cx = 0.5 * (x1 + x2)
+            cy = 0.5 * (y1 + y2)
+            area = width * height
+            pos[row_index, candidate_index] = [x1, y1, x2, y2, cx, cy, width, height, area]
+            mask[row_index, candidate_index] = True
+    return pos, mask
 
 
 def _load_and_select_rows(source: Path, row_indices: list[int], *, artifact_name: str) -> np.ndarray:
@@ -334,6 +369,17 @@ def _bbox_targets(records: list[dict[str, Any]]) -> np.ndarray:
         [[float(value) for value in record["region_box"]] for record in records],
         dtype=np.float32,
     )
+
+
+def _candidate_region_boxes(records: list[dict[str, Any]], candidate_region_count: int) -> np.ndarray:
+    boxes = np.zeros((len(records), candidate_region_count, 4), dtype=np.float32)
+    for row_index, record in enumerate(records):
+        candidate_boxes = record.get("candidate_region_boxes", [])
+        if not isinstance(candidate_boxes, list):
+            raise ValueError(f"candidate_region_boxes must be a list for source_id: {record.get('source_id')}")
+        for candidate_index, box in enumerate(candidate_boxes[:candidate_region_count]):
+            boxes[row_index, candidate_index] = [float(value) for value in box]
+    return boxes
 
 
 def _write_corruption_metadata(destination: Path, split: str, source_ids: list[str]) -> None:

@@ -73,6 +73,8 @@ TANSO_ALLOWED_ADAPTER_PARAMS = (
 )
 
 ALLOWED_V1_ADAPTER_PARAMS = {
+    "PRSO": ("alignment_temperature", "scale", "bias"),
+    "SRO": ("scale", "bias"),
     "TLEO": ("lengthscale", "local_temperature", "scale", "bias"),
     "SPO": ("prototype_temperature", "prototype_logits_shift", "scale", "bias"),
     "LRIO": ("rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"),
