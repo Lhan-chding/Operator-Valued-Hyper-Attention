@@ -187,12 +187,14 @@ def _validate_public_alignment_label_contract(config: MultimodalExperimentConfig
 
 
 def _validate_composition_config(config: MultimodalExperimentConfig) -> None:
-    if config.composition_mode == "convex_mixture":
+    if config.composition_mode in {"convex_mixture", "tanso_base"}:
         if config.base_candidate is not None or config.residual_candidates:
-            raise ValueError("convex_mixture composition must not set base_candidate or residual_candidates")
+            raise ValueError(f"{config.composition_mode} composition must not set base_candidate or residual_candidates")
+        if config.composition_mode == "tanso_base" and config.candidate_names != ("TANSOBase",):
+            raise ValueError("tanso_base composition requires candidate_names=['TANSOBase']")
         return
     if config.composition_mode != "base_plus_residual":
-        raise ValueError("composition_mode must be convex_mixture or base_plus_residual")
+        raise ValueError("composition_mode must be convex_mixture, tanso_base, or base_plus_residual")
     if config.base_candidate not in config.candidate_names:
         raise ValueError("base_plus_residual base_candidate must be an active candidate")
     if not config.residual_candidates:
@@ -258,9 +260,9 @@ def _pair_tuple(value: Any) -> tuple[tuple[str, str], ...]:
 def _validate_candidate_names(candidate_names: tuple[str, ...]) -> None:
     if not candidate_names:
         raise ValueError("candidate_names must contain at least one v1 candidate")
-    allowed = set(DEFAULT_CANDIDATE_NAMES) | {"TANSO"}
-    invalid = sorted(candidate for candidate in candidate_names if candidate not in allowed)
+    allowed = {"TLEO", "SPO", "LRIO", "CATO", "TANSO", "TANSOBase", "TANSOShift"}
+    invalid = sorted(set(candidate_names) - allowed)
     if invalid:
-        raise ValueError("candidate_names may only contain TLEO/SPO/LRIO/CATO/TANSO: " + ", ".join(invalid))
+        raise ValueError("candidate_names contains unknown v1 candidate(s): " + ", ".join(invalid))
     if len(set(candidate_names)) != len(candidate_names):
         raise ValueError("candidate_names must not contain duplicates")

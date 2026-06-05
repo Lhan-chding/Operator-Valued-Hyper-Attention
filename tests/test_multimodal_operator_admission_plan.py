@@ -69,8 +69,8 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
         rows = [
             {"sample_id": "a", "split": "val", "model": "base", "truth": 1.0, "prediction": 0.0},
             {"sample_id": "b", "split": "val", "model": "base", "truth": 0.0, "prediction": 1.0},
-            {"sample_id": "a", "split": "val", "model": "candidate", "prediction": 0.8},
-            {"sample_id": "b", "split": "val", "model": "candidate", "prediction": 0.8},
+            {"sample_id": "a", "split": "val", "model": "candidate", "prediction": 4.0},
+            {"sample_id": "b", "split": "val", "model": "candidate", "prediction": -0.1},
         ]
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -99,9 +99,9 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
+            payload = json.loads(output.read_text())
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        payload = json.loads(output.read_text())
         self.assertEqual(payload["admission_decision"], "diagnostic_only")
         self.assertGreater(payload["residual_alignment"], 0.0)
         self.assertGreater(payload["non_interference_delta"], 0.0)

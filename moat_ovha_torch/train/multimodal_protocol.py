@@ -60,22 +60,26 @@ REQUIRED_STAGE_LOSSES = {
     "robustness_eval": ROBUSTNESS_REQUIRED_STAGE_LOSSES,
 }
 
+TANSO_ALLOWED_ADAPTER_PARAMS = (
+    "audio_shift_scale",
+    "vision_shift_scale",
+    "shift_temperature",
+    "audio_lag_logits",
+    "vision_lag_logits",
+    "lag_width",
+    "temporal_temperature",
+    "scale",
+    "bias",
+)
+
 ALLOWED_V1_ADAPTER_PARAMS = {
     "TLEO": ("lengthscale", "local_temperature", "scale", "bias"),
     "SPO": ("prototype_temperature", "prototype_logits_shift", "scale", "bias"),
     "LRIO": ("rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"),
     "CATO": ("alignment_temperature", "transport_scale", "scale", "bias"),
-    "TANSO": (
-        "audio_shift_scale",
-        "vision_shift_scale",
-        "shift_temperature",
-        "audio_lag_logits",
-        "vision_lag_logits",
-        "lag_width",
-        "temporal_temperature",
-        "scale",
-        "bias",
-    ),
+    "TANSO": TANSO_ALLOWED_ADAPTER_PARAMS,
+    "TANSOBase": TANSO_ALLOWED_ADAPTER_PARAMS,
+    "TANSOShift": TANSO_ALLOWED_ADAPTER_PARAMS,
 }
 
 FORBIDDEN_V1_ADAPTER_PARAMS = (

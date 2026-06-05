@@ -510,6 +510,8 @@ def _ovha_composition_kwargs(
     config: MultimodalExperimentConfig,
     active_candidate_names: tuple[str, ...],
 ) -> dict[str, object]:
+    if config.composition_mode == "tanso_base":
+        return {"composition_mode": "tanso_base"}
     if config.composition_mode != "base_plus_residual":
         return {"composition_mode": config.composition_mode}
     residuals = tuple(

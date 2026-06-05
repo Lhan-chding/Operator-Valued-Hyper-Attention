@@ -13,6 +13,7 @@ from moat_ovha_torch.models.multimodal.memory import MultimodalOperatorMemory
 from moat_ovha_torch.models.multimodal.operator_bank import (
     MULTIMODAL_EXTENDED_CANDIDATE_NAMES,
     MULTIMODAL_CANDIDATE_NAMES,
+    TANSO_CANDIDATE_NAMES,
     assert_stackable,
     make_candidate_bank,
     stack_candidate_values,
@@ -284,10 +285,12 @@ def _validated_composition(
     residual_candidates: tuple[str, ...],
 ) -> dict[str, Any]:
     mode = str(composition_mode or "convex_mixture")
-    if mode == "convex_mixture":
+    if mode in {"convex_mixture", "tanso_base"}:
+        if mode == "tanso_base" and candidate_names != ("TANSOBase",):
+            raise ValueError("tanso_base composition requires candidate_names=('TANSOBase',)")
         return {"mode": mode, "base_candidate": None, "residual_candidates": ()}
     if mode != "base_plus_residual":
-        raise ValueError("composition_mode must be convex_mixture or base_plus_residual")
+        raise ValueError("composition_mode must be convex_mixture, tanso_base, or base_plus_residual")
     if base_candidate is None or base_candidate not in candidate_names:
         raise ValueError(f"base_plus_residual base_candidate must be one of {candidate_names}: {base_candidate}")
     residuals = tuple(str(candidate) for candidate in residual_candidates)
@@ -310,12 +313,12 @@ def _compose_prediction(
     admission_gate: torch.Tensor | None = None,
     residual_gate_logit_bias: nn.ParameterDict | dict[str, torch.Tensor] | None = None,
 ) -> dict[str, Any]:
-    if composition["mode"] == "convex_mixture":
+    if composition["mode"] in {"convex_mixture", "tanso_base"}:
         return {
             "y_hat": (router_weights.unsqueeze(-1) * raw_candidate_values).sum(dim=-2),
             "candidate_values": raw_candidate_values,
             "diagnostics": {
-                "mode": "convex_mixture",
+                "mode": composition["mode"],
                 "base_candidate": None,
                 "residual_candidates": (),
             },
@@ -412,10 +415,12 @@ def _operator_admission_gate(
             source_gate = output.diagnostics.get("source_gate", {})
             if isinstance(source_gate, dict) and not source_gate:
                 gate = torch.zeros_like(gate)
-        if name == "TANSO":
+        if name in TANSO_CANDIDATE_NAMES:
             nonverbal_source_count = output.diagnostics.get("nonverbal_source_count")
             if nonverbal_source_count is not None and float(nonverbal_source_count.detach().item()) <= 0.0:
-                gate = torch.zeros_like(gate)
+                semantic_role = output.diagnostics.get("semantic_role")
+                if semantic_role != "full_predictor":
+                    gate = torch.zeros_like(gate)
         gates.append(gate)
         diagnostics[name] = gate.mean()
     return {
@@ -455,7 +460,7 @@ def _validate_candidate_subset(candidate_names: tuple[str, ...]) -> None:
     allowed = set(MULTIMODAL_EXTENDED_CANDIDATE_NAMES)
     invalid = sorted(name for name in candidate_names if name not in allowed)
     if invalid:
-        raise ValueError(f"MultimodalOVHA candidates must be TLEO/SPO/LRIO/CATO/TANSO: {invalid}")
+        raise ValueError(f"MultimodalOVHA candidates must be TLEO/SPO/LRIO/CATO/TANSO/TANSOBase/TANSOShift: {invalid}")
     if len(set(candidate_names)) != len(candidate_names):
         raise ValueError("MultimodalOVHA candidate_names must not contain duplicates")
 
@@ -497,8 +502,9 @@ def _adapter_param_diagnostics(params: dict[str, dict[str, torch.Tensor]]) -> di
             diagnostics["LRIO_pair_rank_entropy"] = _entropy(params["LRIO"]["rank_logits_by_pair"])
     if "CATO" in params:
         diagnostics["CATO_alignment_temperature"] = params["CATO"]["alignment_temperature"].mean()
-    if "TANSO" in params:
-        diagnostics["TANSO_shift_temperature"] = params["TANSO"]["shift_temperature"].mean()
+    for name in TANSO_CANDIDATE_NAMES:
+        if name in params:
+            diagnostics[f"{name}_shift_temperature"] = params[name]["shift_temperature"].mean()
     return diagnostics
 
 
@@ -536,12 +542,13 @@ def _public_residual_oracle_contract(
 ) -> dict[str, Any]:
     residual_candidates = tuple(composition.get("residual_candidates", ()))
     source_oracle_alpha: dict[str, Any] = {}
-    if "TANSO" in candidate_outputs:
-        source_oracle_alpha["TANSO"] = {
-            "computed_in": "public_loss_or_evaluator_layer",
-            "uses_target_in_model_forward": False,
-            "sources": tuple(candidate_outputs["TANSO"].diagnostics.get("source_gate_tensor", {}).keys()),
-        }
+    for name in TANSO_CANDIDATE_NAMES:
+        if name in candidate_outputs:
+            source_oracle_alpha[name] = {
+                "computed_in": "public_loss_or_evaluator_layer",
+                "uses_target_in_model_forward": False,
+                "sources": tuple(candidate_outputs[name].diagnostics.get("source_gate_tensor", {}).keys()),
+            }
     return {
         "residual_candidates": residual_candidates,
         "residual_oracle_alpha": {

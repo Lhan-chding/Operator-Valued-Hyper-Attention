@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceBank
-from moat_ovha_torch.models.multimodal.operator_bank import MULTIMODAL_CANDIDATE_NAMES
+from moat_ovha_torch.models.multimodal.operator_bank import MULTIMODAL_CANDIDATE_NAMES, TANSO_CANDIDATE_NAMES
 
 
 class MultimodalOperatorMemory(nn.Module):
@@ -56,7 +56,7 @@ def _candidate_episode_feature(name: str, evidence: MultimodalEvidenceBank) -> t
         return evidence.low_rank_features.mean(dim=1)
     if name == "CATO":
         return evidence.alignment_features.mean(dim=1)
-    if name == "TANSO":
+    if name in TANSO_CANDIDATE_NAMES:
         if evidence.all_pair_features:
             text_pairs = [
                 feature.mean(dim=1)

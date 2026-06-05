@@ -9,8 +9,19 @@ from moat_ovha_torch.models.multimodal.primitives.base import CandidateOutput, M
 class TANSOPrimitive(MultimodalCandidatePrimitive):
     name = "TANSO"
 
-    def __init__(self, d_model: int, output_dim: int, sources: tuple[str, ...] = ("audio", "vision")):
+    def __init__(
+        self,
+        d_model: int,
+        output_dim: int,
+        sources: tuple[str, ...] = ("audio", "vision"),
+        role: str = "shift",
+        candidate_name: str = "TANSO",
+    ):
         super().__init__()
+        if role not in {"base", "shift"}:
+            raise ValueError("TANSO role must be base or shift")
+        self.name = str(candidate_name)
+        self.role = role
         self.sources = tuple(str(source) for source in sources)
         self.anchor_query_proj = nn.Linear(d_model, d_model)
         self.text_key_proj = nn.Linear(d_model, d_model)
@@ -19,6 +30,7 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
         self.source_value_proj = nn.ModuleDict({source: nn.Linear(d_model, d_model) for source in self.sources})
         self.source_gate = nn.ModuleDict({source: nn.Linear(d_model * 3, 1) for source in self.sources})
         self.source_shift = nn.ModuleDict({source: nn.Linear(d_model * 3, d_model) for source in self.sources})
+        self.null_source_gate = nn.Linear(d_model * 3, 1)
         self.memory_proj = nn.Linear(d_model, d_model)
         self.norm = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, output_dim)
@@ -105,41 +117,71 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
             source_lag_load[source] = lag_load
             source_specific_raw_delta[source] = raw_delta
 
-        if source_shifts:
-            shift_stack = torch.stack(source_shifts, dim=-2)
-            valid_stack = torch.stack(
-                [source_valid_by_name[source] for source in source_names],
-                dim=-1,
-            )[:, None, :]
-            gate_logits = torch.cat(source_gate_logits, dim=-1)
-            gate_logits = gate_logits.masked_fill(~valid_stack, torch.finfo(gate_logits.dtype).min)
-            gate = torch.softmax(gate_logits, dim=-1)
-            gate = torch.where(valid_stack, gate, torch.zeros_like(gate))
-            gate = gate / gate.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-            gate = gate.unsqueeze(-1)
-            shift_feature = (gate * shift_stack).sum(dim=-2)
-            source_load = {source: gate[..., index, :].mean() for index, source in enumerate(source_names)}
-            source_gate_tensor = {source: gate[..., index, 0] for index, source in enumerate(source_names)}
-        else:
-            shift_feature = torch.zeros_like(evidence.query_features)
-            source_load = {}
-            source_gate_tensor = {}
+        null_attended = torch.zeros_like(text_anchor)
+        null_input = torch.cat([evidence.query_features, text_anchor, null_attended], dim=-1)
+        source_shifts.append(torch.zeros_like(evidence.query_features))
+        source_gate_logits.append(self.null_source_gate(null_input))
+        source_names.append("null")
+        null_valid = torch.ones(
+            evidence.query_features.shape[0],
+            dtype=torch.bool,
+            device=evidence.query_features.device,
+        )
+        source_valid_by_name["null"] = null_valid
+
+        shift_stack = torch.stack(source_shifts, dim=-2)
+        valid_stack = torch.stack(
+            [source_valid_by_name[source] for source in source_names],
+            dim=-1,
+        )[:, None, :]
+        gate_logits = torch.cat(source_gate_logits, dim=-1)
+        gate_logits = gate_logits.masked_fill(~valid_stack, torch.finfo(gate_logits.dtype).min)
+        gate = torch.softmax(gate_logits, dim=-1)
+        gate = torch.where(valid_stack, gate, torch.zeros_like(gate))
+        gate = gate / gate.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        gate = gate.unsqueeze(-1)
+        shift_feature = (gate * shift_stack).sum(dim=-2)
+        source_load = {source: gate[..., index, :].mean() for index, source in enumerate(source_names)}
+        source_gate_tensor = {source: gate[..., index, 0] for index, source in enumerate(source_names)}
 
         valid_source_count = _valid_source_count_by_sample(source_valid_by_name, value_reference=evidence.query_features)
-        has_valid_source = (valid_source_count > 0).to(dtype=evidence.query_features.dtype, device=evidence.query_features.device).view(-1, 1, 1)
-        feature = self.norm(shift_feature + memory)
-        value = apply_scale_bias(self.head(feature), params) * has_valid_source
+        nonverbal_source_count = _valid_source_count_by_sample(
+            {source: valid for source, valid in source_valid_by_name.items() if source != "null"},
+            value_reference=evidence.query_features,
+        )
+        non_null_gate = (
+            1.0 - source_gate_tensor.get("null", torch.zeros_like(evidence.query_features[..., 0]))
+        ).unsqueeze(-1)
+        if self.role == "base":
+            feature = self.norm(text_anchor + shift_feature + memory)
+            value = apply_scale_bias(self.head(feature), params)
+            semantic_role = "full_predictor"
+        else:
+            feature = self.norm(shift_feature + memory)
+            has_valid_source = (nonverbal_source_count > 0).to(
+                dtype=evidence.query_features.dtype,
+                device=evidence.query_features.device,
+            ).view(-1, 1, 1)
+            value = apply_scale_bias(self.head(feature), params) * non_null_gate * has_valid_source
+            semantic_role = "residual_delta"
         diagnostics = {
             "candidate": self.name,
             "tanso_version": "v2_temporal_lag_residual",
+            "tanso_source_gate_version": "v3_null_source",
+            "semantic_role": semantic_role,
+            "null_source_enabled": True,
             "text_anchor_entropy": text_entropy,
             "text_token_anchor_count": text_anchor_count,
             "temporal_lag_hypotheses": tuple(float(value) for value in self.lag_hypotheses.detach().cpu().tolist()),
             "temporal_lag_load": source_lag_load,
             "shift_magnitude": shift_feature.norm(dim=-1).mean(),
+            "audio_source_load": source_load.get("audio", torch.zeros((), dtype=value.dtype, device=value.device)),
+            "vision_source_load": source_load.get("vision", torch.zeros((), dtype=value.dtype, device=value.device)),
+            "null_source_load": source_load.get("null", torch.ones((), dtype=value.dtype, device=value.device)),
             "audio_shift_load": source_load.get("audio", torch.zeros((), dtype=value.dtype, device=value.device)),
             "vision_shift_load": source_load.get("vision", torch.zeros((), dtype=value.dtype, device=value.device)),
-            "nonverbal_source_count": valid_source_count.mean(),
+            "nonverbal_source_count": nonverbal_source_count.mean(),
+            "source_count_including_null": valid_source_count.mean(),
             "source_gate_tensor": source_gate_tensor,
             "source_specific_raw_delta": source_specific_raw_delta,
             "source_specific_temporal_entropy": source_entropy,

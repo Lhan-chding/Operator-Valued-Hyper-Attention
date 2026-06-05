@@ -1,0 +1,152 @@
+{
+  "name": "multimodal_cmu_mosei_tanso_primary_main",
+  "dataset_name": "cmu_mosei",
+  "task_type": "sentiment_emotion",
+  "cache_version": "v0.1",
+  "cache_root": "data/multimodal_cache",
+  "output_dir": "outputs/multimodal/cmu_mosei_tanso_primary_main",
+  "seeds": [
+    301,
+    302,
+    303,
+    304,
+    305
+  ],
+  "main_table_seed_policy": "five_seed_default",
+  "checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
+  "calibration_policy": "report_pre_and_validation_affine_post_calibration",
+  "main_model_name": "ovha_tanso_primary",
+  "training_stages": [
+    "T0",
+    "T5"
+  ],
+  "candidate_names": [
+    "TANSOBase"
+  ],
+  "candidate_pool_names": [
+    "SPO",
+    "LRIO",
+    "TANSO",
+    "TANSOBase",
+    "TANSOShift"
+  ],
+  "lrio_pairs": [
+    [
+      "text",
+      "audio"
+    ],
+    [
+      "text",
+      "vision"
+    ]
+  ],
+  "use_evidence_router": false,
+  "composition_mode": "tanso_base",
+  "baseline_names": [
+    "text_only",
+    "audio_only",
+    "vision_only",
+    "concat_fusion",
+    "spo_only",
+    "lrio_only",
+    "ovha_tanso_only",
+    "ovha_spo_lrio",
+    "ovha_lrio_tanso",
+    "ovha_all_candidates_exploratory",
+    "ovha_no_rceo",
+    "ovha_with_evidence_router"
+  ],
+  "eval_splits": [
+    "val",
+    "test"
+  ],
+  "eval_episode_count": 4096,
+  "enforce_same_features_for_baselines": true,
+  "fail_on_missing_cache_artifact": true,
+  "allow_hidden_losses": false,
+  "losses_by_stage": {
+    "T0": [
+      "cache_validation"
+    ],
+    "T5": [
+      "task_loss",
+      "candidate_individual_loss",
+      "huber_l1_task_loss",
+      "ordinal_acc5_acc7_auxiliary",
+      "tanso_source_oracle_gate_loss",
+      "val_affine_calibration"
+    ]
+  },
+  "loss_metadata": {
+    "candidate_individual_loss": {
+      "weight": 0.0,
+      "diagnostic_only": true
+    },
+    "task_loss": {
+      "weight": 0.2
+    },
+    "huber_l1_task_loss": {
+      "weight": 1.0
+    },
+    "ordinal_acc5_acc7_auxiliary": {
+      "weight": 0.05
+    },
+    "tanso_source_oracle_gate_loss": {
+      "weight": 0.01,
+      "must_report_as": "training-label-derived supervised auxiliary gate loss"
+    },
+    "val_affine_calibration": {
+      "weight": 0.0,
+      "stage": "validation_postfit"
+    }
+  },
+  "adapter_params_by_candidate": {
+    "SPO": [
+      "prototype_temperature",
+      "prototype_logits_shift",
+      "scale",
+      "bias"
+    ],
+    "LRIO": [
+      "rank_logits",
+      "rank_logits_by_pair",
+      "interaction_temperature",
+      "interaction_temperature_by_pair",
+      "scale",
+      "bias"
+    ],
+    "TANSO": [
+      "audio_shift_scale",
+      "vision_shift_scale",
+      "shift_temperature",
+      "audio_lag_logits",
+      "vision_lag_logits",
+      "lag_width",
+      "temporal_temperature",
+      "scale",
+      "bias"
+    ],
+    "TANSOBase": [
+      "audio_shift_scale",
+      "vision_shift_scale",
+      "shift_temperature",
+      "audio_lag_logits",
+      "vision_lag_logits",
+      "lag_width",
+      "temporal_temperature",
+      "scale",
+      "bias"
+    ],
+    "TANSOShift": [
+      "audio_shift_scale",
+      "vision_shift_scale",
+      "shift_temperature",
+      "audio_lag_logits",
+      "vision_lag_logits",
+      "lag_width",
+      "temporal_temperature",
+      "scale",
+      "bias"
+    ]
+  }
+}

@@ -4,27 +4,29 @@ import torch
 from torch import nn
 
 from moat_ovha_torch.models.multimodal.evidence import MultimodalEvidenceBank
-from moat_ovha_torch.models.multimodal.operator_bank import MULTIMODAL_CANDIDATE_NAMES
+from moat_ovha_torch.models.multimodal.operator_bank import MULTIMODAL_CANDIDATE_NAMES, TANSO_CANDIDATE_NAMES
 from moat_ovha_torch.models.multimodal.primitives.low_rank_interaction import LRIOPrimitive
 from moat_ovha_torch.models.multimodal.reliability_prior import ReliabilityPrior
 
+
+TANSO_ALLOWED_ADAPTER_PARAMS = (
+    "audio_shift_scale",
+    "vision_shift_scale",
+    "shift_temperature",
+    "audio_lag_logits",
+    "vision_lag_logits",
+    "lag_width",
+    "temporal_temperature",
+    "scale",
+    "bias",
+)
 
 ALLOWED_V1_ADAPTER_PARAMS = {
     "TLEO": ("lengthscale", "local_temperature", "scale", "bias"),
     "SPO": ("prototype_temperature", "prototype_logits_shift", "scale", "bias"),
     "LRIO": ("rank_logits", "rank_logits_by_pair", "interaction_temperature", "interaction_temperature_by_pair", "scale", "bias"),
     "CATO": ("alignment_temperature", "transport_scale", "scale", "bias"),
-    "TANSO": (
-        "audio_shift_scale",
-        "vision_shift_scale",
-        "shift_temperature",
-        "audio_lag_logits",
-        "vision_lag_logits",
-        "lag_width",
-        "temporal_temperature",
-        "scale",
-        "bias",
-    ),
+    **{name: TANSO_ALLOWED_ADAPTER_PARAMS for name in TANSO_CANDIDATE_NAMES},
 }
 
 
@@ -167,7 +169,7 @@ def _candidate_query_feature(name: str, evidence: MultimodalEvidenceBank) -> tor
         return evidence.low_rank_features
     if name == "CATO":
         return evidence.alignment_features
-    if name == "TANSO":
+    if name in TANSO_CANDIDATE_NAMES:
         if evidence.all_pair_features:
             text_pairs = [
                 feature
@@ -231,7 +233,7 @@ def _params_for_name(name: str, raw: torch.Tensor) -> dict[str, torch.Tensor]:
             "scale": scale,
             "bias": bias,
         }
-    if name == "TANSO":
+    if name in TANSO_CANDIDATE_NAMES:
         return {
             "audio_shift_scale": torch.sigmoid(raw[..., 2:3]),
             "vision_shift_scale": torch.sigmoid(raw[..., 3:4]),

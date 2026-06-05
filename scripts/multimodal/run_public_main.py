@@ -1741,7 +1741,13 @@ def _ovha_variant_kwargs(
     if baseline_name == "lrio_only":
         return {"candidate_names": _require_candidates(active_candidate_names, ("LRIO",))}
     if baseline_name == "ovha_tanso_only":
+        if "TANSOBase" in active_candidate_names:
+            return {"candidate_names": ("TANSOBase",), "composition_mode": "tanso_base"}
         return {"candidate_names": _require_candidates(active_candidate_names, ("TANSO",))}
+    if baseline_name == "ovha_tanso_base_only":
+        return {"candidate_names": _require_candidates(active_candidate_names, ("TANSOBase",)), "composition_mode": "tanso_base"}
+    if baseline_name == "ovha_tanso_shift_only":
+        return {"candidate_names": _require_candidates(active_candidate_names, ("TANSOShift",))}
     if baseline_name == "ovha_no_tanso":
         return {"candidate_names": _require_candidates(active_candidate_names, ("SPO",))}
     if baseline_name == "ovha_spo_lrio":
@@ -1759,10 +1765,11 @@ def _ovha_variant_kwargs(
             "residual_candidates": ("TANSO",),
         }
     if baseline_name == "ovha_lrio_tanso":
+        tanso_name = "TANSOBase" if "TANSOBase" in active_candidate_names else "TANSO"
         return {
-            "candidate_names": _require_candidates(active_candidate_names, ("LRIO", "TANSO")),
+            "candidate_names": _require_candidates(active_candidate_names, ("LRIO", tanso_name)),
             "composition_mode": "base_plus_residual",
-            "base_candidate": "TANSO",
+            "base_candidate": tanso_name,
             "residual_candidates": ("LRIO",),
         }
     if baseline_name == "ovha_all_candidates_exploratory":

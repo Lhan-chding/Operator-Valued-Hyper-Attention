@@ -12,7 +12,8 @@ from moat_ovha_torch.models.multimodal.primitives.typed_local_evidence import TL
 
 
 MULTIMODAL_CANDIDATE_NAMES = ("TLEO", "SPO", "LRIO", "CATO")
-MULTIMODAL_EXTENDED_CANDIDATE_NAMES = MULTIMODAL_CANDIDATE_NAMES + ("TANSO",)
+TANSO_CANDIDATE_NAMES = ("TANSO", "TANSOBase", "TANSOShift")
+MULTIMODAL_EXTENDED_CANDIDATE_NAMES = MULTIMODAL_CANDIDATE_NAMES + TANSO_CANDIDATE_NAMES
 FORBIDDEN_V1_STACK_NAMES = ("RCEO", "MMRO", "CTRO", "TLDO", "OMRO")
 
 
@@ -23,7 +24,7 @@ def assert_candidate_names(names: tuple[str, ...] | list[str]) -> None:
     allowed = set(MULTIMODAL_EXTENDED_CANDIDATE_NAMES)
     invalid = sorted(name for name in values if name not in allowed)
     if invalid:
-        raise ValueError(f"Only TLEO / SPO / LRIO / CATO / TANSO may enter the candidate stack: {invalid}")
+        raise ValueError(f"Only TLEO / SPO / LRIO / CATO / TANSO/TANSOBase/TANSOShift may enter the candidate stack: {invalid}")
 
 
 def assert_stackable(outputs: dict[str, CandidateOutput], batch_size: int, q_count: int, dy: int) -> None:
@@ -63,7 +64,11 @@ def make_candidate_bank(
         elif name == "CATO":
             modules[name] = CATOPrimitive(d_model, output_dim)
         elif name == "TANSO":
-            modules[name] = TANSOPrimitive(d_model, output_dim)
+            modules[name] = TANSOPrimitive(d_model, output_dim, role="shift", candidate_name=name)
+        elif name == "TANSOBase":
+            modules[name] = TANSOPrimitive(d_model, output_dim, role="base", candidate_name=name)
+        elif name == "TANSOShift":
+            modules[name] = TANSOPrimitive(d_model, output_dim, role="shift", candidate_name=name)
     return nn.ModuleDict(modules)
 
 
