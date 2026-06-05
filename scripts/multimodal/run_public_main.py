@@ -209,7 +209,7 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "configured_seeds": list(config.seeds),
         "configured_seed_count": len(config.seeds),
         "pilot_seed_subset": pilot_seed_subset,
-        "models": ["ovha_full", *config.baseline_names],
+        "models": [config.main_model_name, *config.baseline_names],
         "row_counts": {
             "raw_metrics": len(raw_rows),
             "diagnostics": len(diagnostics_rows),
@@ -278,7 +278,7 @@ def _run_seed(
         val_batch_std=val_batch_std,
         seed=seed,
         sampling_seed=int(seed) + 17,
-        model_name="ovha_full",
+        model_name=config.main_model_name,
         train_steps=int(args.train_steps),
         learning_rate=float(args.learning_rate),
         progress_interval=progress_interval,
@@ -316,6 +316,7 @@ def _run_seed(
             parameter_count=_parameter_count(model),
             raw_metrics_path=raw_metrics_path,
             hardware=hardware,
+            model_name=config.main_model_name,
         )
     ]
     diagnostics_rows = [
@@ -334,6 +335,7 @@ def _run_seed(
         model,
         eval_batch,
         seed=seed,
+        model_name=config.main_model_name,
         raw_metric_path=raw_metrics_path,
         target_mean=target_mean,
         target_std=target_std,
@@ -344,7 +346,7 @@ def _run_seed(
         config,
         eval_batch,
         eval_output,
-        model_name="ovha_full",
+        model_name=config.main_model_name,
         seed=seed,
     )
 
@@ -1319,12 +1321,13 @@ def _ovha_raw_metric_row(
     parameter_count: int,
     raw_metrics_path: Path,
     hardware: dict[str, Any],
+    model_name: str = "ovha_full",
 ) -> dict[str, Any]:
     loss = _task_loss(output.y_hat, batch)
     return _raw_metric_row(
         config,
         batch,
-        model_name="ovha_full",
+        model_name=model_name,
         seed=seed,
         prediction=output.y_hat,
         score=_as_float(loss),
@@ -1652,7 +1655,7 @@ def _train_ovha_ablation(
     eval_batch_std = _standardize_batch_targets(eval_batch, target_mean, target_std)
     field_dims = {name: int(field.x.shape[-1]) for name, field in train_batch.fields.items()}
     torch.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name))
-    variant_kwargs = _ovha_variant_kwargs(baseline_name, config.candidate_names)
+    variant_kwargs = _ovha_variant_kwargs(baseline_name, config.candidate_pool_names)
     active_candidate_names = variant_kwargs.pop("candidate_names", config.candidate_names)
     model_kwargs = {
         "use_evidence_router": config.use_evidence_router,
@@ -1739,8 +1742,15 @@ def _ovha_variant_kwargs(
         return {"candidate_names": _require_candidates(active_candidate_names, ("LRIO",))}
     if baseline_name == "ovha_tanso_only":
         return {"candidate_names": _require_candidates(active_candidate_names, ("TANSO",))}
-    if baseline_name in {"ovha_no_tanso", "ovha_spo_lrio"}:
-        return {"candidate_names": _require_candidates(active_candidate_names, ("SPO", "LRIO"))}
+    if baseline_name == "ovha_no_tanso":
+        return {"candidate_names": _require_candidates(active_candidate_names, ("SPO",))}
+    if baseline_name == "ovha_spo_lrio":
+        return {
+            "candidate_names": _require_candidates(active_candidate_names, ("SPO", "LRIO")),
+            "composition_mode": "base_plus_residual",
+            "base_candidate": "SPO",
+            "residual_candidates": ("LRIO",),
+        }
     if baseline_name == "ovha_spo_tanso":
         return {
             "candidate_names": _require_candidates(active_candidate_names, ("SPO", "TANSO")),
@@ -1754,6 +1764,13 @@ def _ovha_variant_kwargs(
             "composition_mode": "base_plus_residual",
             "base_candidate": "TANSO",
             "residual_candidates": ("LRIO",),
+        }
+    if baseline_name == "ovha_all_candidates_exploratory":
+        return {
+            "candidate_names": _require_candidates(active_candidate_names, ("SPO", "LRIO", "TANSO")),
+            "composition_mode": "base_plus_residual",
+            "base_candidate": "SPO",
+            "residual_candidates": ("LRIO", "TANSO"),
         }
     if baseline_name == "ovha_no_cato":
         return {"candidate_names": _drop_candidate(active_candidate_names, "CATO")}

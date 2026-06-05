@@ -589,12 +589,9 @@ def _lower_is_better_sentiment_rows():
         "spo_only": (0.55, 0.54, 0.56),
         "lrio_only": (0.54, 0.53, 0.55),
         "ovha_tanso_only": (0.56, 0.55, 0.57),
-        "ovha_no_tanso": (0.53, 0.52, 0.54),
         "ovha_spo_lrio": (0.53, 0.52, 0.54),
-        "ovha_spo_tanso": (0.54, 0.53, 0.55),
         "ovha_lrio_tanso": (0.52, 0.51, 0.53),
-        "ovha_no_lrio": (0.54, 0.53, 0.55),
-        "ovha_no_spo": (0.50, 0.49, 0.51),
+        "ovha_all_candidates_exploratory": (0.51, 0.50, 0.52),
         "ovha_no_rceo": (0.55, 0.54, 0.56),
         "ovha_with_evidence_router": (0.56, 0.55, 0.57),
     }

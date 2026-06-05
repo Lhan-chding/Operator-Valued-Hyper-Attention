@@ -11,17 +11,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MultimodalStrictAuditStaticContracts(unittest.TestCase):
-    def test_cmu_public_configs_use_task_aware_spo_lrio_tanso_bank(self):
+    def test_cmu_public_configs_use_task_aware_spo_tanso_primary_bank(self):
         for name in ("multimodal_cmu_mosei_public_main.json", "multimodal_cmu_mosei_public_smoke.json"):
             with self.subTest(config=name):
                 payload = json.loads((ROOT / "configs" / name).read_text())
 
-                self.assertEqual(payload["candidate_names"], ["SPO", "LRIO", "TANSO"])
-                self.assertEqual(payload["residual_candidates"], ["LRIO", "TANSO"])
+                self.assertEqual(payload["main_model_name"], "ovha_cmu_primary")
+                self.assertEqual(payload["candidate_names"], ["SPO", "TANSO"])
+                self.assertEqual(payload["candidate_pool_names"], ["SPO", "LRIO", "TANSO"])
+                self.assertEqual(payload["residual_candidates"], ["TANSO"])
                 self.assertEqual(
                     payload["lrio_pairs"],
                     [["text", "audio"], ["text", "vision"]],
                 )
+                self.assertIn("ovha_all_candidates_exploratory", payload["baseline_names"])
+                self.assertNotIn("ovha_no_lrio", payload["baseline_names"])
+                self.assertNotIn("ovha_spo_tanso", payload["baseline_names"])
 
     def test_tanso_candidate_enters_cmu_text_anchored_shift_stack(self):
         if not TORCH_AVAILABLE:
@@ -932,7 +937,7 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertEqual(float(composition["residual_utility_admission_by_candidate"]["LRIO"].detach()), 1.0)
         self.assertLess(float(composition["actual_contribution_norm_by_candidate"]["LRIO"].detach()), 1e-6)
 
-    def test_cmu_configs_disable_evidence_router_and_use_residual_composition(self):
+    def test_cmu_configs_disable_evidence_router_and_use_primary_residual_composition(self):
         import json
 
         for name in ("multimodal_cmu_mosei_public_main.json", "multimodal_cmu_mosei_public_smoke.json"):
@@ -942,9 +947,9 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
                 self.assertFalse(payload["use_evidence_router"])
                 self.assertEqual(payload["composition_mode"], "base_plus_residual")
                 self.assertEqual(payload["base_candidate"], "SPO")
-                self.assertEqual(payload["residual_candidates"], ["LRIO", "TANSO"])
+                self.assertEqual(payload["residual_candidates"], ["TANSO"])
 
-    def test_public_cmu_t5_uses_spo_diversity_and_router_utility_losses(self):
+    def test_public_cmu_t5_uses_spo_diversity_and_single_residual_gate_loss(self):
         import torch
 
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
@@ -954,7 +959,8 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         torch.manual_seed(43)
         config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_public_main.json")
         self.assertIn("spo_prototype_diversity", config.losses_by_stage["T5"])
-        self.assertIn("router_marginal_utility", config.losses_by_stage["T5"])
+        self.assertNotIn("router_marginal_utility", config.losses_by_stage["T5"])
+        self.assertIn("residual_gate_utility_loss", config.losses_by_stage["T5"])
         model = MultimodalOVHA(
             field_dims={"text": 5, "audio": 4, "vision": 3},
             query_dim=6,
@@ -969,9 +975,10 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         components = _public_loss_components(output, batch, config)
 
         self.assertIn("spo_prototype_diversity", components)
-        self.assertIn("router_marginal_utility", components)
+        self.assertIn("residual_gate_utility_loss", components)
+        self.assertNotIn("router_marginal_utility", components)
         self.assertGreater(float(components["spo_prototype_diversity"].detach()), 0.0)
-        self.assertGreaterEqual(float(components["router_marginal_utility"].detach()), 0.0)
+        self.assertGreaterEqual(float(components["residual_gate_utility_loss"].detach()), 0.0)
 
     def test_public_loss_components_skip_diagnostic_only_zero_weight_candidate_loss(self):
         import torch
@@ -1053,17 +1060,12 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertIn("leave_one_residual_out_oracle", public)
         self.assertIn("full_minus_oracle_min_loss", public["candidate_oracle_selection"])
         self.assertIn("named_losses", public["base_residual_gate_sweep"])
-        self.assertIn("SPO+LRIO", public["base_residual_gate_sweep"]["named_losses"])
         self.assertIn("SPO+TANSO", public["base_residual_gate_sweep"]["named_losses"])
-        self.assertIn("SPO+LRIO+TANSO", public["base_residual_gate_sweep"]["named_losses"])
         self.assertIn("TANSO-only", public["base_residual_gate_sweep"]["named_losses"])
-        self.assertIn("LRIO-only", public["base_residual_gate_sweep"]["named_losses"])
         self.assertIn("residual_utility", public["base_residual_oracle"])
-        self.assertIn("LRIO", public["leave_one_residual_out_oracle"])
         self.assertIn("TANSO", public["leave_one_residual_out_oracle"])
         self.assertIn("residual_candidate_loss", public)
         residual_loss = public["residual_candidate_loss"]
-        self.assertIn("LRIO", residual_loss)
         self.assertIn("TANSO", residual_loss)
         for values in residual_loss.values():
             self.assertIn("raw_delta_loss", values)
@@ -1109,7 +1111,6 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         self.assertIn("raw_delta_by_candidate", row)
         self.assertIn("gated_delta_by_candidate", row)
         self.assertIn("residual_gate_by_candidate", row)
-        self.assertIn("LRIO", row["raw_delta_by_candidate"])
         self.assertIn("TANSO", row["raw_delta_by_candidate"])
         self.assertEqual(row["target_space"]["prediction_full"], "model_output")
         self.assertEqual(row["target_space"]["raw_delta_by_candidate"], "model_output_delta")
@@ -1195,7 +1196,7 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
             float(_router_marginal_utility_loss(uniform).detach()),
         )
 
-    def test_base_plus_residual_router_utility_uses_residual_gate_oracle(self):
+    def test_base_plus_residual_router_utility_is_skipped_to_avoid_duplicate_gate_supervision(self):
         import torch
         from types import SimpleNamespace
 
@@ -1228,12 +1229,9 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
             )
 
         aligned = output_with_gate(torch.tensor([[[0.99], [0.01]]]))
-        uniform = output_with_gate(torch.full((1, 2, 1), 0.5))
+        skipped = _router_marginal_utility_loss(aligned, batch)
 
-        self.assertLess(
-            float(_router_marginal_utility_loss(aligned, batch).detach()),
-            float(_router_marginal_utility_loss(uniform, batch).detach()),
-        )
+        self.assertEqual(float(skipped.detach()), 0.0)
 
     def test_residual_gate_utility_loss_uses_base_plus_raw_delta_oracle(self):
         import torch
@@ -1242,7 +1240,7 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
         from scripts.multimodal.run_public_smoke import _residual_gate_utility_loss
 
         batch = SimpleNamespace(
-            target_y=torch.tensor([[[1.0], [0.0]]]),
+            target_y=torch.tensor([[[0.25], [0.0]]]),
             target_mask=torch.ones(1, 2, dtype=torch.bool),
         )
         base = torch.zeros(1, 2, 1)
@@ -1265,7 +1263,7 @@ class MultimodalStrictAuditContracts(unittest.TestCase):
                 },
             )
 
-        aligned = output_with_gate(torch.tensor([[[0.99], [0.01]]]))
+        aligned = output_with_gate(torch.tensor([[[0.25], [0.01]]]))
         uniform = output_with_gate(torch.full((1, 2, 1), 0.5))
 
         self.assertLess(

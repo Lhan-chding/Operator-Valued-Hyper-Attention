@@ -13,6 +13,7 @@
     305
   ],
   "main_table_seed_policy": "five_seed_default",
+  "main_model_name": "ovha_all_candidates_exploratory",
   "training_stages": [
     "T0",
     "T5"
@@ -47,10 +48,7 @@
     "spo_only",
     "lrio_only",
     "ovha_tanso_only",
-    "ovha_no_tanso",
-    "ovha_no_lrio",
-    "ovha_no_spo",
-    "ovha_spo_tanso",
+    "ovha_spo_lrio",
     "ovha_lrio_tanso",
     "ovha_no_rceo",
     "ovha_with_evidence_router"
@@ -71,7 +69,6 @@
       "task_loss",
       "candidate_individual_loss",
       "spo_prototype_diversity",
-      "router_marginal_utility",
       "residual_norm_shrinkage",
       "huber_l1_task_loss",
       "ordinal_acc5_acc7_auxiliary",
@@ -87,9 +84,6 @@
     },
     "spo_prototype_diversity": {
       "weight": 0.001
-    },
-    "router_marginal_utility": {
-      "weight": 0.01
     },
     "residual_norm_shrinkage": {
       "weight": 0.001

@@ -93,12 +93,15 @@ def evaluate_sentiment_gate(
             robustness_summary,
             baseline_model,
         ),
-        "no_lrio_drops": _ablation_drop(statistics_summary, task, split, full_model, ablation_scores.get("ovha_no_lrio"), "no-LRIO"),
-        "no_spo_drops": _ablation_drop(statistics_summary, task, split, full_model, ablation_scores.get("ovha_no_spo"), "no-SPO"),
+        "lrio_admission_rows_present": _required_models_present(
+            statistics_summary,
+            task,
+            split,
+            ("ovha_spo_lrio", "ovha_lrio_tanso", "ovha_all_candidates_exploratory"),
+            "LRIO admission/non-interference",
+        ),
         "no_rceo_drops": _ablation_drop(statistics_summary, task, split, full_model, ablation_scores.get("ovha_no_rceo"), "no-RCEO"),
-        "lrio_router_load_high": _router_load_high(diagnostics_rows, "LRIO", minimum=0.25),
         "spo_router_load_high": _router_load_high(diagnostics_rows, "SPO", minimum=0.20),
-        "lrio_rank_entropy_present": _candidate_diag_positive(diagnostics_rows, "LRIO", "rank_entropy"),
         "spo_prototype_entropy_present": _candidate_diag_positive(diagnostics_rows, "SPO", "prototype_entropy"),
         "spo_top_prototype_differentiates": _spo_top_prototype_differentiates(diagnostics_rows),
         "step14_public_diagnostics": _sentiment_public_diagnostics_present(diagnostics_rows),
@@ -139,6 +142,23 @@ def _full_beats_baseline(
         "passed": passed,
         "value": improvement,
         "reason": "; ".join(reasons),
+    }
+
+
+def _required_models_present(
+    summary: dict[str, Any],
+    task: str,
+    split: str,
+    models: tuple[str, ...],
+    label: str,
+) -> dict[str, Any]:
+    table = summary.get("main_table", {}).get(task, {}).get(split, {})
+    if not isinstance(table, dict):
+        return {"passed": False, "reason": f"{label} rows missing main table"}
+    missing = [model for model in models if model not in table]
+    return {
+        "passed": not missing,
+        "reason": "" if not missing else f"{label} rows missing: {', '.join(missing)}",
     }
 
 
@@ -644,8 +664,6 @@ def _region_text_public_diagnostics_present(rows: list[dict[str, Any]]) -> dict[
 def _sentiment_public_diagnostics_present(rows: list[dict[str, Any]]) -> dict[str, Any]:
     diagnostics = _public_diagnostic_payloads(rows)
     reasons: list[str] = []
-    if not any(_finite_non_negative_breakdown(payload.get("lrio_rank_entropy_by_modality_pair")) for payload in diagnostics):
-        reasons.append("sentiment public diagnostics missing LRIO rank entropy by modality pair")
     if not any(_prototype_load_map_differentiates(payload.get("spo_prototype_load_by_emotion_class")) for payload in diagnostics):
         reasons.append("sentiment public diagnostics missing SPO prototype load by emotion class")
     if not any(

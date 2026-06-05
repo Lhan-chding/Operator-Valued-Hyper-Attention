@@ -153,7 +153,7 @@ def _validate_raw_metric_coverage(
     split: str,
     errors: list[str],
 ) -> dict[str, Any]:
-    expected_models = ("ovha_full", *config.baseline_names)
+    expected_models = (config.main_model_name, *config.baseline_names)
     expected_model_set = set(expected_models)
     expected_seed_set = set(config.seeds)
     observed: dict[str, set[int]] = {}
@@ -237,11 +237,11 @@ def _validate_robustness_rows(
     if not robustness_rows:
         errors.append("robustness_rows must contain at least one public main robustness row")
         return
-    expected_models = {"ovha_full", *config.baseline_names}
+    expected_models = {config.main_model_name, *config.baseline_names}
     observed_models = {str(row.get("model", "")) for row in robustness_rows if str(row.get("model", "")).strip()}
-    if "ovha_full" not in observed_models:
-        errors.append("robustness_rows missing ovha_full")
-    if observed_models and not observed_models & (expected_models - {"ovha_full"}):
+    if config.main_model_name not in observed_models:
+        errors.append(f"robustness_rows missing {config.main_model_name}")
+    if observed_models and not observed_models & (expected_models - {config.main_model_name}):
         errors.append("robustness_rows missing configured same-feature baseline rows")
 
 

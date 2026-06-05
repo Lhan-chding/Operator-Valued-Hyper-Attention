@@ -47,6 +47,7 @@ class MultimodalExperimentConfig:
     seeds: tuple[int, ...]
     training_stages: tuple[str, ...]
     candidate_names: tuple[str, ...]
+    candidate_pool_names: tuple[str, ...]
     baseline_names: tuple[str, ...]
     eval_splits: tuple[str, ...]
     eval_episode_count: int
@@ -63,6 +64,7 @@ class MultimodalExperimentConfig:
     composition_mode: str = "convex_mixture"
     base_candidate: str | None = None
     residual_candidates: tuple[str, ...] = ()
+    main_model_name: str = "ovha_full"
 
     @classmethod
     def from_file(cls, path: Path | str) -> "MultimodalExperimentConfig":
@@ -75,6 +77,8 @@ class MultimodalExperimentConfig:
             raise ValueError("multimodal experiments require at least 3 seeds")
         candidate_names = tuple(mapping.get("candidate_names", DEFAULT_CANDIDATE_NAMES))
         _validate_candidate_names(candidate_names)
+        candidate_pool_names = tuple(mapping.get("candidate_pool_names", candidate_names))
+        _validate_candidate_names(candidate_pool_names)
         config = cls(
             name=str(mapping["name"]),
             dataset_name=str(mapping["dataset_name"]),
@@ -85,6 +89,7 @@ class MultimodalExperimentConfig:
             seeds=seeds,
             training_stages=tuple(mapping.get("training_stages", ())),
             candidate_names=candidate_names,
+            candidate_pool_names=candidate_pool_names,
             baseline_names=tuple(mapping.get("baseline_names", ())),
             eval_splits=tuple(mapping.get("eval_splits", ("val", "test"))),
             eval_episode_count=int(mapping.get("eval_episode_count", 0)),
@@ -101,6 +106,7 @@ class MultimodalExperimentConfig:
             composition_mode=str(mapping.get("composition_mode", "convex_mixture")),
             base_candidate=str(mapping["base_candidate"]) if mapping.get("base_candidate") is not None else None,
             residual_candidates=tuple(str(candidate) for candidate in mapping.get("residual_candidates", ())),
+            main_model_name=str(mapping.get("main_model_name", "ovha_full")),
         )
         config.validate()
         return config
@@ -125,9 +131,14 @@ class MultimodalExperimentConfig:
             raise ValueError("hidden losses are controlled-only and forbidden for public data")
         if self.robustness_corruptions:
             _validate_robustness_corruptions(self.robustness_corruptions)
+        missing_primary = sorted(set(self.candidate_names) - set(self.candidate_pool_names))
+        if missing_primary:
+            raise ValueError("candidate_pool_names must include every primary candidate: " + ", ".join(missing_primary))
+        if not self.main_model_name.strip():
+            raise ValueError("main_model_name must be non-empty")
         _validate_embedded_training_protocol(self)
         _validate_public_alignment_label_contract(self)
-        missing = missing_required_baselines(self.task_type, self.baseline_names)
+        missing = missing_required_baselines(self.task_type, (self.main_model_name, *self.baseline_names))
         if missing:
             raise ValueError(f"missing required same-feature baselines: {', '.join(missing)}")
         forbidden = forbidden_external_references(self.task_type, self.baseline_names)

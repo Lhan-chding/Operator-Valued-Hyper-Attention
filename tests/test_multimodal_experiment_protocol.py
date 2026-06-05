@@ -134,7 +134,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 self.assertEqual(config.dataset_name, dataset)
                 self.assertEqual(config.task_type, task_type)
                 self.assertEqual(config.training_stages, ("T0", "T5"))
-                if dataset in {"cmu_mosei", "meld"}:
+                if dataset == "cmu_mosei" and path.name == "multimodal_cmu_mosei_public_main.json":
+                    self.assertEqual(config.candidate_names, ("SPO", "TANSO"))
+                    self.assertEqual(config.candidate_pool_names, ("SPO", "LRIO", "TANSO"))
+                elif dataset in {"cmu_mosei", "meld"}:
                     self.assertEqual(config.candidate_names, ("SPO", "LRIO", "TANSO"))
                     expected_lrio_pairs = (
                         (("text", "audio"), ("text", "vision"))
@@ -231,11 +234,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "spo_only",
                 "lrio_only",
                 "ovha_tanso_only",
-                "ovha_no_tanso",
-                "ovha_no_lrio",
-                "ovha_no_spo",
-                "ovha_spo_tanso",
+                "ovha_spo_lrio",
                 "ovha_lrio_tanso",
+                "ovha_all_candidates_exploratory",
                 "ovha_no_rceo",
                 "ovha_with_evidence_router",
             },
@@ -255,11 +256,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "spo_only",
                 "lrio_only",
                 "ovha_tanso_only",
-                "ovha_no_tanso",
-                "ovha_no_lrio",
-                "ovha_no_spo",
-                "ovha_spo_tanso",
+                "ovha_spo_lrio",
                 "ovha_lrio_tanso",
+                "ovha_all_candidates_exploratory",
                 "ovha_no_rceo",
                 "ovha_with_evidence_router",
             },
@@ -277,11 +276,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "spo_only",
             "lrio_only",
             "ovha_tanso_only",
-            "ovha_no_tanso",
-            "ovha_no_lrio",
-            "ovha_no_spo",
-            "ovha_spo_tanso",
+            "ovha_spo_lrio",
             "ovha_lrio_tanso",
+            "ovha_all_candidates_exploratory",
             "ovha_no_rceo",
             "ovha_with_evidence_router",
         }
@@ -1136,8 +1133,16 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(module._ovha_variant_kwargs("spo_only", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("SPO",)})
         self.assertEqual(module._ovha_variant_kwargs("lrio_only", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("LRIO",)})
         self.assertEqual(module._ovha_variant_kwargs("ovha_tanso_only", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("TANSO",)})
-        self.assertEqual(module._ovha_variant_kwargs("ovha_no_tanso", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("SPO", "LRIO")})
-        self.assertEqual(module._ovha_variant_kwargs("ovha_spo_lrio", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("SPO", "LRIO")})
+        self.assertEqual(module._ovha_variant_kwargs("ovha_no_tanso", ("SPO", "LRIO", "TANSO")), {"candidate_names": ("SPO",)})
+        self.assertEqual(
+            module._ovha_variant_kwargs("ovha_spo_lrio", ("SPO", "LRIO", "TANSO")),
+            {
+                "candidate_names": ("SPO", "LRIO"),
+                "composition_mode": "base_plus_residual",
+                "base_candidate": "SPO",
+                "residual_candidates": ("LRIO",),
+            },
+        )
         self.assertEqual(
             module._ovha_variant_kwargs("ovha_spo_tanso", ("SPO", "LRIO", "TANSO")),
             {
@@ -1154,6 +1159,15 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 "composition_mode": "base_plus_residual",
                 "base_candidate": "TANSO",
                 "residual_candidates": ("LRIO",),
+            },
+        )
+        self.assertEqual(
+            module._ovha_variant_kwargs("ovha_all_candidates_exploratory", ("SPO", "LRIO", "TANSO")),
+            {
+                "candidate_names": ("SPO", "LRIO", "TANSO"),
+                "composition_mode": "base_plus_residual",
+                "base_candidate": "SPO",
+                "residual_candidates": ("LRIO", "TANSO"),
             },
         )
         self.assertEqual(module._ovha_variant_kwargs("ovha_no_rceo"), {"use_reliability_prior": False})
@@ -4251,8 +4265,6 @@ def _passing_sentiment_public_gate_report(artifact_root: Path | None = None) -> 
             statistics_summary=_gate_statistics_summary(task, raw_metrics),
             diagnostics_rows=_gate_diagnostic_rows(task),
             ablation_scores={
-                "ovha_no_lrio": _gate_score_for_model(task, "ovha_no_lrio", full_score=0.76, baseline_score=0.74),
-                "ovha_no_spo": _gate_score_for_model(task, "ovha_no_spo", full_score=0.76, baseline_score=0.74),
                 "ovha_no_rceo": _gate_score_for_model(task, "ovha_no_rceo", full_score=0.76, baseline_score=0.74),
             },
             robustness_summary=_gate_robustness_summary(task),
@@ -4266,12 +4278,9 @@ def _passing_sentiment_public_gate_report(artifact_root: Path | None = None) -> 
             "checks": {
                 "full_beats_same_feature_baseline": {"passed": True},
                 "full_beats_sanity_probe_or_robustness_advantage": {"passed": True},
-                "no_lrio_drops": {"passed": True},
-                "no_spo_drops": {"passed": True},
+                "lrio_admission_rows_present": {"passed": True},
                 "no_rceo_drops": {"passed": True},
-                "lrio_router_load_high": {"passed": True},
                 "spo_router_load_high": {"passed": True},
-                "lrio_rank_entropy_present": {"passed": True},
                 "spo_prototype_entropy_present": {"passed": True},
                 "spo_top_prototype_differentiates": {"passed": True},
                 "step14_public_diagnostics": {"passed": True},

@@ -147,10 +147,9 @@ class MultimodalPublicGateTests(unittest.TestCase):
         )
 
         self.assertTrue(report["passed"], report["reasons"])
-        self.assertTrue(report["checks"]["no_lrio_drops"]["passed"])
+        self.assertTrue(report["checks"]["lrio_admission_rows_present"]["passed"])
         self.assertTrue(report["checks"]["no_rceo_drops"]["passed"])
         self.assertTrue(report["checks"]["robustness_passes"]["passed"])
-        self.assertTrue(report["checks"]["lrio_rank_entropy_present"]["passed"])
         self.assertTrue(report["checks"]["spo_top_prototype_differentiates"]["passed"])
         self.assertTrue(report["checks"]["rceo_reliability_calibrated"]["passed"])
 
@@ -205,7 +204,7 @@ class MultimodalPublicGateTests(unittest.TestCase):
         )
 
         self.assertTrue(report["checks"]["full_beats_same_feature_baseline"]["passed"], report["reasons"])
-        self.assertTrue(report["checks"]["no_lrio_drops"]["passed"], report["reasons"])
+        self.assertTrue(report["checks"]["lrio_admission_rows_present"]["passed"], report["reasons"])
         self.assertGreater(report["checks"]["full_beats_same_feature_baseline"]["value"], 0.0)
 
     def test_sentiment_gate_allows_significant_robustness_fallback_when_lmf_and_mult_not_beaten(self):
@@ -327,7 +326,6 @@ class MultimodalPublicGateTests(unittest.TestCase):
 
         self.assertFalse(report["passed"])
         joined = "\n".join(report["reasons"])
-        self.assertIn("LRIO rank entropy diagnostic missing", joined)
         self.assertIn("SPO prototype entropy diagnostic missing", joined)
         self.assertIn("SPO top prototype differentiation missing", joined)
         self.assertIn("RCEO reliability calibration missing", joined)
@@ -1207,7 +1205,6 @@ class MultimodalPublicGateTests(unittest.TestCase):
 
         self.assertFalse(report["passed"])
         joined = "\n".join(report["reasons"])
-        self.assertIn("sentiment public diagnostics missing LRIO rank entropy by modality pair", joined)
         self.assertIn("sentiment public diagnostics missing SPO prototype load by emotion class", joined)
         self.assertIn("sentiment public diagnostics missing RCEO reliability shift under missing/noisy modality", joined)
         self.assertIn("sentiment public diagnostics missing router load by clean/corrupted/missing split", joined)

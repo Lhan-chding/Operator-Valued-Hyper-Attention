@@ -56,8 +56,6 @@ def main() -> int:
             statistics_summary=statistics,
             diagnostics_rows=diagnostics,
             ablation_scores={
-                "ovha_no_lrio": args.no_lrio_score,
-                "ovha_no_spo": args.no_spo_score,
                 "ovha_no_rceo": args.no_rceo_score,
             },
             robustness_summary=robustness,

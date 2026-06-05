@@ -14,7 +14,12 @@
     "T0",
     "T5"
   ],
+  "main_model_name": "ovha_cmu_primary",
   "candidate_names": [
+    "SPO",
+    "TANSO"
+  ],
+  "candidate_pool_names": [
     "SPO",
     "LRIO",
     "TANSO"
@@ -33,7 +38,6 @@
   "composition_mode": "base_plus_residual",
   "base_candidate": "SPO",
   "residual_candidates": [
-    "LRIO",
     "TANSO"
   ],
   "baseline_names": [
@@ -44,11 +48,9 @@
     "spo_only",
     "lrio_only",
     "ovha_tanso_only",
-    "ovha_no_tanso",
-    "ovha_no_lrio",
-    "ovha_no_spo",
-    "ovha_spo_tanso",
+    "ovha_spo_lrio",
     "ovha_lrio_tanso",
+    "ovha_all_candidates_exploratory",
     "ovha_no_rceo",
     "ovha_with_evidence_router"
   ],
@@ -68,7 +70,6 @@
       "task_loss",
       "candidate_individual_loss",
       "spo_prototype_diversity",
-      "router_marginal_utility",
       "residual_norm_shrinkage",
       "huber_l1_task_loss",
       "ordinal_acc5_acc7_auxiliary",
@@ -84,9 +85,6 @@
     },
     "spo_prototype_diversity": {
       "weight": 0.001
-    },
-    "router_marginal_utility": {
-      "weight": 0.01
     },
     "residual_norm_shrinkage": {
       "weight": 0.001

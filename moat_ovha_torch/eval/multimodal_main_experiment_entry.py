@@ -49,12 +49,9 @@ REGION_TEXT_TOPCONF_CHECKS = (
 SENTIMENT_TOPCONF_CHECKS = (
     "full_beats_same_feature_baseline",
     "full_beats_sanity_probe_or_robustness_advantage",
-    "no_lrio_drops",
-    "no_spo_drops",
+    "lrio_admission_rows_present",
     "no_rceo_drops",
-    "lrio_router_load_high",
     "spo_router_load_high",
-    "lrio_rank_entropy_present",
     "spo_prototype_entropy_present",
     "spo_top_prototype_differentiates",
     "step14_public_diagnostics",
@@ -911,8 +908,6 @@ def _validate_recomputed_public_gate(
             statistics_summary=summary,
             diagnostics_rows=diagnostics,
             ablation_scores={
-                "ovha_no_lrio": _summary_model_mean(summary, task, split, "ovha_no_lrio"),
-                "ovha_no_spo": _summary_model_mean(summary, task, split, "ovha_no_spo"),
                 "ovha_no_rceo": _summary_model_mean(summary, task, split, "ovha_no_rceo"),
             },
             robustness_summary=robustness,

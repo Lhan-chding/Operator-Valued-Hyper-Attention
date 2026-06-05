@@ -673,7 +673,25 @@ export OVHA_PUBLIC_MAIN_BASELINE_TRAIN_STEPS=50000
 export OVHA_PUBLIC_MAIN_DEVICE=cuda
 ```
 
-用正式 main runner 生成非 smoke 主实验产物。该入口会读取 formal cache，按 config 的 5 个 seed 运行 `ovha_full` 与同特征 baseline，写出 gate bundle 需要的三个 JSONL 文件：
+用正式 main runner 生成非 smoke 主实验产物。该入口会读取 formal cache，按 config 的 5 个 seed 运行主模型与同特征 baseline，写出 gate bundle 需要的三个 JSONL 文件。
+
+本轮 CMU-MOSEI 先只跑一个 pilot seed 看效果，避免在重复消融上浪费 Ubuntu/A800 时间。这个命令仍使用正式 main runner 和正式 config，但通过 `--pilot-seed 301` 只选择一个已配置 seed；产物会标记 `pilot_seed_subset=true`，不能进入最终 5-seed 主表：
+
+```bash
+python scripts/multimodal/run_public_main.py \
+  configs/multimodal_cmu_mosei_public_main.json \
+  --cache-root data/multimodal_cache \
+  --controlled-report outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json \
+  --artifact-root outputs/multimodal/cmu_mosei_primary_pilot_seed301 \
+  --train-steps "$OVHA_PUBLIC_MAIN_TRAIN_STEPS" \
+  --baseline-train-steps "$OVHA_PUBLIC_MAIN_BASELINE_TRAIN_STEPS" \
+  --train-split train \
+  --eval-split test \
+  --device "$OVHA_PUBLIC_MAIN_DEVICE" \
+  --pilot-seed 301
+```
+
+pilot seed 结果确认后，再去掉 `--pilot-seed` 跑正式 5-seed main：
 
 ```bash
 python scripts/multimodal/run_public_main.py \
@@ -699,7 +717,7 @@ python scripts/multimodal/run_public_main.py \
   --device "$OVHA_PUBLIC_MAIN_DEVICE"
 ```
 
-在 build gate 前先做 main artifact preflight，确认产物覆盖 main config 的 5 个 seed、`ovha_full` 和所有同特征 baseline。这里先只挡住 seed/model/split/task/dataset 不一致以及 smoke / not-topconf 误入主表；更细的统计、硬件和训练元数据仍由后续 gate validation 检查：
+在 build gate 前先做 main artifact preflight，确认产物覆盖 main config 的 5 个 seed、配置中的主模型名和所有同特征 baseline。这里先只挡住 seed/model/split/task/dataset 不一致以及 smoke / not-topconf 误入主表；更细的统计、硬件和训练元数据仍由后续 gate validation 检查：
 
 ```bash
 python scripts/multimodal/validate_public_main_artifacts.py \

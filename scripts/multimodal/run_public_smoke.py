@@ -539,7 +539,7 @@ def _candidate_diagnostic_tensor(
 
 def _router_marginal_utility_loss(output: MultimodalOVHAOutput, batch: MultimodalEpisodeBatch | None = None) -> torch.Tensor:
     if batch is not None and output.diagnostics.get("composition", {}).get("mode") == "base_plus_residual":
-        return _residual_oracle_gate_loss(output, batch)
+        return output.y_hat.sum() * 0.0
     if batch is not None:
         sample_candidate_loss = _candidate_losses_by_sample_from_values(
             output.candidate_values,
@@ -633,7 +633,6 @@ def _residual_gate_utility_loss(
     output: MultimodalOVHAOutput,
     batch: MultimodalEpisodeBatch,
     *,
-    tau: float = 0.1,
     sparse_weight: float = 0.01,
     overlap_weight: float = 0.01,
 ) -> torch.Tensor:
@@ -659,8 +658,8 @@ def _residual_gate_utility_loss(
         if target_gate.shape != candidate_gate.shape:
             target_gate = target_gate.mean(dim=-1, keepdim=True)
         losses.append(
-            torch.nn.functional.binary_cross_entropy(
-                candidate_gate.clamp(1e-6, 1.0 - 1e-6),
+            torch.nn.functional.smooth_l1_loss(
+                candidate_gate,
                 target_gate,
                 reduction="none",
             ).mul(mask).sum() / mask.sum().clamp_min(1.0)
@@ -701,18 +700,27 @@ def _tanso_source_oracle_gate_loss(output: MultimodalOVHAOutput, batch: Multimod
         if not hasattr(delta, "to") or not hasattr(source_gate, "to"):
             continue
         target_alpha = _residual_oracle_alpha(base, delta.to(dtype=base.dtype, device=base.device), batch).squeeze(-1)
-        losses.append(torch.nn.functional.binary_cross_entropy(source_gate.clamp(1e-6, 1.0 - 1e-6), target_alpha.detach()))
+        losses.append(torch.nn.functional.smooth_l1_loss(source_gate, target_alpha.detach()))
     if not losses:
         return output.y_hat.sum() * 0.0
     return torch.stack(losses).mean()
 
 
-def _residual_oracle_alpha(base: torch.Tensor, delta: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+def _residual_oracle_alpha(
+    base: torch.Tensor,
+    delta: torch.Tensor,
+    batch: MultimodalEpisodeBatch,
+    *,
+    alpha_max: float = 1.0,
+    eps: float = 1e-8,
+) -> torch.Tensor:
     target = batch.target_y.to(dtype=base.dtype, device=base.device)
     mask = batch.target_mask.to(dtype=base.dtype, device=base.device).unsqueeze(-1)
-    base_error = ((base - target).square() * mask).mean(dim=-1, keepdim=True)
-    residual_error = ((base + delta - target).square() * mask).mean(dim=-1, keepdim=True)
-    return (residual_error < base_error).to(dtype=base.dtype)
+    residual = target - base
+    numerator = (residual * delta).sum(dim=-1, keepdim=True)
+    denominator = delta.square().sum(dim=-1, keepdim=True).clamp_min(float(eps))
+    alpha = (numerator / denominator).clamp(min=0.0, max=float(alpha_max))
+    return alpha * mask
 
 
 def _public_alignment_ce(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:

@@ -2,7 +2,7 @@
 
 This project now separates two evidence types:
 
-1. Internal OVHA evidence: `run_public_main.py` trains `ovha_full`, simple same-feature sanity probes, and OVHA ablations on the same frozen cache.
+1. Internal OVHA evidence: `run_public_main.py` trains the configured main model, simple same-feature sanity probes, and OVHA ablations on the same frozen cache.
 2. External SOTA evidence: published references or separate official-repo reproductions are tracked outside the same-feature baseline registry.
 
 ## Internal Baselines
@@ -23,7 +23,9 @@ CMU-MOSEI internal rows:
 - `audio_only`
 - `vision_only`
 - `concat_fusion`
-- `ovha_no_lrio`
+- `ovha_spo_lrio`
+- `ovha_lrio_tanso`
+- `ovha_all_candidates_exploratory`
 - `ovha_no_spo`
 - `ovha_no_rceo`
 - `ovha_no_evidence_router`
