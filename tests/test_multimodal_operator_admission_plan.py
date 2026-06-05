@@ -65,6 +65,25 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
         self.assertEqual(config.loss_metadata["candidate_individual_loss"]["weight"], 0.0)
         self.assertEqual(config.loss_metadata["val_affine_calibration"]["stage"], "validation_postfit")
 
+    def test_cmu_tanso_primary_baselines_do_not_inherit_tanso_base_composition(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_smoke import _ovha_composition_kwargs
+
+        config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_cmu_mosei_tanso_primary_main.json")
+
+        self.assertEqual(
+            _ovha_composition_kwargs(config, ("TANSOBase",)),
+            {"composition_mode": "tanso_base"},
+        )
+        self.assertEqual(
+            _ovha_composition_kwargs(config, ("SPO",)),
+            {"composition_mode": "convex_mixture"},
+        )
+        self.assertEqual(
+            _ovha_composition_kwargs(config, ("LRIO",)),
+            {"composition_mode": "convex_mixture"},
+        )
+
     def test_operator_admission_eval_reports_residual_utility_and_rejects_interference(self):
         rows = [
             {"sample_id": "a", "split": "val", "model": "base", "truth": 1.0, "prediction": 0.0},

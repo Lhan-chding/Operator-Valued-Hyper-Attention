@@ -511,6 +511,8 @@ def _ovha_composition_kwargs(
     active_candidate_names: tuple[str, ...],
 ) -> dict[str, object]:
     if config.composition_mode == "tanso_base":
+        if active_candidate_names != ("TANSOBase",):
+            return {"composition_mode": "convex_mixture"}
         return {"composition_mode": "tanso_base"}
     if config.composition_mode != "base_plus_residual":
         return {"composition_mode": config.composition_mode}
