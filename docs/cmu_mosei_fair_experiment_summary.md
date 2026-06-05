@@ -1,8 +1,8 @@
 # CMU-MOSEI Fair Experiment Summary
 
-Last updated: 2026-06-04
+Last updated: 2026-06-06
 
-This note collects the current CMU-MOSEI comparison rows that were recomputed with the project standard metric script. Values are raw metric values, not percentages. MAE is lower-is-better; all other metrics are higher-is-better.
+This note collects the current CMU-MOSEI comparison rows that were recomputed with the project standard metric script. Values are raw metric values, not percentages. MAE and MSE are lower-is-better; all other metrics are higher-is-better.
 
 ## Protocol Boundary
 
@@ -15,49 +15,61 @@ All rows below are test-split, 5-seed summaries. The metric protocol is the proj
 
 ## Main Comparison
 
-| Model | Evidence label | MAE ↓ | Corr ↑ | Acc7 ↑ | Acc5 ↑ | Acc2 excl0 ↑ | F1 excl0 ↑ | Acc2 nonneg ↑ | F1 nonneg ↑ |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| OVHA/TANSO | latest project result, `configs/multimodal_cmu_mosei_tanso_public_main.json` | 0.6372 ± 0.0051 | 0.6603 ± 0.0062 | 0.4765 | 0.4837 | 0.8045 | 0.8023 | 0.7821 | 0.7858 |
-| MULT | external MULT reproduction, standard metric recompute | 0.6029 ± 0.0070 | 0.6306 ± 0.0071 | 0.5139 | 0.5281 | 0.7967 | 0.7926 | 0.7922 | 0.7936 |
-| Self-MM adapted | same OVHA cached features, non-BERT, masked text pooling, standard metric recompute | 0.6403 ± 0.0048 | 0.6439 ± 0.0052 | 0.4789 ± 0.0032 | 0.4851 ± 0.0041 | 0.8048 ± 0.0031 | 0.8024 ± 0.0037 | 0.7839 ± 0.0071 | 0.7872 ± 0.0057 |
+| Model | Evidence label | MSE ↓ | MAE ↓ | Corr ↑ | Acc7 ↑ | Acc5 ↑ | Acc2 excl0 ↑ | F1 excl0 ↑ | Acc2 nonneg ↑ | F1 nonneg ↑ |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| OVHA/TANSO | latest project result, `configs/multimodal_cmu_mosei_tanso_primary_main.json` | 0.671856 | 0.6152 | 0.6785 | 0.4931 | 0.5021 | 0.8045 | 0.8004 | - | - |
+| MULT | external MULT reproduction, standard metric recompute | - | 0.6029 ± 0.0070 | 0.6306 ± 0.0071 | 0.5139 | 0.5281 | 0.7967 | 0.7926 | 0.7922 | 0.7936 |
+| Self-MM fixed-order | same OVHA cached features, non-BERT, official Self-MM repo, `M` head, standard metric recompute | 0.717077 ± 0.006987 | 0.639256 ± 0.004770 | 0.647211 ± 0.003942 | 0.479494 ± 0.004788 | 0.485929 ± 0.005763 | 0.806269 ± 0.002850 | 0.803905 ± 0.003100 | 0.784127 ± 0.004982 | 0.787582 ± 0.003843 |
 
-## Self-MM Adaptation Details
+## Self-MM Fixed-Order Details
 
-The Self-MM row is not the official Self-MM BERT/raw-text setting. It is an adapted fairness row designed to compare against this project's cached CMU-MOSEI inputs:
+The Self-MM fixed-order row is not the official Self-MM BERT/raw-text setting. It is a same-cache external reproduction designed to compare the Self-MM architecture against this project's cached CMU-MOSEI inputs:
 
 - Same split sizes: train 16,327; validation 1,871; test 4,662.
 - Same cached feature tensors: text `(N, 64, 300)`, audio `(N, 128, 74)`, vision `(N, 128, 35)`.
 - Same task labels as `data/multimodal_cache/cmu_mosei/v0.1/supervision/task_labels_{train,val,test}.npy`.
 - BERT disabled; raw text is not used.
-- Text sequence features are reduced with masked pooling for the adapted Self-MM text branch.
 - The multimodal `M` head is used for final test prediction artifacts; auxiliary `T`, `A`, and `V` heads are not used for the main comparison row.
+- The official Self-MM loader was patched so only the train split shuffles: `shuffle=(ds == 'train')`. The original external reproduction used `shuffle=True` for train, valid, and test, which made saved test prediction/truth arrays order-incompatible with the project cache.
 
-Self-MM prediction artifacts were converted from object `.npy` outputs to numeric `.npy` outputs before recomputation, then evaluated with the project standard script. The 5 seeds were `1111`, `1112`, `1113`, `1114`, and `1115`.
+Self-MM prediction artifacts were converted from object `.npy` outputs to numeric `M`-head `.npy` outputs before recomputation, then evaluated with the project standard script. The 5 seeds were `1111`, `1112`, `1113`, `1114`, and `1115`.
+
+Fixed-order verification against the project cache passed for all five truth files:
+
+```text
+selfmm_mosei_seed1111_test_truths.npy shape (4662,) allclose True corr 1.0 mismatch 0
+selfmm_mosei_seed1112_test_truths.npy shape (4662,) allclose True corr 1.0 mismatch 0
+selfmm_mosei_seed1113_test_truths.npy shape (4662,) allclose True corr 1.0 mismatch 0
+selfmm_mosei_seed1114_test_truths.npy shape (4662,) allclose True corr 1.0 mismatch 0
+selfmm_mosei_seed1115_test_truths.npy shape (4662,) allclose True corr 1.0 mismatch 0
+```
 
 ## Evidence Artifacts
 
 Remote result paths on `qtech800`:
 
-- OVHA/TANSO: `~/work/Operator-Valued-Hyper-Attention/outputs/multimodal/cmu_mosei_tanso_main/raw_metrics.jsonl`
+- OVHA/TANSO: `~/work/Operator-Valued-Hyper-Attention/outputs/multimodal/cmu_mosei_tanso_primary_gpu4_seed_301_rerun1` and `~/work/Operator-Valued-Hyper-Attention/outputs/multimodal/cmu_mosei_tanso_primary_gpu4_seed_{302..305}_rerun2`
 - MULT: `~/work/Operator-Valued-Hyper-Attention/outputs/multimodal/external_mult_recompute/mult_mosei_standard_metrics.jsonl`
-- Self-MM adapted: `~/work/Operator-Valued-Hyper-Attention/outputs/multimodal/external_selfmm_adapted_recompute/selfmm_mosei_standard_metrics.jsonl`
+- Self-MM fixed-order summary: `~/work/Operator-Valued-Hyper-Attention/outputs/multimodal/external_selfmm_fixed_order_recompute_20260606_020955/selfmm_mosei_standard_metrics.jsonl`
+- Self-MM fixed-order numeric `M` artifacts: `/home/david/work/external_repros/self_mm_cmu_mosei/results/results/normals/predictions_m_numeric_fixed_order_20260606_020955`
 
-Self-MM adapted per-seed unified recompute values:
+Self-MM fixed-order per-seed unified recompute values:
 
-| Seed | MAE ↓ | Corr ↑ | Acc7 ↑ | Acc5 ↑ | Acc2 excl0 ↑ | F1 excl0 ↑ | Acc2 nonneg ↑ | F1 nonneg ↑ |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1111 | 0.6444 | 0.6401 | 0.4828 | 0.4891 | 0.8070 | 0.8036 | 0.7949 | 0.7964 |
-| 1112 | 0.6448 | 0.6376 | 0.4749 | 0.4792 | 0.8007 | 0.7976 | 0.7825 | 0.7852 |
-| 1113 | 0.6406 | 0.6443 | 0.4775 | 0.4837 | 0.8062 | 0.8031 | 0.7887 | 0.7910 |
-| 1114 | 0.6314 | 0.6529 | 0.4826 | 0.4903 | 0.8086 | 0.8082 | 0.7758 | 0.7820 |
-| 1115 | 0.6404 | 0.6445 | 0.4768 | 0.4831 | 0.8018 | 0.7994 | 0.7776 | 0.7815 |
+| Seed | MSE ↓ | MAE ↓ | Corr ↑ | Acc7 ↑ | Acc5 ↑ | Acc2 excl0 ↑ | F1 excl0 ↑ | Acc2 nonneg ↑ | F1 nonneg ↑ |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1111 | 0.716397 | 0.640839 | 0.647470 | 0.474474 | 0.479622 | 0.808084 | 0.805959 | 0.785929 | 0.789522 |
+| 1112 | 0.718538 | 0.636354 | 0.645006 | 0.487344 | 0.493994 | 0.802310 | 0.801291 | 0.774775 | 0.780195 |
+| 1113 | 0.716505 | 0.640923 | 0.649018 | 0.476834 | 0.481553 | 0.810283 | 0.807473 | 0.788503 | 0.791319 |
+| 1114 | 0.705992 | 0.632011 | 0.653174 | 0.482625 | 0.491634 | 0.806709 | 0.805541 | 0.783569 | 0.788221 |
+| 1115 | 0.727954 | 0.646154 | 0.641386 | 0.476190 | 0.482840 | 0.803959 | 0.799259 | 0.787859 | 0.788653 |
 
 ## Reading
 
-The current fair comparison does not show a single model dominating every metric.
+The current fair comparison separates same-cache external reproductions from official-feature reproductions.
 
 - MULT remains strongest on MAE, Acc5, Acc7, and the nonnegative binary metrics.
-- OVHA/TANSO is strongest on Pearson correlation.
-- Self-MM adapted is essentially tied with OVHA/TANSO on exclude-zero binary classification and close on Acc5/Acc7, while trailing OVHA/TANSO on correlation and trailing MULT on MAE.
+- OVHA/TANSO beats fixed-order Self-MM on MSE, MAE, Pearson correlation, Acc5, and Acc7.
+- Fixed-order Self-MM is slightly ahead of OVHA/TANSO on exclude-zero binary Acc2/F1, but the margin is small.
+- The prior Self-MM object/numeric artifacts with shuffled test truths should not be used for order-sensitive comparison. The fixed-order row above supersedes that same-cache Self-MM comparison.
 
-This supports a fair-comparison claim: the project result is competitive under the shared MOSEI metric recompute protocol, but the strongest baseline depends on which metric family is prioritized.
+This supports a fair same-cache comparison claim: under the shared CMU-MOSEI cache and shared metric recompute protocol, OVHA/TANSO is stronger than Self-MM fixed-order on the main regression and multiclass sentiment metrics, while Self-MM is marginally stronger on exclude-zero binary classification. The next separate experiment is an official Self-MM BERT/raw-text feature run, which must be reported as a different evidence row rather than merged into the same-cache fixed-order row.
