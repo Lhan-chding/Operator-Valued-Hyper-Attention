@@ -66,6 +66,14 @@ def main() -> int:
     )
     parser.add_argument("config", type=Path)
     parser.add_argument("--cache-root", type=Path)
+    parser.add_argument(
+        "--skip-cache-validation",
+        action="store_true",
+        help=(
+            "Trust an already verified public cache and skip the expensive startup cache "
+            "layout preflight. Use only after the cache has been validated separately."
+        ),
+    )
     parser.add_argument("--controlled-report", type=Path, required=True)
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--train-steps", type=int, required=True)
@@ -128,9 +136,13 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     assert_same_feature_baseline_policy(config)
 
     layout = MultimodalCacheLayout(config.cache_root, config.dataset_name, config.cache_version)
-    cache_report = validate_cache_layout(layout, splits=tuple(dict.fromkeys((args.train_split, args.selection_split, args.eval_split))))
-    if not cache_report.ok:
-        return _failure_payload(config, cache_report.errors, cache_report.warnings), 2
+    if not args.skip_cache_validation:
+        cache_report = validate_cache_layout(
+            layout,
+            splits=tuple(dict.fromkeys((args.train_split, args.selection_split, args.eval_split))),
+        )
+        if not cache_report.ok:
+            return _failure_payload(config, cache_report.errors, cache_report.warnings), 2
 
     controlled_report = json.loads(args.controlled_report.read_text())
     entry_report = validate_public_entry_requirements(

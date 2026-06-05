@@ -377,6 +377,8 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         source = (ROOT / "scripts" / "multimodal" / "run_public_main.py").read_text()
 
         self.assertIn("--selection-split", source)
+        self.assertIn("--skip-cache-validation", source)
+        self.assertIn("if not args.skip_cache_validation", source)
         self.assertIn('"official_val_selection_best_checkpoint"', source)
         self.assertNotIn("_split_train_val_batch(\n        train_batch,", source)
 
