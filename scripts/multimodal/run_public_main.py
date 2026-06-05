@@ -91,6 +91,15 @@ def main() -> int:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
+        "--preload-batches-to-device",
+        action="store_true",
+        help=(
+            "Load train/selection/eval public batches directly onto --device instead of CPU. "
+            "This can reduce host-to-device transfer overhead on large-memory GPUs, but it "
+            "requires enough GPU memory for all three splits plus model state."
+        ),
+    )
+    parser.add_argument(
         "--pilot-seed",
         type=int,
         help=(
@@ -262,10 +271,10 @@ def _run_seed(
     seed_started_at = time.perf_counter()
     torch.manual_seed(seed)
     _print_progress("seed:start", seed=seed)
-    host_device = torch.device("cpu")
-    train_batch = _load_public_batch(layout, config, args.train_split, host_device)
-    selection_batch = _load_public_batch(layout, config, args.selection_split, host_device)
-    eval_batch = _load_public_batch(layout, config, args.eval_split, host_device)
+    host_device = device if args.preload_batches_to_device else torch.device("cpu")
+    train_batch = _load_public_batch_with_progress(layout, config, args.train_split, host_device, seed)
+    selection_batch = _load_public_batch_with_progress(layout, config, args.selection_split, host_device, seed)
+    eval_batch = _load_public_batch_with_progress(layout, config, args.eval_split, host_device, seed)
     target_mean, target_std = _target_standardizer(train_batch)
     fit_batch_std = _standardize_batch_targets(train_batch, target_mean, target_std)
     val_batch_std = _standardize_batch_targets(selection_batch, target_mean, target_std)
@@ -414,6 +423,26 @@ def _run_seed(
             "baseline_summaries": baseline_summaries,
         },
     }
+
+
+def _load_public_batch_with_progress(
+    layout: MultimodalCacheLayout,
+    config: MultimodalExperimentConfig,
+    split: str,
+    device: torch.device,
+    seed: int,
+) -> MultimodalEpisodeBatch:
+    started_at = time.perf_counter()
+    _print_progress("seed:load:start", seed=seed, split=split, device=str(device))
+    batch = _load_public_batch(layout, config, split, device)
+    _print_progress(
+        "seed:load:done",
+        seed=seed,
+        split=split,
+        samples=int(batch.target_y.shape[0]),
+        elapsed=f"{time.perf_counter() - started_at:.1f}s",
+    )
+    return batch
 
 
 def _fit_public_ovha_model(

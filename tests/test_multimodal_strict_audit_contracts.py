@@ -379,6 +379,8 @@ class MultimodalStrictAuditStaticContracts(unittest.TestCase):
         self.assertIn("--selection-split", source)
         self.assertIn("--skip-cache-validation", source)
         self.assertIn("if not args.skip_cache_validation", source)
+        self.assertIn("--preload-batches-to-device", source)
+        self.assertIn("seed:load:start", source)
         self.assertIn('"official_val_selection_best_checkpoint"', source)
         self.assertNotIn("_split_train_val_batch(\n        train_batch,", source)
 
