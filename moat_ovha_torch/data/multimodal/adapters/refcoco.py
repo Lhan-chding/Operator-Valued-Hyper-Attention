@@ -301,13 +301,22 @@ def _region_positions_from_records(
 
 
 def _load_and_select_rows(source: Path, row_indices: list[int], *, artifact_name: str) -> np.ndarray:
-    array = np.load(source, allow_pickle=False)
+    array = np.load(source, allow_pickle=False, mmap_mode="r")
     if array.ndim == 0:
         raise ValueError(f"{artifact_name} must have a sample axis: {source}")
     sample_count = int(array.shape[0])
     if any(row_index < 0 or row_index >= sample_count for row_index in row_indices):
         raise ValueError(f"{artifact_name} row index exceeds available rows in {source}")
-    return np.asarray(array[row_indices]).copy()
+    return np.asarray(array[_row_indexer(row_indices)])
+
+
+def _row_indexer(row_indices: list[int]) -> slice | list[int]:
+    if not row_indices:
+        return []
+    start = row_indices[0]
+    if row_indices == list(range(start, start + len(row_indices))):
+        return slice(start, start + len(row_indices))
+    return row_indices
 
 
 def _load_optional_mask(

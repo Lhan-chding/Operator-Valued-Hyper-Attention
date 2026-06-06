@@ -31,6 +31,11 @@ def main() -> int:
     parser.add_argument("--failed-samples", type=Path)
     parser.add_argument("--license-tag", required=True)
     parser.add_argument("--preprocessing-version", required=True)
+    parser.add_argument(
+        "--reuse-existing-features",
+        action="store_true",
+        help="Reuse already staged raw feature .npy files when their sample axis matches.",
+    )
     args = parser.parse_args()
 
     try:
@@ -62,8 +67,9 @@ def stage_refcoco_raw(args: argparse.Namespace) -> dict[str, Any]:
     for folder in ("annotations", "features", "provenance"):
         (raw_root / folder).mkdir(parents=True, exist_ok=True)
 
-    text_shape = _copy_npy(args.text_features, raw_root / "features" / "text_features.npy", sample_count)
-    region_shape = _copy_npy(args.region_features, raw_root / "features" / "region_features.npy", sample_count)
+    reuse_existing = bool(getattr(args, "reuse_existing_features", False))
+    text_shape = _copy_npy(args.text_features, raw_root / "features" / "text_features.npy", sample_count, reuse_existing=reuse_existing)
+    region_shape = _copy_npy(args.region_features, raw_root / "features" / "region_features.npy", sample_count, reuse_existing=reuse_existing)
     text_mask_shape = _copy_optional_npy(args.text_mask, raw_root / "features" / "text_mask.npy", sample_count)
     region_mask_shape = _copy_optional_npy(args.region_mask, raw_root / "features" / "region_mask.npy", sample_count)
     records = _records(
@@ -133,8 +139,12 @@ def _ordered_source_ids(splits: dict[str, list[str]]) -> list[str]:
     return source_ids
 
 
-def _copy_npy(source: Path, destination: Path, sample_count: int) -> tuple[int, ...]:
-    array = np.load(source, allow_pickle=False)
+def _copy_npy(source: Path, destination: Path, sample_count: int, *, reuse_existing: bool = False) -> tuple[int, ...]:
+    if reuse_existing and destination.exists():
+        existing = np.load(destination, allow_pickle=False, mmap_mode="r")
+        if existing.ndim != 0 and int(existing.shape[0]) == sample_count:
+            return tuple(int(dim) for dim in existing.shape)
+    array = np.load(source, allow_pickle=False, mmap_mode="r")
     if array.ndim == 0 or int(array.shape[0]) != sample_count:
         raise ValueError(f"{source} first axis must match split sample count {sample_count}")
     destination.parent.mkdir(parents=True, exist_ok=True)

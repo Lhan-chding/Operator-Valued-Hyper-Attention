@@ -44,6 +44,11 @@ def main() -> int:
     parser.add_argument("--feature-version", required=True)
     parser.add_argument("--license-tag", default="refcoco-coco2014")
     parser.add_argument("--max-candidate-regions", type=int, default=32)
+    parser.add_argument(
+        "--reuse-existing-raw-features",
+        action="store_true",
+        help="Reuse data/raw_multimodal/refcoco/features/*.npy when already staged with matching row count.",
+    )
     args = parser.parse_args()
 
     try:
@@ -118,6 +123,7 @@ def rebuild_refcoco_balanced_cache(args: argparse.Namespace) -> dict[str, Any]:
             failed_samples=None,
             license_tag=args.license_tag,
             preprocessing_version=args.feature_version,
+            reuse_existing_features=args.reuse_existing_raw_features,
         )
     )
     adapter = RefCOCOAdapter()
