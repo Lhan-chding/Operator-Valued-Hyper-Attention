@@ -1,6 +1,6 @@
 # CMU-MOSEI Fair Experiment Summary
 
-Last updated: 2026-06-06
+Last updated: 2026-06-07
 
 This note collects the current CMU-MOSEI comparison rows that were recomputed with the project standard metric script. Values are raw metric values, not percentages. MAE and MSE are lower-is-better; all other metrics are higher-is-better.
 
@@ -157,4 +157,39 @@ Pilot reading:
 - `ovha_with_evidence_router` is the strongest 3500-step pilot row. It beats the Self-MM official 5-seed mean on every listed metric.
 - `ovha_lrio_tanso` is also strong on MAE, correlation, Acc7, Acc5, and exclude-zero binary metrics, but is slightly below Self-MM on the nonnegative binary metrics.
 - `ovha_tanso_primary` underperforms Self-MM at 3500 steps, so the evidence-router variant is the better candidate to prioritize for the next official-split run.
-- Because this is a single seed and only 3500 steps, the result is a launch signal, not a final paper-table comparison. The next comparable run should use the same official split/features with 50k steps and seeds `301` to `305`.
+- Because this is a single seed and only 3500 steps, the result is a launch signal, not a final paper-table comparison. It is superseded by the 5-seed 4000-step official-split run below.
+
+## OVHA Official Self-MM Split 5-Seed 4000-Step Run
+
+This section records the 5-seed official-split run launched from the same official Self-MM split/features as the pilot, capped at 4000 optimizer steps per seed.
+
+Run setup:
+
+- Date: 2026-06-07
+- Remote repo: `/home/david/work/Operator-Valued-Hyper-Attention`
+- Config: `configs/multimodal_cmu_mosei_tanso_primary_selfmm_official.json`
+- Artifact root: `outputs/multimodal/cmu_mosei_official_split/ovha_tanso_primary_5seed_4000`
+- Raw metrics: `outputs/multimodal/cmu_mosei_official_split/ovha_tanso_primary_5seed_4000/raw_metrics.jsonl`
+- Summary CSV: `outputs/multimodal/cmu_mosei_official_split/ovha_tanso_primary_5seed_4000/summary_vs_selfmm_5seed_4000.csv`
+- Train split: `train`; selection split: `val`; eval split: `test`
+- Seeds: `301`, `302`, `303`, `304`, `305`
+- Train steps: `4000`
+
+5-seed test metrics versus the Self-MM official fixed-order 5-seed mean:
+
+| Model | MAE ↓ | Δ MAE vs Self-MM ↑ | Corr ↑ | Δ Corr | Acc7 ↑ | Δ Acc7 | Acc5 ↑ | Δ Acc5 | Acc2 excl0 ↑ | Δ Acc2 excl0 | F1 excl0 ↑ | Δ F1 excl0 | Acc2 nonneg ↑ | Δ Acc2 nonneg | F1 nonneg ↑ | Δ F1 nonneg |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ovha_tanso_primary | 0.562936 ± 0.003907 | +0.007657 | 0.740043 ± 0.002928 | +0.015680 | 0.520369 ± 0.003489 | +0.003048 | 0.533419 ± 0.004085 | +0.004765 | 0.842653 ± 0.002090 | -0.000715 | 0.841717 ± 0.002345 | -0.000563 | 0.809101 ± 0.006159 | -0.005752 | 0.813377 ± 0.005070 | -0.005137 |
+| ovha_with_evidence_router | 0.561342 ± 0.004430 | +0.009252 | 0.741131 ± 0.004057 | +0.016768 | 0.523417 ± 0.006274 | +0.006096 | 0.536510 ± 0.006669 | +0.007856 | 0.843919 ± 0.002144 | +0.000550 | 0.843007 ± 0.001976 | +0.000727 | 0.810346 ± 0.007118 | -0.004507 | 0.814595 ± 0.005761 | -0.003919 |
+| spo_only | 0.572216 ± 0.005137 | -0.001622 | 0.725727 ± 0.004534 | +0.001364 | 0.515347 ± 0.004362 | -0.001975 | 0.526980 ± 0.004793 | -0.001674 | 0.840341 ± 0.004680 | -0.003027 | 0.839518 ± 0.004559 | -0.002762 | 0.805538 ± 0.009900 | -0.009315 | 0.810139 ± 0.008738 | -0.008375 |
+| text_only | 0.634432 ± 0.001238 | -0.063838 | 0.679477 ± 0.001987 | -0.044886 | 0.462245 ± 0.002992 | -0.055076 | 0.467912 ± 0.003001 | -0.060743 | 0.822179 ± 0.002426 | -0.021189 | 0.823332 ± 0.002387 | -0.018948 | 0.778107 ± 0.003502 | -0.036746 | 0.786222 ± 0.003233 | -0.032293 |
+| vision_only | 0.819725 ± 0.001169 | -0.249131 | 0.194937 ± 0.003755 | -0.529426 | 0.415840 ± 0.001346 | -0.101481 | 0.415840 ± 0.001346 | -0.112814 | 0.635883 ± 0.004161 | -0.207485 | 0.568694 ± 0.003056 | -0.273586 | 0.691865 ± 0.005105 | -0.122988 | 0.640105 ± 0.002323 | -0.178410 |
+
+5-seed 4000-step reading:
+
+- `ovha_with_evidence_router` is the strongest overall candidate from this run. It improves over Self-MM official fixed-order on MAE, Pearson correlation, Acc7, Acc5, and the exclude-zero binary metrics.
+- The evidence-router row does not yet beat Self-MM on the nonnegative binary metrics: Acc2 nonneg is lower by `0.004507`, and F1 nonneg is lower by `0.003919`.
+- `ovha_tanso_primary` also improves regression, correlation, Acc7, and Acc5, but trails Self-MM on all binary metrics.
+- `spo_only` is roughly tied on correlation but below Self-MM on MAE and classification metrics, so the gain is not coming from the SPO path alone.
+- `text_only` and `vision_only` are sanity baselines and are clearly below the multimodal rows.
+- This supports a fair official-split claim that OVHA improves the main regression and multiclass sentiment metrics over the fixed-order Self-MM non-BERT baseline at 4000 steps, but it should not be phrased as a complete win across all MOSEI metrics.
