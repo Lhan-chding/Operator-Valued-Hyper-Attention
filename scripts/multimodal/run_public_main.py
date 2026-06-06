@@ -2281,6 +2281,7 @@ def _ovha_robustness_rows(
                 output = _destandardize_output(output, target_mean, target_std)
                 output = _with_raw_space_candidate_diagnostics(output, model_batch, corrupted)
             loss = _task_loss(output.y_hat, corrupted)
+            score = _robustness_score(config, corrupted, output.y_hat, loss)
         rows.append(
             _robustness_row(
                 config,
@@ -2289,7 +2290,8 @@ def _ovha_robustness_rows(
                 seed=seed,
                 raw_metric_path=raw_metric_path,
                 corruption_type=corruption_type,
-                score=_bounded_score_from_loss(loss),
+                score=score,
+                task_loss=_as_float(loss),
                 router_load_by_candidate=output.diagnostics.get("router_load_by_candidate", {}),
                 candidate_loss=output.diagnostics.get("candidate_loss", {}),
                 model_reliability=_model_reliability_mean(output.diagnostics),
@@ -2330,6 +2332,7 @@ def _baseline_robustness_rows(
                     target_std.to(device=device),
                 )
             loss = _task_loss(prediction, corrupted_device)
+            score = _robustness_score(config, corrupted_device, prediction, loss)
         rows.append(
             _robustness_row(
                 config,
@@ -2338,7 +2341,8 @@ def _baseline_robustness_rows(
                 seed=seed,
                 raw_metric_path=raw_metric_path,
                 corruption_type=corruption_type,
-                score=_bounded_score_from_loss(loss),
+                score=score,
+                task_loss=_as_float(loss),
                 router_load_by_candidate=_uniform_candidate_load(config.candidate_names),
                 candidate_loss={candidate: loss for candidate in config.candidate_names},
                 model_reliability=None,
@@ -2356,6 +2360,7 @@ def _robustness_row(
     raw_metric_path: Path,
     corruption_type: str,
     score: float,
+    task_loss: float,
     router_load_by_candidate: Any,
     candidate_loss: Any,
     model_reliability: float | None,
@@ -2374,6 +2379,7 @@ def _robustness_row(
         "corruption_strength": strength,
         "missing_modalities": _missing_modalities(corruption_type),
         "score": score,
+        "task_loss": task_loss,
         "rceo_reliability": rceo_reliability,
         "rceo_reliability_source": "model_reliability_prior" if model_reliability is not None else "not_applicable_no_model_reliability",
         "rceo_observed_reliability": score,
@@ -2510,6 +2516,17 @@ def _is_sentiment_task(task_type: str) -> bool:
 
 def _bounded_score_from_loss(loss: torch.Tensor) -> float:
     return max(0.0, min(1.0, 1.0 / (1.0 + max(0.0, _as_float(loss)))))
+
+
+def _robustness_score(
+    config: MultimodalExperimentConfig,
+    batch: MultimodalEpisodeBatch,
+    prediction: torch.Tensor,
+    loss: torch.Tensor,
+) -> float:
+    if _is_region_task(config.task_type):
+        return float(_region_text_metrics(prediction, batch)["acc_at_0_5"])
+    return _bounded_score_from_loss(loss)
 
 
 def _region_text_metrics(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> dict[str, float]:

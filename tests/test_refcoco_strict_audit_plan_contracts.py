@@ -291,6 +291,48 @@ class RefCOCOStrictAuditPlanContracts(unittest.TestCase):
         self.assertEqual(row["public_metrics"]["acc_at_0_5"], 1.0)
         self.assertAlmostEqual(row["task_loss"], float(_task_loss(output.y_hat, batch)), places=6)
 
+    def test_region_public_main_robustness_score_uses_refcoco_accuracy_not_loss_proxy(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for robustness score checks")
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_main import _robustness_score
+        from scripts.multimodal.run_public_smoke import _task_loss
+
+        batch = _region_batch(torch)
+        config = MultimodalExperimentConfig.from_mapping(_refcoco_config(Path("/tmp/cache")))
+        prediction = torch.tensor([[[0.0, 3.0, -1.0]], [[4.0, 0.0, -1.0]]])
+        loss = _task_loss(prediction, batch)
+
+        self.assertEqual(_robustness_score(config, batch, prediction, loss), 1.0)
+        self.assertLess(1.0 / (1.0 + float(loss)), 1.0)
+
+    def test_region_diagnostics_export_gate_readable_cato_alignment_metrics(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for diagnostics checks")
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_smoke import _with_region_text_gate_candidate_metrics
+
+        batch = _region_batch(torch)
+        output = _minimal_output(torch, batch)
+        cato_output = next(iter(output.candidate_outputs.values()))
+        output = replace(output, candidate_outputs={"CATO": cato_output})
+        config = MultimodalExperimentConfig.from_mapping(_refcoco_config(Path("/tmp/cache")))
+
+        diagnostics = _with_region_text_gate_candidate_metrics(
+            config,
+            batch,
+            output,
+            {"CATO": {"alignment_entropy": 0.2, "top_k_alignment": [0, 1]}},
+        )
+
+        self.assertEqual(diagnostics["CATO"]["grounding_accuracy"], 1.0)
+        self.assertEqual(diagnostics["CATO"]["top_alignment_accuracy"], 1.0)
+        self.assertEqual(diagnostics["CATO"]["alignment_entropy"], 0.2)
+
     def test_region_grounding_metrics_are_canonical_and_fail_without_candidate_boxes(self):
         if not TORCH_AVAILABLE:
             self.skipTest("torch is required for metric checks")

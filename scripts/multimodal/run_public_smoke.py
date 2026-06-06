@@ -789,6 +789,8 @@ def _public_training_diagnostics_row(
     diagnostics = output.diagnostics
     _assert_lrio_diagnostic_pairs_match_config(config, diagnostics)
     candidate_losses = _candidate_losses_from_values(output.candidate_values, tuple(output.candidate_outputs), batch)
+    candidate_diagnostics = _candidate_diagnostics_with_losses(diagnostics["candidate_diagnostics"], candidate_losses)
+    candidate_diagnostics = _with_region_text_gate_candidate_metrics(config, batch, output, candidate_diagnostics)
     return {
         "artifact_type": artifact_type,
         "config_name": config.name,
@@ -812,7 +814,7 @@ def _public_training_diagnostics_row(
         "adapter_params": _json_ready(diagnostics["adapter_params"]),
         "memory_slot_norm": _json_ready(diagnostics["memory_slot_norm"]),
         "stackability_passed": bool(diagnostics["stackability_passed"]),
-        "candidate_diagnostics": _json_ready(_candidate_diagnostics_with_losses(diagnostics["candidate_diagnostics"], candidate_losses)),
+        "candidate_diagnostics": _json_ready(candidate_diagnostics),
         "reliability": _json_ready(diagnostics["reliability"]),
         "public_diagnostics": _public_report_diagnostics(config, batch, output),
     }
@@ -854,6 +856,31 @@ def _candidate_diagnostics_with_losses(
         values["candidate_loss"] = loss
         diagnostics[name] = values
     return diagnostics
+
+
+def _with_region_text_gate_candidate_metrics(
+    config: MultimodalExperimentConfig,
+    batch: MultimodalEpisodeBatch,
+    output: MultimodalOVHAOutput,
+    candidate_diagnostics: dict[str, Any],
+) -> dict[str, Any]:
+    if not _is_region_task(config.task_type):
+        return candidate_diagnostics
+    if "CATO" not in output.candidate_outputs:
+        return candidate_diagnostics
+    metrics = _region_text_metrics(output.y_hat, batch)
+    cato = dict(candidate_diagnostics.get("CATO", {})) if isinstance(candidate_diagnostics.get("CATO"), dict) else {}
+    if "top_k_alignment" in cato and "top_alignment_accuracy" not in cato:
+        top_k = cato["top_k_alignment"]
+        if isinstance(top_k, (list, tuple)):
+            cato["top_alignment_accuracy"] = metrics["phrase_region_topk_accuracy"] if top_k else 0.0
+        else:
+            cato["top_alignment_accuracy"] = metrics["phrase_region_topk_accuracy"]
+    else:
+        cato.setdefault("top_alignment_accuracy", metrics["phrase_region_topk_accuracy"])
+    cato.setdefault("grounding_accuracy", metrics["acc_at_0_5"])
+    candidate_diagnostics["CATO"] = cato
+    return candidate_diagnostics
 
 
 def _pair_key(pair: tuple[str, str]) -> str:
