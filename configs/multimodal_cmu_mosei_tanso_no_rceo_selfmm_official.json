@@ -1,0 +1,181 @@
+{
+  "name": "multimodal_cmu_mosei_tanso_no_rceo_selfmm_official",
+  "dataset_name": "cmu_mosei",
+  "task_type": "sentiment_emotion",
+  "cache_version": "v0.1",
+  "cache_root": "data/multimodal_cache",
+  "output_dir": "outputs/multimodal/cmu_mosei_tanso_no_rceo_selfmm_official",
+  "seeds": [
+    301,
+    302,
+    303,
+    304,
+    305
+  ],
+  "main_table_seed_policy": "five_seed_default",
+  "checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
+  "checkpoint_selection_metric": "mosei_composite",
+  "checkpoint_selection_weights": {
+    "mae": 0.35,
+    "pearson_correlation": 0.25,
+    "acc7": 0.15,
+    "acc5": 0.15,
+    "acc2_excl0": 0.05,
+    "acc2_nonneg": 0.05
+  },
+  "calibration_policy": "report_pre_mse_huber_and_composite_validation_affine_calibration",
+  "feature_source": "selfmm_official_unaligned_50",
+  "main_model_name": "ovha_tanso_no_rceo_primary",
+  "training_stages": [
+    "T0",
+    "T5"
+  ],
+  "candidate_names": [
+    "TANSOBase"
+  ],
+  "candidate_pool_names": [
+    "SPO",
+    "LRIO",
+    "TANSO",
+    "TANSOBase",
+    "TANSOShift"
+  ],
+  "lrio_pairs": [
+    [
+      "text",
+      "audio"
+    ],
+    [
+      "text",
+      "vision"
+    ]
+  ],
+  "use_evidence_router": false,
+  "use_reliability_prior": false,
+  "composition_mode": "tanso_base",
+  "lr_schedule": "warmup_cosine",
+  "warmup_steps": 500,
+  "min_lr_ratio": 0.05,
+  "baseline_names": [
+    "text_only",
+    "audio_only",
+    "vision_only",
+    "concat_fusion",
+    "spo_only",
+    "lrio_only",
+    "ovha_tanso_only",
+    "ovha_spo_lrio",
+    "ovha_lrio_tanso",
+    "ovha_all_candidates_exploratory",
+    "ovha_no_rceo",
+    "ovha_with_evidence_router"
+  ],
+  "eval_splits": [
+    "val",
+    "test"
+  ],
+  "eval_episode_count": 4096,
+  "enforce_same_features_for_baselines": true,
+  "fail_on_missing_cache_artifact": true,
+  "allow_hidden_losses": false,
+  "losses_by_stage": {
+    "T0": [
+      "cache_validation"
+    ],
+    "T5": [
+      "task_loss",
+      "candidate_individual_loss",
+      "huber_l1_task_loss",
+      "ordinal_acc5_acc7_auxiliary",
+      "binary_margin_auxiliary",
+      "tanso_source_oracle_gate_loss",
+      "val_affine_calibration"
+    ]
+  },
+  "loss_metadata": {
+    "candidate_individual_loss": {
+      "weight": 0.0,
+      "diagnostic_only": true
+    },
+    "task_loss": {
+      "weight": 0.2
+    },
+    "huber_l1_task_loss": {
+      "weight": 1.0
+    },
+    "ordinal_acc5_acc7_auxiliary": {
+      "weight": 0.05,
+      "class_balanced": true
+    },
+    "binary_margin_auxiliary": {
+      "weight": 0.02,
+      "margin": 0.15,
+      "targets": [
+        "excl0",
+        "nonneg"
+      ]
+    },
+    "tanso_source_oracle_gate_loss": {
+      "weight": 0.01,
+      "must_report_as": "training-label-derived supervised auxiliary gate loss"
+    },
+    "val_affine_calibration": {
+      "weight": 0.0,
+      "stage": "validation_postfit",
+      "objectives": [
+        "mse",
+        "huber",
+        "mosei_composite"
+      ]
+    }
+  },
+  "adapter_params_by_candidate": {
+    "SPO": [
+      "prototype_temperature",
+      "prototype_logits_shift",
+      "scale",
+      "bias"
+    ],
+    "LRIO": [
+      "rank_logits",
+      "rank_logits_by_pair",
+      "interaction_temperature",
+      "interaction_temperature_by_pair",
+      "scale",
+      "bias"
+    ],
+    "TANSO": [
+      "audio_shift_scale",
+      "vision_shift_scale",
+      "shift_temperature",
+      "audio_lag_logits",
+      "vision_lag_logits",
+      "lag_width",
+      "temporal_temperature",
+      "scale",
+      "bias"
+    ],
+    "TANSOBase": [
+      "audio_shift_scale",
+      "vision_shift_scale",
+      "shift_temperature",
+      "audio_lag_logits",
+      "vision_lag_logits",
+      "lag_width",
+      "temporal_temperature",
+      "scale",
+      "bias"
+    ],
+    "TANSOShift": [
+      "audio_shift_scale",
+      "vision_shift_scale",
+      "shift_temperature",
+      "audio_lag_logits",
+      "vision_lag_logits",
+      "lag_width",
+      "temporal_temperature",
+      "scale",
+      "bias"
+    ]
+  }
+}

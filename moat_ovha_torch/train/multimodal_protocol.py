@@ -131,6 +131,7 @@ PUBLIC_ALLOWED_LOSSES = (
     "residual_norm_shrinkage",
     "huber_l1_task_loss",
     "ordinal_acc5_acc7_auxiliary",
+    "binary_margin_auxiliary",
     "residual_gate_utility_loss",
     "residual_oracle_gate_loss",
     "tanso_source_oracle_gate_loss",

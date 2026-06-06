@@ -61,10 +61,17 @@ class MultimodalExperimentConfig:
     adapter_params_by_candidate: dict[str, tuple[str, ...]] | None = None
     lrio_pairs: tuple[tuple[str, str], ...] = ()
     use_evidence_router: bool = True
+    use_reliability_prior: bool = True
     composition_mode: str = "convex_mixture"
     base_candidate: str | None = None
     residual_candidates: tuple[str, ...] = ()
     main_model_name: str = "ovha_full"
+    feature_source: str | None = None
+    checkpoint_selection_metric: str = "standardized_mse"
+    checkpoint_selection_weights: dict[str, float] | None = None
+    lr_schedule: str = "constant"
+    warmup_steps: int = 0
+    min_lr_ratio: float = 1.0
 
     @classmethod
     def from_file(cls, path: Path | str) -> "MultimodalExperimentConfig":
@@ -103,10 +110,17 @@ class MultimodalExperimentConfig:
             adapter_params_by_candidate=_tuple_mapping(mapping.get("adapter_params_by_candidate")),
             lrio_pairs=_pair_tuple(mapping.get("lrio_pairs")),
             use_evidence_router=bool(mapping.get("use_evidence_router", True)),
+            use_reliability_prior=bool(mapping.get("use_reliability_prior", True)),
             composition_mode=str(mapping.get("composition_mode", "convex_mixture")),
             base_candidate=str(mapping["base_candidate"]) if mapping.get("base_candidate") is not None else None,
             residual_candidates=tuple(str(candidate) for candidate in mapping.get("residual_candidates", ())),
             main_model_name=str(mapping.get("main_model_name", "ovha_full")),
+            feature_source=str(mapping["feature_source"]) if mapping.get("feature_source") is not None else None,
+            checkpoint_selection_metric=str(mapping.get("checkpoint_selection_metric", "standardized_mse")),
+            checkpoint_selection_weights=_float_mapping(mapping.get("checkpoint_selection_weights")),
+            lr_schedule=str(mapping.get("lr_schedule", "constant")),
+            warmup_steps=int(mapping.get("warmup_steps", 0)),
+            min_lr_ratio=float(mapping.get("min_lr_ratio", 1.0)),
         )
         config.validate()
         return config
@@ -136,6 +150,8 @@ class MultimodalExperimentConfig:
             raise ValueError("candidate_pool_names must include every primary candidate: " + ", ".join(missing_primary))
         if not self.main_model_name.strip():
             raise ValueError("main_model_name must be non-empty")
+        _validate_checkpoint_selection_config(self)
+        _validate_lr_schedule_config(self)
         _validate_embedded_training_protocol(self)
         _validate_public_alignment_label_contract(self)
         missing = missing_required_baselines(self.task_type, (self.main_model_name, *self.baseline_names))
@@ -255,6 +271,38 @@ def _pair_tuple(value: Any) -> tuple[tuple[str, str], ...]:
             raise ValueError("lrio_pairs entries must contain two distinct modalities")
         pairs.append((left, right))
     return tuple(pairs)
+
+
+def _float_mapping(value: Any) -> dict[str, float] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("checkpoint_selection_weights must be an object")
+    return {str(key): float(item) for key, item in value.items()}
+
+
+def _validate_checkpoint_selection_config(config: MultimodalExperimentConfig) -> None:
+    if config.checkpoint_selection_metric not in {"standardized_mse", "mosei_composite"}:
+        raise ValueError("checkpoint_selection_metric must be standardized_mse or mosei_composite")
+    if config.checkpoint_selection_metric != "mosei_composite":
+        return
+    required = {"mae", "pearson_correlation", "acc7", "acc5", "acc2_excl0", "acc2_nonneg"}
+    weights = config.checkpoint_selection_weights or {}
+    missing = sorted(required - set(weights))
+    if missing:
+        raise ValueError("mosei_composite checkpoint selection missing weights: " + ", ".join(missing))
+    non_positive = sorted(name for name in required if float(weights.get(name, 0.0)) < 0.0)
+    if non_positive:
+        raise ValueError("mosei_composite checkpoint weights must be non-negative: " + ", ".join(non_positive))
+
+
+def _validate_lr_schedule_config(config: MultimodalExperimentConfig) -> None:
+    if config.lr_schedule not in {"constant", "warmup_cosine"}:
+        raise ValueError("lr_schedule must be constant or warmup_cosine")
+    if config.warmup_steps < 0:
+        raise ValueError("warmup_steps must be non-negative")
+    if not 0.0 < config.min_lr_ratio <= 1.0:
+        raise ValueError("min_lr_ratio must be in (0, 1]")
 
 
 def _validate_candidate_names(candidate_names: tuple[str, ...]) -> None:

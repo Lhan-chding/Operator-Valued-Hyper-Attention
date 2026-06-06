@@ -201,6 +201,7 @@ def _run_public_training_smoke(
             memory_tokens=args.memory_tokens,
             candidate_names=config.candidate_names,
             use_evidence_router=config.use_evidence_router,
+            use_reliability_prior=config.use_reliability_prior,
             lrio_pairs=config.lrio_pairs or None,
             **_ovha_composition_kwargs(config, config.candidate_names),
         ).to(device)
@@ -491,7 +492,15 @@ def _compute_public_loss_component(
     if name == "huber_l1_task_loss":
         return _huber_l1_task_loss(output.y_hat, batch)
     if name == "ordinal_acc5_acc7_auxiliary":
-        return _ordinal_acc5_acc7_auxiliary_loss(output.y_hat, batch)
+        return _ordinal_acc5_acc7_auxiliary_loss(output.y_hat, batch, config)
+    if name == "binary_margin_auxiliary":
+        metadata = (config.loss_metadata or {}).get("binary_margin_auxiliary", {})
+        return _binary_margin_auxiliary_loss(
+            output.y_hat,
+            batch,
+            margin=float(metadata.get("margin", 0.15)) if isinstance(metadata, dict) else 0.15,
+            targets=tuple(metadata.get("targets", ("excl0", "nonneg"))) if isinstance(metadata, dict) else ("excl0", "nonneg"),
+        )
     if name == "residual_gate_utility_loss":
         return _residual_gate_utility_loss(output, batch)
     if name == "residual_oracle_gate_loss":
@@ -618,7 +627,11 @@ def _huber_l1_task_loss(prediction: torch.Tensor, batch: MultimodalEpisodeBatch)
     return ((huber + l1) * mask).sum() / denom
 
 
-def _ordinal_acc5_acc7_auxiliary_loss(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+def _ordinal_acc5_acc7_auxiliary_loss(
+    prediction: torch.Tensor,
+    batch: MultimodalEpisodeBatch,
+    config: MultimodalExperimentConfig | None = None,
+) -> torch.Tensor:
     if prediction.shape[-1] != 1:
         return prediction.sum() * 0.0
     mask = batch.target_mask.to(dtype=torch.bool, device=prediction.device)
@@ -626,7 +639,10 @@ def _ordinal_acc5_acc7_auxiliary_loss(prediction: torch.Tensor, batch: Multimoda
         return prediction.sum() * 0.0
     pred = prediction[..., 0][mask]
     target = batch.target_y.to(dtype=prediction.dtype, device=prediction.device)[..., 0][mask]
-    return _ordinal_ce_from_scalar(pred, target, bins=torch.arange(-3, 4, dtype=prediction.dtype, device=prediction.device)) + _ordinal_ce_from_scalar(
+    metadata = (config.loss_metadata or {}).get("ordinal_acc5_acc7_auxiliary", {}) if config is not None else {}
+    class_balanced = bool(metadata.get("class_balanced", False)) if isinstance(metadata, dict) else False
+    ordinal_ce = _class_balanced_ordinal_ce_from_scalar if class_balanced else _ordinal_ce_from_scalar
+    return ordinal_ce(pred, target, bins=torch.arange(-3, 4, dtype=prediction.dtype, device=prediction.device)) + ordinal_ce(
         pred,
         target.clamp(-2.0, 2.0),
         bins=torch.arange(-2, 3, dtype=prediction.dtype, device=prediction.device),
@@ -637,6 +653,55 @@ def _ordinal_ce_from_scalar(prediction: torch.Tensor, target: torch.Tensor, *, b
     labels = (target.round().clamp(float(bins.min().item()), float(bins.max().item())) - bins.min()).to(dtype=torch.long)
     logits = -(prediction.unsqueeze(-1) - bins.view(1, -1)).square()
     return torch.nn.functional.cross_entropy(logits, labels)
+
+
+def _class_balanced_ordinal_ce_from_scalar(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    bins: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    if prediction.numel() == 0:
+        return prediction.sum() * 0.0
+    bins = bins.to(dtype=prediction.dtype, device=prediction.device)
+    labels = (target.round().clamp(float(bins.min().item()), float(bins.max().item())) - bins.min()).to(dtype=torch.long)
+    labels = labels.to(device=prediction.device)
+    class_count = int(bins.numel())
+    counts = torch.bincount(labels.reshape(-1), minlength=class_count).to(dtype=prediction.dtype, device=prediction.device)
+    weights = (counts + float(eps)).rsqrt()
+    weights = weights / weights.mean().clamp_min(float(eps))
+    logits = -(prediction.unsqueeze(-1) - bins.view(1, -1)).square()
+    return torch.nn.functional.cross_entropy(logits, labels, weight=weights)
+
+
+def _binary_margin_auxiliary_loss(
+    prediction: torch.Tensor,
+    batch: MultimodalEpisodeBatch,
+    *,
+    margin: float = 0.15,
+    targets: tuple[str, ...] = ("excl0", "nonneg"),
+) -> torch.Tensor:
+    if prediction.shape[-1] != 1:
+        return prediction.sum() * 0.0
+    mask = batch.target_mask.to(dtype=torch.bool, device=prediction.device)
+    if not bool(mask.any()):
+        return prediction.sum() * 0.0
+    pred = prediction[..., 0]
+    truth = batch.target_y.to(dtype=prediction.dtype, device=prediction.device)[..., 0]
+    losses = []
+    if "excl0" in targets:
+        nonzero = mask & (truth != 0)
+        if bool(nonzero.any()):
+            sign = torch.where(truth[nonzero] > 0, torch.ones_like(truth[nonzero]), -torch.ones_like(truth[nonzero]))
+            losses.append(torch.nn.functional.softplus(float(margin) - sign * pred[nonzero]).mean())
+    if "nonneg" in targets:
+        valid = mask
+        sign = torch.where(truth[valid] >= 0, torch.ones_like(truth[valid]), -torch.ones_like(truth[valid]))
+        losses.append(torch.nn.functional.softplus(float(margin) - sign * pred[valid]).mean())
+    if not losses:
+        return prediction.sum() * 0.0
+    return torch.stack(losses).mean()
 
 
 def _residual_gate_utility_loss(

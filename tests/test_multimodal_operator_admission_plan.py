@@ -97,6 +97,7 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
         self.assertTrue(config.loss_metadata["ordinal_acc5_acc7_auxiliary"]["class_balanced"])
         self.assertEqual(config.loss_metadata["binary_margin_auxiliary"]["margin"], 0.15)
 
+    @unittest.skipUnless(TORCH_AVAILABLE, "torch not installed")
     def test_cmu_tanso_primary_baselines_do_not_inherit_tanso_base_composition(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
         from scripts.multimodal.run_public_smoke import _ovha_composition_kwargs

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import fields as dataclass_fields, is_dataclass, replace
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -289,6 +290,7 @@ def _run_seed(
         memory_tokens=int(args.memory_tokens),
         candidate_names=config.candidate_names,
         use_evidence_router=config.use_evidence_router,
+        use_reliability_prior=config.use_reliability_prior,
         lrio_pairs=config.lrio_pairs or None,
         **_ovha_composition_kwargs(config, config.candidate_names),
     ).to(device)
@@ -303,6 +305,9 @@ def _run_seed(
         model_name=config.main_model_name,
         train_steps=int(args.train_steps),
         learning_rate=float(args.learning_rate),
+        raw_val_batch=selection_batch,
+        target_mean=target_mean,
+        target_std=target_std,
         progress_interval=progress_interval,
         batch_size=int(args.batch_size),
         eval_interval=int(args.eval_interval),
@@ -412,11 +417,16 @@ def _run_seed(
             "ovha_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial_parameters).item()),
             "ovha_max_grad_norm": float(fit_summary["max_grad_norm"]),
             "ovha_best_val_task_loss": float(fit_summary["best_val_loss"]),
+            "ovha_best_val_selection_score": float(fit_summary["best_val_score"]),
             "ovha_best_checkpoint_step": int(fit_summary["best_step"]),
             "ovha_training_protocol": str(fit_summary["training_protocol"]),
             "ovha_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
+            "ovha_checkpoint_selection_metric": str(fit_summary["selection_metric"]),
             "ovha_optimizer_steps": int(fit_summary["optimizer_steps"]),
             "ovha_stage_history": fit_summary["stage_history"],
+            "ovha_lr_schedule": str(fit_summary["lr_schedule"]),
+            "ovha_warmup_steps": int(fit_summary["warmup_steps"]),
+            "ovha_min_lr_ratio": float(fit_summary["min_lr_ratio"]),
             "ovha_batch_size": int(args.batch_size),
             "ovha_selection_split": args.selection_split,
             "ovha_target_standardized": True,
@@ -457,6 +467,9 @@ def _fit_public_ovha_model(
     model_name: str,
     train_steps: int,
     learning_rate: float,
+    raw_val_batch: MultimodalEpisodeBatch,
+    target_mean: torch.Tensor | None,
+    target_std: torch.Tensor | None,
     progress_interval: int,
     batch_size: int,
     eval_interval: int,
@@ -474,6 +487,9 @@ def _fit_public_ovha_model(
         model_name=model_name,
         train_steps=train_steps,
         learning_rate=learning_rate,
+        raw_val_batch=raw_val_batch,
+        target_mean=target_mean,
+        target_std=target_std,
         progress_interval=progress_interval,
         batch_size=batch_size,
         eval_interval=eval_interval,
@@ -494,6 +510,9 @@ def _fit_single_stage_ovha_model(
     model_name: str,
     train_steps: int,
     learning_rate: float,
+    raw_val_batch: MultimodalEpisodeBatch,
+    target_mean: torch.Tensor | None,
+    target_std: torch.Tensor | None,
     progress_interval: int,
     batch_size: int,
     eval_interval: int,
@@ -519,6 +538,9 @@ def _fit_single_stage_ovha_model(
         model_name=model_name,
         train_steps=train_steps,
         learning_rate=learning_rate,
+        raw_val_batch=raw_val_batch,
+        target_mean=target_mean,
+        target_std=target_std,
         progress_interval=progress_interval,
         batch_size=batch_size,
         eval_interval=eval_interval,
@@ -541,6 +563,9 @@ def _run_ovha_training_stages(
     model_name: str,
     train_steps: int,
     learning_rate: float,
+    raw_val_batch: MultimodalEpisodeBatch,
+    target_mean: torch.Tensor | None,
+    target_std: torch.Tensor | None,
     progress_interval: int,
     batch_size: int,
     eval_interval: int,
@@ -552,6 +577,7 @@ def _run_ovha_training_stages(
     max_grad_norm = 0.0
     final_loss = 0.0
     best_val_loss = float("inf")
+    best_val_score = float("inf")
     best_step = 0
     best_state = _clone_state_dict(model)
     optimizer_steps = 0
@@ -565,6 +591,8 @@ def _run_ovha_training_stages(
         model=model_name,
         steps=train_steps,
         learning_rate=learning_rate,
+        lr_schedule=config.lr_schedule,
+        selection_metric=config.checkpoint_selection_metric,
         protocol=training_protocol,
     )
     for stage in stages:
@@ -583,6 +611,7 @@ def _run_ovha_training_stages(
         stage_grad_norm = 0.0
         stage_loss = 0.0
         stage_best_val_loss = float("inf")
+        stage_best_val_score = float("inf")
         stage_best_step = 0
         stale_evals = 0
         model.train()
@@ -596,6 +625,14 @@ def _run_ovha_training_stages(
         )
         for stage_step in range(1, stage_steps + 1):
             optimizer_steps += 1
+            current_lr = _lr_for_step(
+                optimizer_steps,
+                learning_rate,
+                config.warmup_steps,
+                train_steps,
+                config.min_lr_ratio,
+            ) if config.lr_schedule == "warmup_cosine" else learning_rate
+            _set_optimizer_lr(optimizer, current_lr)
             train_step_batch = _move_batch_to_device(_sample_batch(fit_batch_std, batch_size, batch_generator), device)
             optimizer.zero_grad(set_to_none=True)
             output = model(train_step_batch)
@@ -615,14 +652,26 @@ def _run_ovha_training_stages(
                     device,
                     batch_size=_eval_batch_size(batch_size),
                 )
-                if val_loss < best_val_loss:
+                val_score = _evaluate_selection_score_on_device(
+                    config,
+                    model,
+                    val_batch_std=val_batch_std,
+                    raw_val_batch=raw_val_batch,
+                    target_mean=target_mean,
+                    target_std=target_std,
+                    device=device,
+                    batch_size=_eval_batch_size(batch_size),
+                )
+                if val_score < best_val_score:
+                    best_val_score = val_score
                     best_val_loss = val_loss
                     best_step = optimizer_steps
                     best_state = _clone_state_dict(model)
                     stale_evals = 0
                 else:
                     stale_evals += 1
-                if val_loss < stage_best_val_loss:
+                if val_score < stage_best_val_score:
+                    stage_best_val_score = val_score
                     stage_best_val_loss = val_loss
                     stage_best_step = optimizer_steps
                 if early_stopping_patience > 0 and stale_evals >= early_stopping_patience:
@@ -656,7 +705,12 @@ def _run_ovha_training_stages(
                 "max_grad_norm": stage_grad_norm,
                 "final_loss": stage_loss,
                 "best_val_task_loss": stage_best_val_loss,
+                "best_val_selection_score": stage_best_val_score,
                 "best_checkpoint_step": stage_best_step,
+                "selection_metric": config.checkpoint_selection_metric,
+                "lr_schedule": config.lr_schedule,
+                "warmup_steps": int(config.warmup_steps),
+                "min_lr_ratio": float(config.min_lr_ratio),
                 "elapsed_seconds": time.perf_counter() - stage_started_at,
             }
         )
@@ -676,7 +730,12 @@ def _run_ovha_training_stages(
         "max_grad_norm": max_grad_norm,
         "final_loss": final_loss,
         "best_val_loss": best_val_loss,
+        "best_val_score": best_val_score,
         "best_step": best_step,
+        "selection_metric": config.checkpoint_selection_metric,
+        "lr_schedule": config.lr_schedule,
+        "warmup_steps": int(config.warmup_steps),
+        "min_lr_ratio": float(config.min_lr_ratio),
         "training_protocol": training_protocol,
         "stage_history": stage_history,
     }
@@ -897,6 +956,62 @@ def _evaluate_task_loss_on_device(
     if was_training:
         model.train()
     return weighted_loss / max(1.0, total_weight)
+
+
+def _evaluate_selection_score_on_device(
+    config: MultimodalExperimentConfig,
+    model: MultimodalOVHA,
+    *,
+    val_batch_std: MultimodalEpisodeBatch,
+    raw_val_batch: MultimodalEpisodeBatch,
+    target_mean: torch.Tensor | None,
+    target_std: torch.Tensor | None,
+    device: torch.device,
+    batch_size: int,
+) -> float:
+    if config.checkpoint_selection_metric == "standardized_mse":
+        return _evaluate_task_loss_on_device(model, val_batch_std, device, batch_size=batch_size)
+    if config.checkpoint_selection_metric != "mosei_composite":
+        raise ValueError(f"unknown checkpoint_selection_metric: {config.checkpoint_selection_metric}")
+    output_std = _predict_ovha_on_device(model, val_batch_std, device, batch_size=batch_size)
+    output_raw = _destandardize_output(output_std, target_mean, target_std)
+    metrics = mosei_standard_metrics(output_raw.y_hat, raw_val_batch.target_y, raw_val_batch.target_mask)
+    return _mosei_composite_score(metrics, config.checkpoint_selection_weights or {})
+
+
+def _mosei_composite_score(metrics: dict[str, float], weights: dict[str, float]) -> float:
+    return (
+        float(weights["mae"]) * float(metrics["mae"])
+        + float(weights["pearson_correlation"]) * (1.0 - float(metrics["pearson_correlation"]))
+        + float(weights["acc7"]) * (1.0 - float(metrics["acc7"]))
+        + float(weights["acc5"]) * (1.0 - float(metrics["acc5"]))
+        + float(weights["acc2_excl0"]) * (1.0 - float(metrics["acc2_excl0"]))
+        + float(weights["acc2_nonneg"]) * (1.0 - float(metrics["acc2_nonneg"]))
+    )
+
+
+def _lr_for_step(
+    step: int,
+    base_lr: float,
+    warmup_steps: int,
+    total_steps: int,
+    min_lr_ratio: float,
+) -> float:
+    step = max(0, int(step))
+    warmup_steps = max(0, int(warmup_steps))
+    total_steps = max(1, int(total_steps))
+    min_lr_ratio = max(0.0, min(1.0, float(min_lr_ratio)))
+    if warmup_steps > 0 and step < warmup_steps:
+        return float(base_lr) * float(step) / float(warmup_steps)
+    progress = (step - warmup_steps) / max(1.0, float(total_steps - warmup_steps))
+    progress = max(0.0, min(1.0, progress))
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return float(base_lr) * (min_lr_ratio + (1.0 - min_lr_ratio) * cosine)
+
+
+def _set_optimizer_lr(optimizer: torch.optim.Optimizer, learning_rate: float) -> None:
+    for group in optimizer.param_groups:
+        group["lr"] = float(learning_rate)
 
 
 def _evaluate_linear_task_loss_on_device(
@@ -1291,7 +1406,40 @@ def _fit_task_calibrator(
             "sample_count": int(batch.target_mask.to(dtype=torch.bool).sum().item()),
             "metrics_scope": METRICS_SOURCE,
         }
-    return _fit_affine_calibrator(prediction, batch)
+    mse = _fit_affine_calibrator(prediction, batch)
+    huber = _fit_affine_huber_calibrator(prediction, batch)
+    composite = _fit_affine_mosei_composite_calibrator(
+        prediction,
+        batch,
+        weights=config.checkpoint_selection_weights,
+    )
+    selected = (
+        "composite_affine_calibration"
+        if config.checkpoint_selection_metric == "mosei_composite"
+        else "mse_affine_calibration"
+    )
+    calibrators = {
+        "mse_affine_calibration": mse,
+        "huber_affine_calibration": huber,
+        "composite_affine_calibration": composite,
+    }
+    return {
+        "method": "affine_bank",
+        "selected": selected,
+        "calibrators": calibrators,
+        "validation_metrics": {
+            "pre_calibration": mosei_standard_metrics(prediction, batch.target_y, batch.target_mask),
+            **{
+                name: mosei_standard_metrics(
+                    _apply_affine_calibration_to_prediction(prediction, calibrator),
+                    batch.target_y,
+                    batch.target_mask,
+                )
+                for name, calibrator in calibrators.items()
+            },
+        },
+        "sample_count": int(batch.target_mask.to(dtype=torch.bool).sum().item()),
+    }
 
 
 def _fit_affine_calibrator(
@@ -1315,10 +1463,75 @@ def _fit_affine_calibrator(
     }
 
 
+def _fit_affine_huber_calibrator(
+    prediction: torch.Tensor,
+    batch: MultimodalEpisodeBatch,
+    *,
+    steps: int = 120,
+    lr: float = 0.05,
+) -> dict[str, float]:
+    pred, truth = _masked_flat_pair(prediction, batch.target_y, batch.target_mask)
+    if pred.numel() < 2:
+        return {"a": 1.0, "b": 0.0, "objective": "validation_huber_affine", "sample_count": int(pred.numel())}
+    pred = pred.detach().to(dtype=torch.float64)
+    truth = truth.detach().to(dtype=torch.float64)
+    a = torch.nn.Parameter(torch.ones((), dtype=torch.float64, device=pred.device))
+    b = torch.nn.Parameter(torch.zeros((), dtype=torch.float64, device=pred.device))
+    optimizer = torch.optim.Adam([a, b], lr=float(lr))
+    for _ in range(max(1, int(steps))):
+        optimizer.zero_grad(set_to_none=True)
+        loss = torch.nn.functional.smooth_l1_loss(a * pred + b, truth)
+        loss.backward()
+        optimizer.step()
+        with torch.no_grad():
+            a.clamp_(-5.0, 5.0)
+            b.clamp_(-5.0, 5.0)
+    return {
+        "a": float(a.detach().cpu().item()),
+        "b": float(b.detach().cpu().item()),
+        "objective": "validation_huber_affine",
+        "sample_count": int(pred.numel()),
+    }
+
+
+def _fit_affine_mosei_composite_calibrator(
+    prediction: torch.Tensor,
+    batch: MultimodalEpisodeBatch,
+    *,
+    weights: dict[str, float] | None,
+) -> dict[str, float]:
+    pred, truth = _masked_flat_pair(prediction, batch.target_y, batch.target_mask)
+    if pred.numel() < 2:
+        return {"a": 1.0, "b": 0.0, "objective": "validation_mosei_composite_grid", "sample_count": int(pred.numel())}
+    composite_weights = weights or {
+        "mae": 0.35,
+        "pearson_correlation": 0.25,
+        "acc7": 0.15,
+        "acc5": 0.15,
+        "acc2_excl0": 0.05,
+        "acc2_nonneg": 0.05,
+    }
+    best = {"a": 1.0, "b": 0.0, "score": float("inf")}
+    for a in torch.linspace(0.80, 1.20, 41, dtype=prediction.dtype):
+        for b in torch.linspace(-0.20, 0.20, 41, dtype=prediction.dtype):
+            calibrated = float(a.item()) * prediction + float(b.item())
+            metrics = mosei_standard_metrics(calibrated, batch.target_y, batch.target_mask)
+            score = _mosei_composite_score(metrics, composite_weights)
+            if score < best["score"]:
+                best = {"a": float(a.item()), "b": float(b.item()), "score": float(score)}
+    return {
+        "a": best["a"],
+        "b": best["b"],
+        "objective": "validation_mosei_composite_grid",
+        "validation_composite_score": best["score"],
+        "sample_count": int(pred.numel()),
+    }
+
+
 def _apply_task_calibration(prediction: torch.Tensor, calibrator: dict[str, Any]) -> torch.Tensor:
     if calibrator.get("method") == "none":
         return prediction
-    return _apply_affine_calibration_to_prediction(prediction, calibrator)
+    return _apply_affine_calibration_to_prediction(prediction, _selected_affine_calibrator(calibrator))
 
 
 def _apply_task_calibration_to_output(
@@ -1400,8 +1613,9 @@ def _apply_affine_calibration(
     batch: MultimodalEpisodeBatch,
 ) -> MultimodalOVHAOutput:
     pre_prediction = output.y_hat
-    scale = float(calibrator.get("a", 1.0))
-    offset = float(calibrator.get("b", 0.0))
+    selected_calibrator = _selected_affine_calibrator(calibrator)
+    scale = float(selected_calibrator.get("a", 1.0))
+    offset = float(selected_calibrator.get("b", 0.0))
     calibrated_output = _transform_ovha_output_target_space(
         output,
         prediction_transform=lambda value: scale * value + offset,
@@ -1447,6 +1661,16 @@ def _apply_affine_calibration_to_prediction(
     return float(calibrator.get("a", 1.0)) * prediction + float(calibrator.get("b", 0.0))
 
 
+def _selected_affine_calibrator(calibrator: dict[str, Any]) -> dict[str, Any]:
+    if calibrator.get("method") != "affine_bank":
+        return calibrator
+    calibrators = calibrator.get("calibrators", {})
+    selected = str(calibrator.get("selected", "mse_affine_calibration"))
+    if isinstance(calibrators, dict) and selected in calibrators and isinstance(calibrators[selected], dict):
+        return calibrators[selected]
+    return {"a": 1.0, "b": 0.0, "objective": "missing_selected_affine_fallback"}
+
+
 def _affine_calibration_diagnostics(
     config: MultimodalExperimentConfig,
     batch: MultimodalEpisodeBatch,
@@ -1455,7 +1679,13 @@ def _affine_calibration_diagnostics(
     post_prediction: torch.Tensor,
     calibrator: dict[str, Any],
 ) -> dict[str, Any]:
-    diagnostics: dict[str, Any] = {"affine_calibration": dict(calibrator)}
+    selected = _selected_affine_calibrator(calibrator)
+    diagnostics: dict[str, Any] = {"affine_calibration": dict(selected)}
+    if calibrator.get("method") == "affine_bank":
+        diagnostics["calibration"] = dict(calibrator)
+        diagnostics["mse_affine_calibration"] = dict(calibrator["calibrators"]["mse_affine_calibration"])
+        diagnostics["huber_affine_calibration"] = dict(calibrator["calibrators"]["huber_affine_calibration"])
+        diagnostics["composite_affine_calibration"] = dict(calibrator["calibrators"]["composite_affine_calibration"])
     try:
         diagnostics["pre_calibration_public_metrics"] = _public_main_metrics(
             config,
@@ -1707,6 +1937,7 @@ def _baseline_rows(
             continue
 
         model, summary = _train_linear_baseline(
+            config,
             str(baseline_name),
             train_batch=train_batch,
             selection_batch=selection_batch,
@@ -1828,6 +2059,7 @@ def _train_ovha_ablation(
     active_candidate_names = variant_kwargs.pop("candidate_names", config.candidate_names)
     model_kwargs = {
         "use_evidence_router": config.use_evidence_router,
+        "use_reliability_prior": config.use_reliability_prior,
         **_ovha_composition_kwargs(config, active_candidate_names),
         **variant_kwargs,
     }
@@ -1852,6 +2084,9 @@ def _train_ovha_ablation(
         model_name=baseline_name,
         train_steps=train_steps,
         learning_rate=learning_rate,
+        raw_val_batch=selection_batch,
+        target_mean=target_mean,
+        target_std=target_std,
         progress_interval=progress_interval,
         batch_size=batch_size,
         eval_interval=eval_interval,
@@ -1881,10 +2116,15 @@ def _train_ovha_ablation(
         "baseline_grad_l2_norm": float(fit_summary["max_grad_norm"]),
         "baseline_train_loss_final": float(fit_summary["final_loss"]),
         "baseline_best_val_task_loss": float(fit_summary["best_val_loss"]),
+        "baseline_best_val_selection_score": float(fit_summary["best_val_score"]),
         "baseline_best_checkpoint_step": int(fit_summary["best_step"]),
         "baseline_training_protocol": str(fit_summary["training_protocol"]),
         "baseline_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
+        "baseline_checkpoint_selection_metric": str(fit_summary["selection_metric"]),
         "baseline_stage_history": fit_summary["stage_history"],
+        "baseline_lr_schedule": str(fit_summary["lr_schedule"]),
+        "baseline_warmup_steps": int(fit_summary["warmup_steps"]),
+        "baseline_min_lr_ratio": float(fit_summary["min_lr_ratio"]),
         "baseline_batch_size": batch_size,
         "baseline_validation_fraction": validation_fraction,
         "baseline_selection_split": selection_batch.split,
@@ -1972,6 +2212,7 @@ def _drop_candidate(active_candidate_names: tuple[str, ...], candidate: str) -> 
 
 
 def _train_linear_baseline(
+    config: MultimodalExperimentConfig,
     baseline_name: str,
     *,
     train_batch: MultimodalEpisodeBatch,
@@ -2022,6 +2263,14 @@ def _train_linear_baseline(
     batch_generator = torch.Generator(device=fit_batch_std.target_y.device)
     batch_generator.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name) + 19)
     for step in range(1, train_steps + 1):
+        current_lr = _lr_for_step(
+            step,
+            learning_rate,
+            config.warmup_steps,
+            train_steps,
+            config.min_lr_ratio,
+        ) if config.lr_schedule == "warmup_cosine" else learning_rate
+        _set_optimizer_lr(optimizer, current_lr)
         train_step_batch = _move_batch_to_device(_sample_batch(fit_batch_std, batch_size, batch_generator), device)
         optimizer.zero_grad(set_to_none=True)
         prediction = _baseline_prediction(baseline_name, model, train_step_batch)
@@ -2088,6 +2337,9 @@ def _train_linear_baseline(
         "baseline_selection_split": selection_batch.split,
         "baseline_target_standardized": target_mean is not None and target_std is not None,
         "baseline_weight_decay": weight_decay,
+        "baseline_lr_schedule": config.lr_schedule,
+        "baseline_warmup_steps": int(config.warmup_steps),
+        "baseline_min_lr_ratio": float(config.min_lr_ratio),
         "_target_mean": target_mean,
         "_target_std": target_std,
     }
@@ -2169,7 +2421,15 @@ def _raw_metric_row(
         "raw_metric_path": str(raw_metrics_path),
     }
     if isinstance(diagnostics, dict):
-        for key in ("calibration", "affine_calibration", "pre_calibration_public_metrics", "post_calibration_public_metrics"):
+        for key in (
+            "calibration",
+            "affine_calibration",
+            "mse_affine_calibration",
+            "huber_affine_calibration",
+            "composite_affine_calibration",
+            "pre_calibration_public_metrics",
+            "post_calibration_public_metrics",
+        ):
             if key in diagnostics:
                 row[key] = _json_ready(diagnostics[key])
     return row
