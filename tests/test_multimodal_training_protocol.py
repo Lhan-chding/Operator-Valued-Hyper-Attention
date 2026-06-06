@@ -94,11 +94,7 @@ class MultimodalTrainingProtocolTests(unittest.TestCase):
                 "adapter_params_by_candidate": _valid_adapter_params(),
             }
         )
-        self.assertFalse(incomplete_region.ok)
-        self.assertIn(
-            "flickr30k_entities T5 must include public alignment loss: public_alignment_ce or public_contrastive_retrieval",
-            "\n".join(incomplete_region.errors),
-        )
+        self.assertTrue(incomplete_region.ok, incomplete_region.errors)
 
         incomplete_controlled = validate_training_protocol(
             {

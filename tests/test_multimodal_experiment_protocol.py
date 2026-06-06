@@ -59,7 +59,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         config = MultimodalExperimentConfig.from_file(ROOT / "configs" / "multimodal_refcoco_public_smoke.json")
 
         self.assertIn("T5", config.losses_by_stage)
-        self.assertIn("public_alignment_ce", config.losses_by_stage["T5"])
+        self.assertIn("task_loss", config.losses_by_stage["T5"])
+        self.assertNotIn("public_alignment_ce", config.losses_by_stage["T5"])
         self.assertIn("CATO", config.adapter_params_by_candidate)
 
         base_public = json.loads((ROOT / "configs" / "multimodal_refcoco_public_smoke.json").read_text())
@@ -108,7 +109,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 ROOT / "configs" / "multimodal_refcoco_public_main.json",
                 "refcoco",
                 "phrase_region_grounding",
-                "public_alignment_ce",
+                None,
                 set(baseline_names_for_task("phrase_region_grounding")),
             ),
             (
@@ -149,7 +150,10 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     self.assertEqual(config.candidate_names, ("PRSO", "SRO", "TLEO", "CATO"))
                 self.assertGreaterEqual(len(config.seeds), 5)
                 self.assertEqual(len(set(config.seeds)), len(config.seeds))
-                self.assertEqual(set(config.eval_splits), {"val", "test"})
+                if dataset == "refcoco":
+                    self.assertEqual(set(config.eval_splits), {"val", "testA", "testB"})
+                else:
+                    self.assertEqual(set(config.eval_splits), {"val", "test"})
                 self.assertTrue(config.enforce_same_features_for_baselines)
                 self.assertTrue(config.fail_on_missing_cache_artifact)
                 self.assertFalse(config.allow_hidden_losses)
@@ -190,12 +194,22 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             **base_public,
             "require_public_alignment_labels": False,
         }
+        config = MultimodalExperimentConfig.from_mapping(missing_alignment_label_contract)
+        self.assertNotIn("public_alignment_ce", config.losses_by_stage["T5"])
 
+        duplicate_alignment_contract = {
+            **base_public,
+            "require_public_alignment_labels": False,
+            "losses_by_stage": {
+                "T0": ["cache_validation"],
+                "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss"],
+            },
+        }
         with self.assertRaisesRegex(
             ValueError,
             "public_alignment_ce requires require_public_alignment_labels=true",
         ):
-            MultimodalExperimentConfig.from_mapping(missing_alignment_label_contract)
+            MultimodalExperimentConfig.from_mapping(duplicate_alignment_contract)
 
         contrastive_public = {
             **base_public,
@@ -808,7 +822,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertIn("outputs/multimodal/cmu_mosei_main/raw_metrics.jsonl", commands)
         self.assertNotIn("public_smoke_raw_metrics", commands)
         self.assertNotIn("public_smoke_statistics_preview", commands)
-        self.assertEqual(runbook["required_real_inputs"]["region_text"]["split"], "test")
+        self.assertEqual(runbook["required_real_inputs"]["region_text"]["split"], "testA")
         self.assertEqual(runbook["required_real_inputs"]["sentiment"]["split"], "test")
 
     def test_public_main_artifact_validator_requires_config_seed_model_coverage_and_rejects_smoke(self):
@@ -827,7 +841,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "artifact_type": "public_main_diagnostics",
                     "dataset": "refcoco",
                     "task": "phrase_region_grounding",
-                    "split": "test",
+                    "split": "testA",
                     "seed": seed,
                     "stage": "T5_eval",
                     "router_load_by_candidate": {"TLEO": 0.2, "SPO": 0.1, "LRIO": 0.2, "CATO": 0.5},
@@ -840,7 +854,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "artifact_type": "public_main_robustness_row",
                     "dataset": "refcoco",
                     "task": "phrase_region_grounding",
-                    "split": "test",
+                    "split": "testA",
                     "seed": 201,
                     "model": config.main_model_name,
                     "corruption_type": "image_blur",
@@ -851,7 +865,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "artifact_type": "public_main_robustness_row",
                     "dataset": "refcoco",
                     "task": "phrase_region_grounding",
-                    "split": "test",
+                    "split": "testA",
                     "seed": 201,
                     "model": "concat_fusion",
                     "corruption_type": "image_blur",
@@ -878,7 +892,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "--external-sota-references",
                     str(ROOT / "configs" / "multimodal_external_sota_references.json"),
                     "--split",
-                    "test",
+                    "testA",
                 ],
                 cwd=ROOT,
                 text=True,
@@ -907,7 +921,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "--robustness-rows",
                     str(robustness_rows),
                     "--split",
-                    "test",
+                    "testA",
                 ],
                 cwd=ROOT,
                 text=True,
@@ -964,7 +978,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "--train-split",
                     "train",
                     "--eval-split",
-                    "test",
+                    "testA",
                     "--d-model",
                     "8",
                     "--memory-tokens",
@@ -1001,7 +1015,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "--robustness-rows",
                     str(robustness_rows),
                     "--split",
-                    "test",
+                    "testA",
                 ],
                 cwd=ROOT,
                 text=True,
@@ -1094,7 +1108,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                     "--train-split",
                     "train",
                     "--eval-split",
-                    "test",
+                    "testA",
                     "--d-model",
                     "8",
                     "--memory-tokens",
@@ -1471,7 +1485,6 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(
             stages["T5"]["loss_names_observed"],
             [
-                "public_alignment_ce",
                 "residual_gate_utility_loss",
                 "router_marginal_utility",
                 "task_loss",
@@ -1480,7 +1493,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(len(metrics_rows), 1)
         self.assertEqual(metrics_rows[0]["stage"], "T5")
         self.assertEqual(metrics_rows[0]["split"], "train")
-        self.assertGreater(metrics_rows[0]["public_alignment_ce"], 0.0)
+        self.assertNotIn("public_alignment_ce", metrics_rows[0])
+        self.assertGreater(metrics_rows[0]["task_loss"], 0.0)
         self.assertEqual(len(diagnostics_rows), 1)
         self.assertEqual(diagnostics_summary["artifact_type"], "public_smoke_diagnostics_summary")
         self.assertEqual(diagnostics_summary["source_rows_path"], str(diagnostics_path))
@@ -3849,7 +3863,13 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
     )
     (root / "splits.json").write_text(
         json.dumps(
-            {"train": ["train-source"], "val": ["val-source"], "test": ["test-source"]},
+            {
+                "train": ["train-source"],
+                "val": ["val-source"],
+                "test": ["test-source"],
+                "testA": ["testA-source"],
+                "testB": ["testB-source"],
+            },
             sort_keys=True,
         )
         + "\n"
@@ -3872,7 +3892,7 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
     (root / "provenance" / "pseudo_label_versions.json").write_text(
         json.dumps({"generated_from_splits": ["train"], "version": "test-pseudo-v1"}, sort_keys=True) + "\n"
     )
-    for split in ("train", "val", "test"):
+    for split in ("train", "val", "test", "testA", "testB"):
         (root / "provenance" / f"source_ids_{split}.txt").write_text(f"{split}-source\n")
         (root / "provenance" / f"sample_records_{split}.jsonl").write_text(
             json.dumps(
@@ -3887,6 +3907,10 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
                     "caption_id": f"caption-{split}-source",
                     "phrase_span": {"start": 0, "end": 2},
                     "region_box": [0.0, 0.0, 1.0, 1.0],
+                    "candidate_region_boxes": [[0.0, 0.0, 1.0, 1.0], [0.1, 0.1, 0.9, 0.9]],
+                    "candidate_region_annotation_ids": [100, 200],
+                    "target_region_index": 1,
+                    "candidate_permutation_seed": 1000,
                     "candidate_region_source": "annotated_boxes",
                     "box_coordinate_convention": "xyxy_normalized",
                 },
@@ -3898,7 +3922,30 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
         np.save(root / "supervision" / f"task_labels_{split}.npy", np.asarray([[0.0, 1.0]], dtype=np.float32))
         (root / "supervision" / f"alignment_pairs_{split}.parquet").write_text("placeholder alignment pairs\n")
         np.save(root / "supervision" / f"bbox_targets_{split}.npy", np.zeros((1, 4), dtype=np.float32))
+        np.save(
+            root / "supervision" / f"candidate_region_boxes_{split}.npy",
+            np.asarray([[[0.0, 0.0, 1.0, 1.0], [0.1, 0.1, 0.9, 0.9]]], dtype=np.float32),
+        )
         np.save(root / "supervision" / f"region_targets_{split}.npy", np.ones((1,), dtype=np.int64))
+        (root / "supervision" / f"target_slot_histogram_by_valid_count_{split}.json").write_text(
+            json.dumps(
+                {
+                    "audit_name": "target_slot_histogram_by_valid_count",
+                    "sample_count": 1,
+                    "by_valid_count": {
+                        "2": {
+                            "sample_count": 1,
+                            "target_slot_counts": [0, 1],
+                            "expected_per_slot": 0.5,
+                            "max_deviation": 0.5,
+                            "max_fraction": 1.0,
+                        }
+                    },
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
         (root / "supervision" / f"corruption_{split}.parquet").write_text("placeholder corruption metadata\n")
         manifest = {}
         for modality in ("text", "region"):
@@ -3916,7 +3963,7 @@ def _write_valid_refcoco_public_cache(cache_root: Path) -> None:
         np.save(root / "masks" / f"text_mask_{split}.npy", np.ones((1, 2), dtype=bool))
         (root / "token_fields" / f"manifest_{split}.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
     checksums = {}
-    for path in required_cache_files(layout, splits=("val", "test")):
+    for path in required_cache_files(layout, splits=("val", "test", "testA", "testB")):
         if path.exists():
             checksums[str(path.relative_to(root))] = file_sha256(path)
     for path in sorted(root.rglob("*")):
@@ -3930,7 +3977,13 @@ def _write_valid_refcoco_raw_manifest(raw_root: Path) -> None:
 
     for folder in ("annotations", "features", "provenance"):
         (raw_root / folder).mkdir(parents=True, exist_ok=True)
-    split_ids = {"train": ["train-source"], "val": ["val-source"], "test": ["test-source"]}
+    split_ids = {
+        "train": ["train-source"],
+        "val": ["val-source"],
+        "test": ["test-source"],
+        "testA": ["testA-source"],
+        "testB": ["testB-source"],
+    }
     records = []
     for row_index, (split, source_ids) in enumerate(split_ids.items()):
         source_id = source_ids[0]
@@ -3947,6 +4000,9 @@ def _write_valid_refcoco_raw_manifest(raw_root: Path) -> None:
                 "phrase_span": {"start": 0, "end": 2},
                 "region_box": [0.0, 0.0, 1.0, 1.0],
                 "target_region_index": row_index % 2,
+                "candidate_region_boxes": [[0.0, 0.0, 1.0, 1.0], [0.1, 0.1, 0.9, 0.9]],
+                "candidate_region_annotation_ids": [100 + row_index * 2, 101 + row_index * 2],
+                "candidate_permutation_seed": 1000 + row_index,
                 "candidate_region_source": "annotated_boxes",
                 "box_coordinate_convention": "xyxy_normalized",
             }
@@ -3958,8 +4014,8 @@ def _write_valid_refcoco_raw_manifest(raw_root: Path) -> None:
         + "\n"
     )
     (raw_root / "provenance" / "failed_samples.jsonl").write_text("")
-    np.save(raw_root / "features" / "text_features.npy", np.zeros((3, 2, 3), dtype=np.float32))
-    np.save(raw_root / "features" / "region_features.npy", np.zeros((3, 2, 3), dtype=np.float32))
+    np.save(raw_root / "features" / "text_features.npy", np.zeros((5, 2, 3), dtype=np.float32))
+    np.save(raw_root / "features" / "region_features.npy", np.zeros((5, 2, 3), dtype=np.float32))
 
 
 def _write_valid_cmu_mosei_public_cache(cache_root: Path) -> None:
@@ -4461,7 +4517,7 @@ def _public_main_metric_rows(config_path: Path, raw_metrics: Path) -> list[dict[
                     "task": config.task_type,
                     "model": model,
                     "stage": "T5_eval",
-                    "split": "test",
+                    "split": "testA",
                     "seed": seed,
                     "metric_name": "main_task_score",
                     "score": score,

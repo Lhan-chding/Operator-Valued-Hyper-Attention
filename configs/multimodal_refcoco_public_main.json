@@ -21,7 +21,7 @@
     "ovha_no_rceo",
     "ovha_no_evidence_router"
   ],
-  "eval_splits": ["val", "test"],
+  "eval_splits": ["val", "testA", "testB"],
   "eval_episode_count": 4096,
   "enforce_same_features_for_baselines": true,
   "fail_on_missing_cache_artifact": true,
@@ -29,7 +29,7 @@
   "require_public_alignment_labels": true,
   "losses_by_stage": {
     "T0": ["cache_validation"],
-    "T5": ["task_loss", "public_alignment_ce", "candidate_individual_loss", "router_marginal_utility", "residual_gate_utility_loss"]
+    "T5": ["task_loss", "candidate_individual_loss", "router_marginal_utility", "residual_gate_utility_loss"]
   },
   "loss_metadata": {
     "candidate_individual_loss": {

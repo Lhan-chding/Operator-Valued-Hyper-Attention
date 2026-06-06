@@ -59,7 +59,9 @@ TOKEN_FIELD_MANIFEST_ALLOWED_ROOTS = {
 GROUNDING_REQUIRED_SUPERVISION_PATTERNS = (
     "alignment_pairs_{split}.parquet",
     "bbox_targets_{split}.npy",
+    "candidate_region_boxes_{split}.npy",
     "region_targets_{split}.npy",
+    "target_slot_histogram_by_valid_count_{split}.json",
 )
 SENTIMENT_REQUIRED_SUPERVISION_PATTERNS = ("missing_modality_mask_{split}.npy",)
 RCEO_REQUIRED_SUPERVISION_PATTERNS = ("corruption_{split}.parquet",)

@@ -1,5 +1,6 @@
 import argparse
 import importlib.util
+import json
 import tempfile
 import unittest
 from dataclasses import replace
@@ -13,10 +14,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RefCOCOStrictAuditPlanContracts(unittest.TestCase):
+    def test_refcoco_standard_splits_preserve_testa_testb(self):
+        from scripts.multimodal.align_refcoco_stage_features import _ordered_source_ids
+        from scripts.multimodal.build_refcoco_stage_records import _normalize_split
+        from scripts.multimodal.stage_refcoco_raw import _ordered_source_ids as _stage_ordered_source_ids
+
+        self.assertEqual(_normalize_split("testA"), "testA")
+        self.assertEqual(_normalize_split("test_a"), "testA")
+        self.assertEqual(_normalize_split("testB"), "testB")
+        self.assertEqual(_normalize_split("test_b"), "testB")
+        self.assertEqual(_normalize_split("test"), "test")
+
+        splits = {"train": ["tr"], "val": ["va"], "testA": ["ta"], "testB": ["tb"]}
+        self.assertEqual(_ordered_source_ids(splits), ["tr", "va", "ta", "tb"])
+        self.assertEqual(_stage_ordered_source_ids(splits), ["tr", "va", "ta", "tb"])
+
     def test_candidate_regions_are_deterministically_balanced_and_record_seed(self):
         from scripts.multimodal.build_refcoco_stage_records import (
             _candidate_regions_balanced,
             _record_for_sentence,
+            _target_slot_histogram_by_valid_count,
         )
 
         base = _stage_base()
@@ -53,6 +70,78 @@ class RefCOCOStrictAuditPlanContracts(unittest.TestCase):
         self.assertIn("candidate_permutation_seed", record)
         self.assertEqual(record["candidate_region_annotation_ids"][record["target_region_index"]], base["ann_id"])
 
+        histogram = _target_slot_histogram_by_valid_count(
+            [
+                {
+                    "source_id": f"sample-{index}",
+                    "candidate_region_annotation_ids": [10, 20, 30, 40],
+                    "target_region_index": slot,
+                }
+                for index, slot in enumerate(slots)
+            ]
+        )
+        self.assertIn("4", histogram["by_valid_count"])
+        self.assertEqual(histogram["by_valid_count"]["4"]["sample_count"], len(slots))
+        self.assertLessEqual(histogram["by_valid_count"]["4"]["max_deviation"], 16)
+
+    def test_validate_refcoco_candidate_order_rejects_old_sorted_records(self):
+        from argparse import Namespace
+
+        from scripts.multimodal.validate_refcoco_candidate_order import validate_refcoco_candidate_order
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            records = root / "refs.json"
+            records.write_text(
+                json.dumps(
+                    {
+                        "records": [
+                            {
+                                "source_id": "legacy",
+                                "candidate_region_annotation_ids": [10, 20, 30],
+                                "target_region_index": 1,
+                            }
+                        ]
+                    }
+                )
+                + "\n"
+            )
+
+            payload = validate_refcoco_candidate_order(Namespace(records=records, fail_on_sorted=True, max_sorted_fraction=0.95))
+
+        self.assertFalse(payload["ok"])
+        self.assertIn("missing candidate_permutation_seed", "\n".join(payload["errors"]))
+        self.assertIn("sorted candidate_region_annotation_ids", "\n".join(payload["errors"]))
+
+    def test_validate_refcoco_candidate_order_accepts_seeded_permuted_records(self):
+        from argparse import Namespace
+
+        from scripts.multimodal.validate_refcoco_candidate_order import validate_refcoco_candidate_order
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            records = root / "refs.json"
+            records.write_text(
+                json.dumps(
+                    {
+                        "records": [
+                            {
+                                "source_id": "balanced",
+                                "candidate_region_annotation_ids": [30, 20, 10],
+                                "target_region_index": 1,
+                                "candidate_permutation_seed": 123,
+                            }
+                        ]
+                    }
+                )
+                + "\n"
+            )
+
+            payload = validate_refcoco_candidate_order(Namespace(records=records, fail_on_sorted=True, max_sorted_fraction=0.95))
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["sorted_fraction"], 0.0)
+
     def test_refcoco_cache_writes_region_geometry_positions_and_candidate_boxes(self):
         if not TORCH_AVAILABLE:
             self.skipTest("torch is required for public batch loading checks")
@@ -86,9 +175,13 @@ class RefCOCOStrictAuditPlanContracts(unittest.TestCase):
 
             region_pos = np.load(layout.root / "positions" / "region_pos_train.npy")
             candidate_boxes = np.load(layout.root / "supervision" / "candidate_region_boxes_train.npy")
+            histogram = json.loads((layout.root / "supervision" / "target_slot_histogram_by_valid_count_train.json").read_text())
+            sample_record = json.loads((layout.root / "provenance" / "sample_records_train.jsonl").read_text().splitlines()[0])
             batch = _load_public_batch(layout, config, "train", torch.device("cpu"))
 
         self.assertEqual(region_pos.shape, (2, 4, 9))
+        self.assertEqual(histogram["by_valid_count"]["3"]["sample_count"], 2)
+        self.assertIn("candidate_permutation_seed", sample_record)
         expected_first_box = candidate_boxes[0, 0]
         x1, y1, x2, y2 = expected_first_box
         expected_pos = np.asarray(
@@ -166,6 +259,77 @@ class RefCOCOStrictAuditPlanContracts(unittest.TestCase):
         self.assertTrue(torch.equal(standardized.target_y, batch.target_y))
         self.assertIsNone(mean)
         self.assertIsNone(std)
+
+    def test_region_grounding_metrics_are_canonical_and_fail_without_candidate_boxes(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for metric checks")
+        import torch
+
+        from dataclasses import replace
+
+        from moat_ovha_torch.eval.grounding_metrics import METRICS_SOURCE, grounding_candidate_metrics
+
+        batch = _region_batch(torch)
+        prediction = torch.tensor([[[0.0, 3.0, -1.0]], [[4.0, 0.0, -1.0]]])
+        metrics = grounding_candidate_metrics(
+            prediction,
+            batch.supervision.region_targets,
+            batch.supervision.candidate_region_boxes,
+            batch.supervision.bbox_targets,
+            batch.target_mask,
+        )
+
+        self.assertEqual(metrics["metrics_source"], METRICS_SOURCE)
+        self.assertEqual(metrics["recall_at_1"], 1.0)
+        self.assertEqual(metrics["acc_at_0_5"], 1.0)
+        self.assertGreater(metrics["mean_iou"], 0.99)
+        self.assertGreater(metrics["cross_entropy"], 0.0)
+        self.assertEqual(metrics["mrr"], 1.0)
+
+        missing_boxes = replace(batch.supervision, candidate_region_boxes=None)
+        broken = replace(batch, supervision=missing_boxes)
+        with self.assertRaisesRegex(ValueError, "candidate_region_boxes"):
+            grounding_candidate_metrics(
+                prediction,
+                broken.supervision.region_targets,
+                broken.supervision.candidate_region_boxes,
+                broken.supervision.bbox_targets,
+                broken.target_mask,
+            )
+
+    def test_region_task_disables_affine_regression_calibration(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for calibration checks")
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_main import _apply_task_calibration, _fit_task_calibrator
+
+        batch = _region_batch(torch)
+        config = replace(MultimodalExperimentConfig.from_mapping(_refcoco_config(Path("/tmp/cache"))), task_type="phrase_region_grounding")
+        prediction = torch.tensor([[[0.0, 3.0, -1.0]], [[4.0, 0.0, -1.0]]])
+        calibrator = _fit_task_calibrator(config, prediction, batch)
+
+        self.assertEqual(calibrator["method"], "none")
+        self.assertNotEqual(calibrator["objective"], "validation_mse_closed_form")
+        self.assertTrue(torch.equal(_apply_task_calibration(prediction, calibrator), prediction))
+
+    def test_region_task_does_not_duplicate_public_alignment_ce(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for loss checks")
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_smoke import _public_loss_components
+
+        batch = _region_batch(torch)
+        output = _minimal_output(torch, batch)
+        config = MultimodalExperimentConfig.from_mapping(_refcoco_config(Path("/tmp/cache")))
+
+        losses = _public_loss_components(output, batch, config)
+
+        self.assertIn("task_loss", losses)
+        self.assertNotIn("public_alignment_ce", losses)
 
     def test_rceo_clean_reliability_uses_modality_presence_not_padding_density(self):
         if not TORCH_AVAILABLE:
@@ -283,6 +447,7 @@ def _record(source_id: str, split: str, *, target: int) -> str:
         ],
         "candidate_region_annotation_ids": [10, 20, 30],
         "target_region_index": target,
+        "candidate_permutation_seed": 1000 + target,
         "candidate_region_source": "coco_gt_box",
         "box_coordinate_convention": "xyxy_normalized",
     }
@@ -405,4 +570,27 @@ def _region_batch(torch):
             feature_extractor_version={"text": "unit", "region": "unit"},
             pseudo_label_version={"version": "none"},
         ),
+    )
+
+
+def _minimal_output(torch, batch):
+    from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHAOutput
+    from moat_ovha_torch.models.multimodal.primitives.base import CandidateOutput
+
+    prediction = torch.tensor([[[0.0, 3.0, -1.0]], [[4.0, 0.0, -1.0]]], dtype=batch.target_y.dtype)
+    candidate = CandidateOutput(
+        value=prediction,
+        feature=torch.zeros(2, 1, 1),
+        diagnostics={"direct_region_logits": True},
+    )
+    return MultimodalOVHAOutput(
+        y_hat=prediction,
+        candidate_values=prediction.unsqueeze(2),
+        router_weights=torch.ones(2, 1, 1),
+        router_logits=torch.ones(2, 1, 1),
+        router_logit_parts={},
+        candidate_outputs={"PRSO": candidate},
+        reliability_prior=None,
+        diagnostics={},
+        evidence=None,
     )

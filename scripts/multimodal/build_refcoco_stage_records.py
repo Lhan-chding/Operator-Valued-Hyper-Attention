@@ -11,7 +11,7 @@ import sys
 from typing import Any
 
 
-SPLIT_ORDER = ("train", "val", "test")
+SPLIT_ORDER = ("train", "val", "testA", "testB", "test")
 
 
 def main() -> int:
@@ -84,18 +84,23 @@ def build_refcoco_stage_records(args: argparse.Namespace) -> dict[str, Any]:
     records_path = output_dir / f"{args.dataset_name}_phrase_region_records.json"
     splits_path = output_dir / f"{args.dataset_name}_splits.json"
     manifest_path = output_dir / f"{args.dataset_name}_stage_records_manifest.json"
+    histogram_path = output_dir / f"{args.dataset_name}_target_slot_histogram_by_valid_count.json"
     records_path.write_text(json.dumps({"records": records_by_ordered_splits}, sort_keys=True) + "\n")
     splits_path.write_text(json.dumps(splits, sort_keys=True) + "\n")
+    histogram = _target_slot_histogram_by_valid_count(records_by_ordered_splits)
+    histogram_path.write_text(json.dumps(histogram, indent=2, sort_keys=True) + "\n")
     manifest = {
         "dataset_name": args.dataset_name,
         "source_paths": {"refs": str(args.refs), "instances": str(args.instances)},
         "records": str(records_path),
         "splits": str(splits_path),
+        "target_slot_histogram_by_valid_count": str(histogram_path),
         "sample_count": len(records_by_ordered_splits),
         "split_counts": {split: len(source_ids) for split, source_ids in sorted(splits.items())},
         "candidate_region_source": args.candidate_region_source,
         "max_candidate_regions": args.max_candidate_regions,
         "box_coordinate_convention": args.box_coordinate_convention,
+        "candidate_permutation_policy": "stable_source_id_seeded_target_slot_randomization",
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return {
@@ -371,14 +376,55 @@ def _validate_splits(splits: dict[str, list[str]]) -> None:
 
 
 def _normalize_split(value: str) -> str:
-    normalized = value.strip().lower()
-    if normalized in {"train", "training"}:
+    normalized = value.strip()
+    lowered = normalized.lower()
+    if lowered in {"train", "training"}:
         return "train"
-    if normalized in {"val", "valid", "validation"}:
+    if lowered in {"val", "valid", "validation"}:
         return "val"
-    if normalized.startswith("test"):
+    if lowered in {"testa", "test_a"}:
+        return "testA"
+    if lowered in {"testb", "test_b"}:
+        return "testB"
+    if lowered == "test":
         return "test"
     raise ValueError(f"unsupported RefCOCO split: {value}")
+
+
+def _target_slot_histogram_by_valid_count(records: list[dict[str, Any]]) -> dict[str, Any]:
+    by_valid_count: dict[str, dict[str, Any]] = {}
+    for record in records:
+        ann_ids = record.get("candidate_region_annotation_ids")
+        target_index = record.get("target_region_index")
+        if not isinstance(ann_ids, list) or not ann_ids:
+            raise ValueError(f"record {record.get('source_id', '?')} missing candidate_region_annotation_ids")
+        if not isinstance(target_index, int) or isinstance(target_index, bool) or target_index < 0 or target_index >= len(ann_ids):
+            raise ValueError(f"record {record.get('source_id', '?')} has invalid target_region_index")
+        key = str(len(ann_ids))
+        row = by_valid_count.setdefault(
+            key,
+            {
+                "sample_count": 0,
+                "target_slot_counts": [0 for _ in ann_ids],
+            },
+        )
+        if len(row["target_slot_counts"]) != len(ann_ids):
+            raise ValueError(f"inconsistent valid count bucket for record {record.get('source_id', '?')}")
+        row["sample_count"] += 1
+        row["target_slot_counts"][target_index] += 1
+
+    for row in by_valid_count.values():
+        sample_count = int(row["sample_count"])
+        slot_count = len(row["target_slot_counts"])
+        expected = sample_count / max(1, slot_count)
+        row["expected_per_slot"] = expected
+        row["max_deviation"] = max((abs(int(count) - expected) for count in row["target_slot_counts"]), default=0.0)
+        row["max_fraction"] = max((int(count) / sample_count for count in row["target_slot_counts"]), default=0.0) if sample_count else 0.0
+    return {
+        "audit_name": "target_slot_histogram_by_valid_count",
+        "sample_count": len(records),
+        "by_valid_count": by_valid_count,
+    }
 
 
 def _int_value(value: Any, *, field: str) -> int:

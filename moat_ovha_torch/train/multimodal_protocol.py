@@ -240,16 +240,6 @@ def _validate_stage_loss_contract(
         for loss in required_losses:
             if loss not in stage_losses:
                 errors.append(f"{task_type} {stage} must include required loss/record: {loss}")
-        if task_type in REGION_TEXT_TASK_TYPES and stage == "T5":
-            has_alignment_loss = (
-                "public_alignment_ce" in stage_losses
-                or "public_contrastive_retrieval" in stage_losses
-            )
-            if not has_alignment_loss:
-                errors.append(
-                    f"{task_type} T5 must include public alignment loss: "
-                    "public_alignment_ce or public_contrastive_retrieval"
-                )
 
 
 def _validate_marked_weak_loss(

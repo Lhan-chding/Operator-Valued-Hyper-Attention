@@ -500,7 +500,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
                 if (stage_inputs / "refcoco_phrase_region_records.json").exists()
                 else []
             )
-            validation = validate_cache_layout(MultimodalCacheLayout(cache_root, "refcoco", "v0.1"), splits=("train", "val", "test"))
+            validation = validate_cache_layout(MultimodalCacheLayout(cache_root, "refcoco", "v0.1"), splits=("train", "val", "testA"))
 
         self.assertEqual(build_records_result.returncode, 0, build_records_result.stdout + build_records_result.stderr)
         self.assertEqual(stage_result.returncode, 0, stage_result.stdout + stage_result.stderr)
@@ -508,7 +508,7 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["sample_count"], 3)
         self.assertEqual(splits, {
-            "test": ["refcoco::image30::ann503::sent1003"],
+            "testA": ["refcoco::image30::ann503::sent1003"],
             "train": ["refcoco::image10::ann501::sent1001"],
             "val": ["refcoco::image20::ann502::sent1002"],
         })

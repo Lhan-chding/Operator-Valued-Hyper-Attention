@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 
 
-SPLIT_ORDER = ("train", "val", "test")
+SPLIT_ORDER = ("train", "val", "testA", "testB", "test")
 
 
 def main() -> int:
@@ -201,6 +201,9 @@ def _stage_record(record: dict[str, Any], split: str, license_tag: str, preproce
     candidate_ann_ids = _candidate_region_annotation_ids(record.get("candidate_region_annotation_ids"))
     if candidate_ann_ids:
         staged["candidate_region_annotation_ids"] = candidate_ann_ids
+    candidate_seed = _candidate_permutation_seed(record.get("candidate_permutation_seed"))
+    if candidate_seed is not None:
+        staged["candidate_permutation_seed"] = candidate_seed
     return staged
 
 
@@ -249,6 +252,14 @@ def _candidate_region_annotation_ids(value: Any) -> list[int]:
             raise ValueError("candidate_region_annotation_ids must contain non-negative integers")
         ids.append(item)
     return ids
+
+
+def _candidate_permutation_seed(value: Any) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError("candidate_permutation_seed must be a non-negative integer when provided")
+    return value
 
 
 def _target_region_index(value: Any) -> int:

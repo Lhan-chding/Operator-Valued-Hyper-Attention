@@ -67,7 +67,7 @@ def main() -> int:
         return 2
     layout = MultimodalCacheLayout(args.cache_root, adapter.name, args.version)
     try:
-        for split in _cache_splits_for(adapter.name):
+        for split in _cache_splits_for(adapter.name, manifest.raw_root):
             adapter.write_cache(manifest, args.cache_root, split, args.version)
     except (NotImplementedError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(
@@ -137,9 +137,18 @@ def _tasks_for(name: str) -> list[str]:
     return ["controlled_relation_operator"]
 
 
-def _cache_splits_for(name: str) -> tuple[str, ...]:
+def _cache_splits_for(name: str, raw_root: Path | None = None) -> tuple[str, ...]:
     if name == "controlled_multimodal":
         return ("train",)
+    if name == "refcoco" and raw_root is not None:
+        splits_path = raw_root / "splits.json"
+        if splits_path.exists():
+            payload = json.loads(splits_path.read_text())
+            if isinstance(payload, dict) and payload:
+                order = ("train", "val", "testA", "testB", "test")
+                ordered = [split for split in order if split in payload]
+                ordered.extend(split for split in payload if split not in set(order))
+                return tuple(ordered)
     return ("train", "val", "test")
 
 

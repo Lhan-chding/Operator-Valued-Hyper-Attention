@@ -271,6 +271,33 @@ python scripts/multimodal/build_cache.py \
 }
 ```
 
+正式 RefCOCO/COCO grounding cache 不能使用旧式按 annotation id 排序的 candidate records。正式入口必须先通过 balanced rebuild 和 candidate-order gate：
+
+```bash
+python scripts/multimodal/rebuild_refcoco_balanced_cache.py \
+  refcoco \
+  data/raw_multimodal/_downloads/refcoco_balanced_rebuild \
+  --refs data/raw_multimodal/_downloads/refcoco/extracted/replace_with_refcoco_refs.json \
+  --instances data/raw_multimodal/_downloads/refcoco/extracted/annotations/instances_train2014.json \
+  --raw-root data/raw_multimodal/refcoco \
+  --cache-root data/multimodal_cache \
+  --version v0.1 \
+  --text-features data/raw_multimodal/_downloads/refcoco_stage_inputs/refcoco_text_features.npy \
+  --region-features data/raw_multimodal/_downloads/refcoco_stage_inputs/refcoco_region_features.npy \
+  --feature-version refcoco-frozen-features-v0.1
+
+python scripts/multimodal/validate_refcoco_candidate_order.py \
+  data/raw_multimodal/_downloads/refcoco_balanced_rebuild/stage_records/refcoco_phrase_region_records.json
+```
+
+Required gates:
+
+- `candidate_permutation_seed` must be present on every candidate record.
+- `candidate_region_annotation_ids` must not be globally sorted as a legacy order prior.
+- `val/testA/testB` must remain distinct for RefCOCO and RefCOCO+; RefCOCOg uses `val/test`.
+- Cache validation must include `target_slot_histogram_by_valid_count_{split}.json`.
+- Region task metrics must report `metrics_source=canonical_grounding_metrics_v1`.
+
 ## 3. Region-text grounding 数据
 
 ### 3.1 RefCOCO / RefCOCO+ / RefCOCOg
@@ -341,7 +368,7 @@ python scripts/multimodal/build_refcoco_stage_records.py \
   --candidate-region-source coco_gt_box
 ```
 
-这个步骤只生成 `refcoco_phrase_region_records.json` 和 `refcoco_splits.json`；正式训练前仍需要用冻结的 text / region feature extractor 产出与这些 records 顺序完全一致的 `refcoco_text_features.npy` 和 `refcoco_region_features.npy`。仓库内正式路径使用 CLIP ViT-B/32：text branch 编码 referring expression，image branch 编码 COCO GT box crop，输出按 `refcoco_splits.json` 排好的 projected embeddings。
+这个步骤会生成 `refcoco_phrase_region_records.json`、`refcoco_splits.json` 和 `refcoco_target_slot_histogram_by_valid_count.json`；正式训练前仍需要用冻结的 text / region feature extractor 产出与这些 records 顺序完全一致的 `refcoco_text_features.npy` 和 `refcoco_region_features.npy`。仓库内正式路径使用 CLIP ViT-B/32：text branch 编码 referring expression，image branch 编码 COCO GT box crop，输出按 `refcoco_splits.json` 排好的 projected embeddings。
 
 ```bash
 REFS=$(find data/raw_multimodal/_downloads/refcoco/extracted -type f \( -name 'refs*.p' -o -name 'refs*.json' \) | head -n 1)

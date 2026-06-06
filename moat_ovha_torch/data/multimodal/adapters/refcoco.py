@@ -101,7 +101,8 @@ class RefCOCOAdapter:
 
     def validate_cache(self, cache_root: Path, cache_version: str | None = None) -> ValidationReport:
         version = cache_version or self.version
-        report = validate_cache_layout(MultimodalCacheLayout(cache_root, self.name, version), splits=("train", "val", "test"))
+        layout = MultimodalCacheLayout(cache_root, self.name, version)
+        report = validate_cache_layout(layout, splits=_cache_splits_from_layout(layout))
         return ValidationReport(report.ok, report.errors, report.warnings)
 
 
@@ -241,6 +242,10 @@ def _write_split_cache_files(
     _write_array(root / "supervision" / f"bbox_targets_{split}.npy", _bbox_targets(selected_records))
     _write_array(root / "supervision" / f"candidate_region_boxes_{split}.npy", candidate_region_boxes)
     _write_array(root / "supervision" / f"region_targets_{split}.npy", target_region_indices.reshape(-1, 1))
+    (root / "supervision" / f"target_slot_histogram_by_valid_count_{split}.json").write_text(
+        json.dumps(_target_slot_histogram_by_valid_count(selected_records, candidate_region_count), indent=2, sort_keys=True)
+        + "\n"
+    )
     _write_corruption_metadata(root / "supervision" / f"corruption_{split}.parquet", split, source_ids)
 
 
@@ -343,6 +348,39 @@ def _target_region_indices(records: list[dict[str, Any]], candidate_region_count
             )
         targets.append(value)
     return np.asarray(targets, dtype=np.int64)
+
+
+def _target_slot_histogram_by_valid_count(records: list[dict[str, Any]], candidate_region_count: int) -> dict[str, Any]:
+    buckets: dict[str, dict[str, Any]] = {}
+    for record in records:
+        boxes = record.get("candidate_region_boxes")
+        valid_count = len(boxes) if isinstance(boxes, list) and boxes else candidate_region_count
+        valid_count = min(int(valid_count), int(candidate_region_count))
+        target_index = int(record.get("target_region_index", 0))
+        if target_index < 0 or target_index >= valid_count:
+            raise ValueError(f"target_region_index outside valid candidate count for source_id: {record.get('source_id')}")
+        bucket = buckets.setdefault(
+            str(valid_count),
+            {
+                "sample_count": 0,
+                "target_slot_counts": [0 for _ in range(valid_count)],
+            },
+        )
+        bucket["sample_count"] += 1
+        bucket["target_slot_counts"][target_index] += 1
+    for bucket in buckets.values():
+        sample_count = int(bucket["sample_count"])
+        slot_count = len(bucket["target_slot_counts"])
+        expected = sample_count / max(1, slot_count)
+        bucket["expected_per_slot"] = expected
+        bucket["max_deviation"] = max((abs(int(count) - expected) for count in bucket["target_slot_counts"]), default=0.0)
+        bucket["max_fraction"] = max((int(count) / sample_count for count in bucket["target_slot_counts"]), default=0.0) if sample_count else 0.0
+    return {
+        "audit_name": "target_slot_histogram_by_valid_count",
+        "sample_count": len(records),
+        "candidate_region_count": int(candidate_region_count),
+        "by_valid_count": buckets,
+    }
 
 
 def _region_distribution_targets(target_region_indices: np.ndarray, candidate_region_count: int) -> np.ndarray:
@@ -495,8 +533,22 @@ def _declared_split_artifacts(split: str) -> tuple[Path, ...]:
         Path("supervision") / f"bbox_targets_{split}.npy",
         Path("supervision") / f"candidate_region_boxes_{split}.npy",
         Path("supervision") / f"region_targets_{split}.npy",
+        Path("supervision") / f"target_slot_histogram_by_valid_count_{split}.json",
         Path("supervision") / f"corruption_{split}.parquet",
     )
+
+
+def _cache_splits_from_layout(layout: MultimodalCacheLayout) -> tuple[str, ...]:
+    path = layout.root / "splits.json"
+    if not path.exists():
+        return ("train", "val", "testA", "testB", "test")
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, dict) or not payload:
+        return ("train", "val", "testA", "testB", "test")
+    order = ("train", "val", "testA", "testB", "test")
+    ordered = [split for split in order if split in payload]
+    ordered.extend(split for split in payload if split not in set(order))
+    return tuple(ordered)
 
 
 def _read_split_source_ids(path: Path) -> dict[str, list[str]]:
@@ -644,6 +696,20 @@ def _validate_grounding_record(source_name: str, index: int, record: dict[str, A
             raise ValueError(
                 f"{source_name} records[{index}] target_region_index must be inside candidate_region_boxes"
             )
+    candidate_ann_ids = record.get("candidate_region_annotation_ids")
+    if candidate_ann_ids is not None:
+        if not isinstance(candidate_ann_ids, list) or not candidate_ann_ids:
+            raise ValueError(f"{source_name} records[{index}] candidate_region_annotation_ids must be a non-empty list when provided")
+        for ann_id in candidate_ann_ids:
+            if not isinstance(ann_id, int) or isinstance(ann_id, bool) or ann_id < 0:
+                raise ValueError(f"{source_name} records[{index}] candidate_region_annotation_ids must contain non-negative integers")
+        if candidate_boxes is not None and len(candidate_ann_ids) != len(candidate_boxes):
+            raise ValueError(f"{source_name} records[{index}] candidate_region_annotation_ids must match candidate_region_boxes length")
+        if target_region_index is not None and target_region_index >= len(candidate_ann_ids):
+            raise ValueError(f"{source_name} records[{index}] target_region_index must be inside candidate_region_annotation_ids")
+        candidate_seed = record.get("candidate_permutation_seed")
+        if not isinstance(candidate_seed, int) or isinstance(candidate_seed, bool) or candidate_seed < 0:
+            raise ValueError(f"{source_name} records[{index}] missing candidate_permutation_seed for candidate order audit")
 
 
 def _sample_record(record: dict[str, Any], split: str) -> dict[str, Any]:
@@ -663,6 +729,7 @@ def _sample_record(record: dict[str, Any], split: str) -> dict[str, Any]:
         "candidate_region_boxes": [[float(value) for value in box] for box in record.get("candidate_region_boxes", [])],
         "candidate_region_annotation_ids": [int(value) for value in record.get("candidate_region_annotation_ids", [])],
         "target_region_index": int(record.get("target_region_index", 0)),
+        "candidate_permutation_seed": int(record["candidate_permutation_seed"]) if "candidate_permutation_seed" in record else None,
         "candidate_region_source": record["candidate_region_source"],
         "box_coordinate_convention": record["box_coordinate_convention"],
     }

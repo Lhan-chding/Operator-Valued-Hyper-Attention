@@ -20,6 +20,7 @@ import torch
 from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
 from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256, validate_cache_layout
 from moat_ovha_torch.data.multimodal.typed_batch import MultimodalEpisodeBatch, SupervisionBank, TokenField
+from moat_ovha_torch.eval.grounding_metrics import METRICS_SOURCE, grounding_candidate_metrics
 from moat_ovha_torch.eval.multimodal_public_entry import validate_public_entry_requirements
 from moat_ovha_torch.eval.mosei_standard_metrics import mosei_standard_metrics
 from moat_ovha_torch.eval.multimodal_robustness import DEFAULT_REQUIRED_STRESS_TARGETS
@@ -317,14 +318,14 @@ def _run_seed(
             target_mean,
             target_std,
         )
-        calibrator = _fit_affine_calibrator(val_output.y_hat.detach().cpu(), selection_batch)
+        calibrator = _fit_task_calibrator(config, val_output.y_hat.detach().cpu(), selection_batch)
         eval_output = _destandardize_output(
             _predict_ovha_on_device(model, eval_batch_std, device, batch_size=inference_batch_size),
             target_mean,
             target_std,
         )
         eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std, eval_batch)
-        eval_output = _apply_affine_calibration(eval_output, calibrator, config, eval_batch)
+        eval_output = _apply_task_calibration_to_output(eval_output, calibrator, config, eval_batch)
     elapsed = time.perf_counter() - seed_started_at
     hardware = _hardware_metadata(device, elapsed)
     raw_rows = [
@@ -1278,6 +1279,21 @@ def _destandardize_prediction(
     return prediction * target_std + target_mean
 
 
+def _fit_task_calibrator(
+    config: MultimodalExperimentConfig,
+    prediction: torch.Tensor,
+    batch: MultimodalEpisodeBatch,
+) -> dict[str, Any]:
+    if _is_region_task(config.task_type):
+        return {
+            "method": "none",
+            "objective": "region_classification_logits_uncalibrated",
+            "sample_count": int(batch.target_mask.to(dtype=torch.bool).sum().item()),
+            "metrics_scope": METRICS_SOURCE,
+        }
+    return _fit_affine_calibrator(prediction, batch)
+
+
 def _fit_affine_calibrator(
     prediction: torch.Tensor,
     batch: MultimodalEpisodeBatch,
@@ -1299,9 +1315,87 @@ def _fit_affine_calibrator(
     }
 
 
+def _apply_task_calibration(prediction: torch.Tensor, calibrator: dict[str, Any]) -> torch.Tensor:
+    if calibrator.get("method") == "none":
+        return prediction
+    return _apply_affine_calibration_to_prediction(prediction, calibrator)
+
+
+def _apply_task_calibration_to_output(
+    output: MultimodalOVHAOutput,
+    calibrator: dict[str, Any],
+    config: MultimodalExperimentConfig,
+    batch: MultimodalEpisodeBatch,
+) -> MultimodalOVHAOutput:
+    if calibrator.get("method") == "none":
+        diagnostics = {
+            **output.diagnostics,
+            "calibration": dict(calibrator),
+            "pre_calibration_public_metrics": _public_main_metrics(
+                config,
+                batch,
+                prediction=output.y_hat,
+                router_load_by_candidate={},
+                router_entropy=None,
+                candidate_loss={},
+                diagnostics=None,
+            ),
+            "post_calibration_public_metrics": _public_main_metrics(
+                config,
+                batch,
+                prediction=output.y_hat,
+                router_load_by_candidate={},
+                router_entropy=None,
+                candidate_loss={},
+                diagnostics=None,
+            ),
+        }
+        return replace(output, diagnostics=diagnostics)
+    return _apply_affine_calibration(output, calibrator, config, batch)
+
+
+def _task_calibration_diagnostics(
+    config: MultimodalExperimentConfig,
+    batch: MultimodalEpisodeBatch,
+    *,
+    pre_prediction: torch.Tensor,
+    post_prediction: torch.Tensor,
+    calibrator: dict[str, Any],
+) -> dict[str, Any]:
+    if calibrator.get("method") == "none":
+        return {
+            "calibration": dict(calibrator),
+            "pre_calibration_public_metrics": _public_main_metrics(
+                config,
+                batch,
+                prediction=pre_prediction,
+                router_load_by_candidate={},
+                router_entropy=None,
+                candidate_loss={},
+                diagnostics=None,
+            ),
+            "post_calibration_public_metrics": _public_main_metrics(
+                config,
+                batch,
+                prediction=post_prediction,
+                router_load_by_candidate={},
+                router_entropy=None,
+                candidate_loss={},
+                diagnostics=None,
+            ),
+        }
+    return _affine_calibration_diagnostics(
+        config,
+        batch,
+        pre_prediction=pre_prediction,
+        post_prediction=post_prediction,
+        calibrator=calibrator,
+    )
+
+
 def _apply_affine_calibration(
     output: MultimodalOVHAOutput,
-    calibrator: dict[str, float],
+    calibrator: dict[str, Any],
     config: MultimodalExperimentConfig,
     batch: MultimodalEpisodeBatch,
 ) -> MultimodalOVHAOutput:
@@ -1348,7 +1442,7 @@ def _apply_affine_calibration(
 
 def _apply_affine_calibration_to_prediction(
     prediction: torch.Tensor,
-    calibrator: dict[str, float],
+    calibrator: dict[str, Any],
 ) -> torch.Tensor:
     return float(calibrator.get("a", 1.0)) * prediction + float(calibrator.get("b", 0.0))
 
@@ -1359,7 +1453,7 @@ def _affine_calibration_diagnostics(
     *,
     pre_prediction: torch.Tensor,
     post_prediction: torch.Tensor,
-    calibrator: dict[str, float],
+    calibrator: dict[str, Any],
 ) -> dict[str, Any]:
     diagnostics: dict[str, Any] = {"affine_calibration": dict(calibrator)}
     try:
@@ -1638,17 +1732,17 @@ def _baseline_rows(
                 target_mean.to(device=device) if target_mean is not None else None,
                 target_std.to(device=device) if target_std is not None else None,
             )
-            calibrator = _fit_affine_calibrator(selection_prediction.detach().cpu(), selection_batch)
+            calibrator = _fit_task_calibrator(config, selection_prediction.detach().cpu(), selection_batch)
             eval_batch_device = _move_batch_to_device(eval_batch_std, device)
             pre_calibration_prediction = _destandardize_prediction(
                 _baseline_prediction(str(baseline_name), model, eval_batch_device),
                 target_mean.to(device=device) if target_mean is not None else None,
                 target_std.to(device=device) if target_std is not None else None,
             )
-            eval_prediction = _apply_affine_calibration_to_prediction(pre_calibration_prediction, calibrator)
+            eval_prediction = _apply_task_calibration(pre_calibration_prediction, calibrator)
             loss = _task_loss(eval_prediction, _move_batch_to_device(eval_batch, device))
             eval_prediction = eval_prediction.detach().cpu()
-            calibration_diagnostics = _affine_calibration_diagnostics(
+            calibration_diagnostics = _task_calibration_diagnostics(
                 config,
                 eval_batch,
                 pre_prediction=pre_calibration_prediction.detach().cpu(),
@@ -1773,14 +1867,14 @@ def _train_ovha_ablation(
             target_mean,
             target_std,
         )
-        calibrator = _fit_affine_calibrator(val_output.y_hat.detach().cpu(), selection_batch)
+        calibrator = _fit_task_calibrator(config, val_output.y_hat.detach().cpu(), selection_batch)
         eval_output = _destandardize_output(
             _predict_ovha_on_device(model, eval_batch_std, device, batch_size=inference_batch_size),
             target_mean,
             target_std,
         )
         eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std, eval_batch)
-        eval_output = _apply_affine_calibration(eval_output, calibrator, config, eval_batch)
+        eval_output = _apply_task_calibration_to_output(eval_output, calibrator, config, eval_batch)
     return model, eval_output, {
         "baseline_optimizer_steps": int(fit_summary["optimizer_steps"]),
         "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial).item()),
@@ -2064,7 +2158,7 @@ def _raw_metric_row(
         "raw_metric_path": str(raw_metrics_path),
     }
     if isinstance(diagnostics, dict):
-        for key in ("affine_calibration", "pre_calibration_public_metrics", "post_calibration_public_metrics"):
+        for key in ("calibration", "affine_calibration", "pre_calibration_public_metrics", "post_calibration_public_metrics"):
             if key in diagnostics:
                 row[key] = _json_ready(diagnostics[key])
     return row
@@ -2086,6 +2180,7 @@ def _public_main_metrics(
         cato_load = _candidate_probability(router_load_by_candidate, "CATO", default=0.0)
         cato_loss = _candidate_loss_value(candidate_loss, "CATO", default=task_loss)
         metrics = {
+            "metrics_source": region_metrics["metrics_source"],
             "acc_at_0_5": region_metrics["acc_at_0_5"],
             "region_recall_at_1": region_metrics["region_recall_at_1"],
             "region_recall_at_5": region_metrics["region_recall_at_5"],
@@ -2104,6 +2199,7 @@ def _public_main_metrics(
         required = {name: metrics[name] for name in REGION_TEXT_REQUIRED_PUBLIC_METRICS}
         return {
             **required,
+            "metrics_source": metrics["metrics_source"],
             "region_recall_at_1": metrics["region_recall_at_1"],
             "region_recall_at_5": metrics["region_recall_at_5"],
             "candidate_iou_at_0_5": metrics["candidate_iou_at_0_5"],
@@ -2406,44 +2502,26 @@ def _bounded_score_from_loss(loss: torch.Tensor) -> float:
 
 
 def _region_text_metrics(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> dict[str, float]:
-    iou_metrics = _candidate_box_iou_metrics(prediction, batch)
-    region_targets = batch.supervision.region_targets
-    if region_targets is not None and prediction.shape[-1] > 1:
-        labels = region_targets.to(device=prediction.device, dtype=torch.long)
-        if labels.ndim == 1:
-            labels = labels.unsqueeze(1)
-        if labels.ndim > 2:
-            labels = labels.reshape(labels.shape[0], -1)
-        if labels.shape[1] == 1 and prediction.shape[1] > 1:
-            labels = labels.expand(-1, prediction.shape[1])
-        labels = labels[:, : prediction.shape[1]]
-        valid = batch.target_mask.to(dtype=torch.bool, device=prediction.device)[:, : labels.shape[1]]
-        top1 = prediction[:, : labels.shape[1]].argmax(dim=-1)
-        topk = torch.topk(prediction[:, : labels.shape[1]], k=min(5, prediction.shape[-1]), dim=-1).indices
-        if bool(valid.any()):
-            recall1 = (top1[valid] == labels[valid]).to(dtype=torch.float32).mean()
-            recall5 = (topk[valid] == labels[valid].unsqueeze(-1)).any(dim=-1).to(dtype=torch.float32).mean()
-            return {
-                "acc_at_0_5": iou_metrics["candidate_iou_at_0_5"],
-                "region_recall_at_1": _as_float(recall1),
-                "region_recall_at_5": _as_float(recall5),
-                "candidate_iou_at_0_5": iou_metrics["candidate_iou_at_0_5"],
-                "mean_candidate_iou": iou_metrics["mean_candidate_iou"],
-                "recall_at_1": _as_float(recall1),
-                "recall_at_5": _as_float(recall5),
-                "mean_iou": iou_metrics["mean_candidate_iou"],
-                "phrase_region_topk_accuracy": _as_float(recall1),
-            }
+    metrics = grounding_candidate_metrics(
+        prediction,
+        batch.supervision.region_targets,
+        batch.supervision.candidate_region_boxes,
+        batch.supervision.bbox_targets,
+        batch.target_mask,
+    )
     return {
-        "acc_at_0_5": iou_metrics["candidate_iou_at_0_5"],
-        "region_recall_at_1": 0.0,
-        "region_recall_at_5": 0.0,
-        "candidate_iou_at_0_5": iou_metrics["candidate_iou_at_0_5"],
-        "mean_candidate_iou": iou_metrics["mean_candidate_iou"],
-        "recall_at_1": 0.0,
-        "recall_at_5": 0.0,
-        "mean_iou": iou_metrics["mean_candidate_iou"],
-        "phrase_region_topk_accuracy": 0.0,
+        "metrics_source": METRICS_SOURCE,
+        "acc_at_0_5": float(metrics["acc_at_0_5"]),
+        "region_recall_at_1": float(metrics["recall_at_1"]),
+        "region_recall_at_5": float(metrics["recall_at_5"]),
+        "candidate_iou_at_0_5": float(metrics["acc_at_0_5"]),
+        "mean_candidate_iou": float(metrics["mean_iou"]),
+        "recall_at_1": float(metrics["recall_at_1"]),
+        "recall_at_5": float(metrics["recall_at_5"]),
+        "mean_iou": float(metrics["mean_iou"]),
+        "phrase_region_topk_accuracy": float(metrics["recall_at_1"]),
+        "cross_entropy": float(metrics["cross_entropy"]),
+        "mrr": float(metrics["mrr"]),
     }
 
 

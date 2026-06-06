@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 
 
-SPLIT_ORDER = ("train", "val", "test")
+SPLIT_ORDER = ("train", "val", "testA", "testB", "test")
 
 
 def main() -> int:

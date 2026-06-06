@@ -20,9 +20,11 @@ Classify the available files before training:
 
 CMU-MOSEI uses `TANSO`, `LRIO`, and `RCEO`.
 
-COCO / RefCOCO / Flickr30k region-text grounding uses `CATO`, `TLEO`, `SPO`, and `RCEO`.
+COCO / RefCOCO / Flickr30k region-text grounding uses `PRSO` as the base phrase-region similarity operator, with `SRO`, `TLEO`, and `CATO` admitted only as residual operators when validation utility and non-interference gates pass. `RCEO` is clean-neutral and should only become active for missing/noisy/proposal-quality stress conditions.
 
 Do not use TANSO as a COCO grounding primary operator unless the task explicitly contains temporal or nonverbal shift structure.
+
+Do not treat CATO router load as CATO utility. CATO enters the RefCOCO primary bank only if leave-one-residual-out or admission-matrix evidence shows positive residual utility beyond PRSO/SRO/TLEO.
 
 ## Same-Feature Tables
 
@@ -31,10 +33,18 @@ Internal same-feature tables may include:
 | family | rows |
 |---|---|
 | sanity probes | `text_only`, `region_only`, `concat_fusion` |
-| OVHA operator rows | `CATO`, `TLEO`, `SPO`, `CATO+TLEO`, admitted bank |
-| diagnostics | alignment entropy, CATO load, TLEO local evidence load, Acc@0.5 IoU, Recall@K |
+| OVHA operator rows | `PRSO`, `PRSO+SRO`, `PRSO+TLEO`, `PRSO+CATO`, `PRSO+SRO+TLEO`, `PRSO+SRO+CATO`, `PRSO+SRO+TLEO+CATO` |
+| diagnostics | `metrics_source=canonical_grounding_metrics_v1`, residual utility, leave-one-residual-out deltas, alignment entropy, CATO load, TLEO local evidence load, Acc@0.5 IoU, Recall@K |
 
 GroundingDINO, GroundingDINO-1.5, GLIP, MDETR, TransVG, LAVT, and SeqTR must stay in an external-reference table unless their exact frozen features and training protocol are converted into the same-feature cache protocol.
+
+GroundingDINO comparisons must be split into three tracks:
+
+| Track | Input/Output | Allowed interpretation |
+|---|---|---|
+| same-candidate scorer | same candidate boxes, candidate selected by mapped score | proposal-conditioned reference, not original GroundingDINO task |
+| shared proposal rerank | GroundingDINO proposals for every method, OVHA reranks | fair proposal-conditioned reranking |
+| free-box reference | raw image + expression to predicted box | external detector/reference table only |
 
 ## Ubuntu File Audit Commands
 
@@ -106,7 +116,20 @@ Use the audit output as follows:
 
 | Evidence found | Next step |
 |---|---|
-| `refs`, `sentences`, `ann_id`, `split`, `bbox` or equivalent | build RefCOCO records with `scripts/multimodal/stage_refcoco_raw.py` |
+| `refs`, `sentences`, `ann_id`, `split`, `bbox` or equivalent | build balanced RefCOCO records with `scripts/multimodal/rebuild_refcoco_balanced_cache.py` |
 | COCO `annotations`, `categories`, `images` only | build weak category grounding records and mark the claim as weak grounding |
 | GroundingDINO outputs only | use as pseudo-label teacher or hard-negative generator, not same-feature baseline |
-| precomputed region/text features with target index | validate cache schema and run internal CATO/TLEO same-feature table |
+| precomputed region/text features with target index | validate cache schema and run PRSO/residual admission same-feature table |
+
+## RefCOCO Formal Entry Gates
+
+Before a RefCOCO run can enter a paper table:
+
+- Records must include `candidate_permutation_seed`.
+- `candidate_region_annotation_ids` must not be globally sorted by annotation id.
+- RefCOCO/RefCOCO+ splits must preserve `val`, `testA`, and `testB`; RefCOCOg preserves `val` and `test`.
+- Cache must include `target_slot_histogram_by_valid_count_{split}.json`.
+- `raw_metrics`, computed metrics, gate reports, and paper tables must use `canonical_grounding_metrics_v1`.
+- Region classification logits must not use `validation_mse_closed_form` affine calibration.
+- `public_alignment_ce` must not duplicate final region CE unless token-level alignment labels are added.
+- The admission matrix in `configs/multimodal_refcoco_operator_admission_matrix.json` must be reported before claiming a RefCOCO primary bank.

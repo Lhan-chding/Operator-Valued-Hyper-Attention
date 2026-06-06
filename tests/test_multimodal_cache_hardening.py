@@ -2045,10 +2045,33 @@ def _write_required_grounding_supervision_shards(root: Path) -> None:
         for relative in (
             f"supervision/alignment_pairs_{split}.parquet",
             f"supervision/bbox_targets_{split}.npy",
+            f"supervision/candidate_region_boxes_{split}.npy",
             f"supervision/region_targets_{split}.npy",
+            f"supervision/target_slot_histogram_by_valid_count_{split}.json",
             f"supervision/corruption_{split}.parquet",
         ):
-            (root / relative).write_text(f"placeholder {relative}\n")
+            if relative.endswith(".json"):
+                (root / relative).write_text(
+                    json.dumps(
+                        {
+                            "audit_name": "target_slot_histogram_by_valid_count",
+                            "sample_count": 1,
+                            "by_valid_count": {
+                                "2": {
+                                    "sample_count": 1,
+                                    "target_slot_counts": [1, 0],
+                                    "expected_per_slot": 0.5,
+                                    "max_deviation": 0.5,
+                                    "max_fraction": 1.0,
+                                }
+                            },
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+            else:
+                (root / relative).write_text(f"placeholder {relative}\n")
 
 
 def _write_minimal_sentiment_cache(

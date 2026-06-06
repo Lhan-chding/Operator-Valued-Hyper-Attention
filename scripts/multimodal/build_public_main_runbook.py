@@ -39,7 +39,7 @@ def main() -> int:
     parser.add_argument("--controlled-report", type=Path, default=DEFAULT_CONTROLLED_REPORT)
     parser.add_argument("--region-config", type=Path, default=DEFAULT_REGION_CONFIG)
     parser.add_argument("--region-task", default="phrase_region_grounding")
-    parser.add_argument("--region-split", default="test")
+    parser.add_argument("--region-split", default="testA")
     parser.add_argument("--region-raw-metrics", type=Path, default=DEFAULT_REGION_RAW_METRICS)
     parser.add_argument("--region-diagnostics", type=Path, default=DEFAULT_REGION_DIAGNOSTICS)
     parser.add_argument("--region-robustness-rows", type=Path, default=DEFAULT_REGION_ROBUSTNESS_ROWS)
@@ -218,9 +218,10 @@ def _validate_training_plan_command(config: Path) -> str:
 
 
 def _validate_cache_command(dataset: str, cache_root: Path, version: str) -> str:
+    splits = "train val testA testB" if dataset == "refcoco" else "train val test"
     return (
         "python scripts/multimodal/validate_cache.py "
-        f"{_q(cache_root)} {_q(dataset)} {_q(version)} --splits train val test"
+        f"{_q(cache_root)} {_q(dataset)} {_q(version)} --splits {splits}"
     )
 
 
@@ -302,12 +303,13 @@ def _topconf_manifest_command(args: argparse.Namespace) -> str:
 
 
 def _cache_target(name: str, cache_root: Path, version: str) -> dict[str, Any]:
+    splits = ["train", "val", "testA", "testB"] if name == "refcoco" else ["train", "val", "test"]
     return {
         "name": name,
         "cache_root": str(cache_root),
         "dataset": name,
         "version": version,
-        "splits": ["train", "val", "test"],
+        "splits": splits,
     }
 
 

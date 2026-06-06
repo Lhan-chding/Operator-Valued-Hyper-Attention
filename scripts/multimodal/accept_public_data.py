@@ -90,8 +90,9 @@ def accept_public_data(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     }
 
     layout = MultimodalCacheLayout(config.cache_root, adapter.name, config.cache_version)
+    cache_splits = _cache_splits_for(adapter.name, manifest.raw_root)
     try:
-        for split in _cache_splits_for(adapter.name):
+        for split in cache_splits:
             adapter.write_cache(manifest, config.cache_root, split, config.cache_version)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _failure(config, phases, phase="cache", errors=[str(exc)])
@@ -101,7 +102,7 @@ def accept_public_data(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "ok": validation.ok,
         "cache_root": str(layout.root),
         "version": config.cache_version,
-        "splits": list(_cache_splits_for(adapter.name)),
+        "splits": list(cache_splits),
         "errors": validation.errors,
         "warnings": validation.warnings,
     }

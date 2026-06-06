@@ -1,0 +1,47 @@
+{
+  "name": "multimodal_refcoco_operator_admission_matrix",
+  "dataset_name": "refcoco",
+  "task_type": "phrase_region_grounding",
+  "cache_version": "v0.1",
+  "cache_root": "data/multimodal_cache",
+  "eval_splits": ["val", "testA", "testB"],
+  "selection_split": "val",
+  "final_report_splits": ["testA", "testB"],
+  "metrics_source": "canonical_grounding_metrics_v1",
+  "seed_policy": {
+    "pilot": [201, 202, 203],
+    "main": [201, 202, 203, 204, 205]
+  },
+  "base_candidate": "PRSO",
+  "composition_mode": "base_plus_residual",
+  "losses_by_stage": {
+    "T0": ["cache_validation"],
+    "T5": ["task_loss", "candidate_individual_loss", "router_marginal_utility", "residual_gate_utility_loss"]
+  },
+  "candidate_sets": [
+    {"name": "PRSO", "candidate_names": ["PRSO"], "residual_candidates": []},
+    {"name": "PRSO_SRO", "candidate_names": ["PRSO", "SRO"], "residual_candidates": ["SRO"]},
+    {"name": "PRSO_TLEO", "candidate_names": ["PRSO", "TLEO"], "residual_candidates": ["TLEO"]},
+    {"name": "PRSO_CATO", "candidate_names": ["PRSO", "CATO"], "residual_candidates": ["CATO"]},
+    {"name": "PRSO_SRO_TLEO", "candidate_names": ["PRSO", "SRO", "TLEO"], "residual_candidates": ["SRO", "TLEO"]},
+    {"name": "PRSO_SRO_CATO", "candidate_names": ["PRSO", "SRO", "CATO"], "residual_candidates": ["SRO", "CATO"]},
+    {
+      "name": "PRSO_SRO_TLEO_CATO",
+      "candidate_names": ["PRSO", "SRO", "TLEO", "CATO"],
+      "residual_candidates": ["SRO", "TLEO", "CATO"]
+    }
+  ],
+  "admission_gates": {
+    "primary_metric": "recall_at_1",
+    "secondary_metrics": ["acc_at_0_5", "mean_iou", "cross_entropy", "mrr"],
+    "operator_must_improve_val": true,
+    "operator_must_not_hurt_existing_bank": true,
+    "require_residual_utility_alignment": true,
+    "reject_router_load_only_evidence": true
+  },
+  "groundingdino_comparison_policy": {
+    "same_candidate_scorer": "proposal-conditioned reference only",
+    "proposal_generator_track": "shared GroundingDINO proposals plus OVHA rerank",
+    "free_box_track": "external detector/reference table, not same-feature baseline"
+  }
+}

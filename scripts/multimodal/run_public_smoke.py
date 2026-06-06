@@ -33,6 +33,7 @@ from moat_ovha_torch.eval.multimodal_statistics import (
     validate_public_summary,
 )
 from moat_ovha_torch.eval.multimodal_diagnostics import summarize_diagnostic_rows
+from moat_ovha_torch.eval.grounding_metrics import METRICS_SOURCE, grounding_candidate_metrics
 from moat_ovha_torch.eval.mosei_standard_metrics import mosei_standard_metrics
 from moat_ovha_torch.eval.multimodal_robustness import summarize_robustness_rows
 from moat_ovha_torch.models.multimodal.baselines import assert_same_feature_baseline_policy
@@ -459,7 +460,7 @@ def _public_loss_components(
         weight = _public_loss_weight(config, name)
         if weight == 0.0:
             continue
-        component = _compute_public_loss_component(name, output, batch)
+        component = _compute_public_loss_component(name, output, batch, config)
         if component is not None:
             components[name] = component * weight
     return components
@@ -469,12 +470,15 @@ def _compute_public_loss_component(
     name: str,
     output: MultimodalOVHAOutput,
     batch: MultimodalEpisodeBatch,
+    config: MultimodalExperimentConfig,
 ) -> torch.Tensor | None:
     if name == "task_loss":
         return _task_loss(output.y_hat, batch)
     if name == "candidate_individual_loss":
         return (output.candidate_values - batch.target_y.unsqueeze(-2)).square().mean()
     if name == "public_alignment_ce":
+        if _is_region_task(config.task_type):
+            return None
         return _public_alignment_ce(output.y_hat, batch)
     if name == "public_contrastive_retrieval":
         return output.y_hat.sum() * 0.0
@@ -1872,6 +1876,7 @@ def _public_smoke_metrics(
     cato_load = _candidate_probability(router_load_by_candidate, "CATO", default=0.0)
     cato_loss = _candidate_loss_value(candidate_loss, "CATO", default=task_loss)
     metrics = {
+        "metrics_source": region_metrics["metrics_source"],
         "acc_at_0_5": region_metrics["acc_at_0_5"],
         "region_recall_at_1": region_metrics["region_recall_at_1"],
         "region_recall_at_5": region_metrics["region_recall_at_5"],
@@ -1890,6 +1895,7 @@ def _public_smoke_metrics(
     required = {name: metrics[name] for name in REGION_TEXT_REQUIRED_PUBLIC_METRICS}
     return {
         **required,
+        "metrics_source": metrics["metrics_source"],
         "region_recall_at_1": metrics["region_recall_at_1"],
         "region_recall_at_5": metrics["region_recall_at_5"],
         "candidate_iou_at_0_5": metrics["candidate_iou_at_0_5"],
@@ -1914,44 +1920,26 @@ def _bounded_score_from_loss(loss: torch.Tensor) -> float:
 
 
 def _region_text_metrics(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> dict[str, float]:
-    iou_metrics = _candidate_box_iou_metrics(prediction, batch)
-    region_targets = batch.supervision.region_targets
-    if region_targets is not None and prediction.shape[-1] > 1:
-        labels = region_targets.to(device=prediction.device, dtype=torch.long)
-        if labels.ndim == 1:
-            labels = labels.unsqueeze(1)
-        if labels.ndim > 2:
-            labels = labels.reshape(labels.shape[0], -1)
-        if labels.shape[1] == 1 and prediction.shape[1] > 1:
-            labels = labels.expand(-1, prediction.shape[1])
-        labels = labels[:, : prediction.shape[1]]
-        valid = batch.target_mask.to(dtype=torch.bool, device=prediction.device)[:, : labels.shape[1]]
-        top1 = prediction[:, : labels.shape[1]].argmax(dim=-1)
-        topk = torch.topk(prediction[:, : labels.shape[1]], k=min(5, prediction.shape[-1]), dim=-1).indices
-        if bool(valid.any()):
-            recall1 = (top1[valid] == labels[valid]).to(dtype=torch.float32).mean()
-            recall5 = (topk[valid] == labels[valid].unsqueeze(-1)).any(dim=-1).to(dtype=torch.float32).mean()
-            return {
-                "acc_at_0_5": iou_metrics["candidate_iou_at_0_5"],
-                "region_recall_at_1": _as_float(recall1),
-                "region_recall_at_5": _as_float(recall5),
-                "candidate_iou_at_0_5": iou_metrics["candidate_iou_at_0_5"],
-                "mean_candidate_iou": iou_metrics["mean_candidate_iou"],
-                "recall_at_1": _as_float(recall1),
-                "recall_at_5": _as_float(recall5),
-                "mean_iou": iou_metrics["mean_candidate_iou"],
-                "phrase_region_topk_accuracy": _as_float(recall1),
-            }
+    metrics = grounding_candidate_metrics(
+        prediction,
+        batch.supervision.region_targets,
+        batch.supervision.candidate_region_boxes,
+        batch.supervision.bbox_targets,
+        batch.target_mask,
+    )
     return {
-        "acc_at_0_5": iou_metrics["candidate_iou_at_0_5"],
-        "region_recall_at_1": 0.0,
-        "region_recall_at_5": 0.0,
-        "candidate_iou_at_0_5": iou_metrics["candidate_iou_at_0_5"],
-        "mean_candidate_iou": iou_metrics["mean_candidate_iou"],
-        "recall_at_1": 0.0,
-        "recall_at_5": 0.0,
-        "mean_iou": iou_metrics["mean_candidate_iou"],
-        "phrase_region_topk_accuracy": 0.0,
+        "metrics_source": METRICS_SOURCE,
+        "acc_at_0_5": float(metrics["acc_at_0_5"]),
+        "region_recall_at_1": float(metrics["recall_at_1"]),
+        "region_recall_at_5": float(metrics["recall_at_5"]),
+        "candidate_iou_at_0_5": float(metrics["acc_at_0_5"]),
+        "mean_candidate_iou": float(metrics["mean_iou"]),
+        "recall_at_1": float(metrics["recall_at_1"]),
+        "recall_at_5": float(metrics["recall_at_5"]),
+        "mean_iou": float(metrics["mean_iou"]),
+        "phrase_region_topk_accuracy": float(metrics["recall_at_1"]),
+        "cross_entropy": float(metrics["cross_entropy"]),
+        "mrr": float(metrics["mrr"]),
     }
 
 
