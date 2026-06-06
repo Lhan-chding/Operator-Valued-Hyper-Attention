@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -65,6 +66,37 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
         self.assertEqual(config.loss_metadata["candidate_individual_loss"]["weight"], 0.0)
         self.assertEqual(config.loss_metadata["val_affine_calibration"]["stage"], "validation_postfit")
 
+    def test_cmu_tanso_no_rceo_selfmm_config_promotes_clean_primary_protocol(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+
+        path = ROOT / "configs" / "multimodal_cmu_mosei_tanso_no_rceo_selfmm_official.json"
+        config = MultimodalExperimentConfig.from_file(path)
+
+        self.assertEqual(config.main_model_name, "ovha_tanso_no_rceo_primary")
+        self.assertEqual(config.candidate_names, ("TANSOBase",))
+        self.assertEqual(config.composition_mode, "tanso_base")
+        self.assertFalse(config.use_evidence_router)
+        self.assertFalse(config.use_reliability_prior)
+        self.assertEqual(config.feature_source, "selfmm_official_unaligned_50")
+        self.assertEqual(config.checkpoint_selection_metric, "mosei_composite")
+        self.assertEqual(
+            config.checkpoint_selection_weights,
+            {
+                "mae": 0.35,
+                "pearson_correlation": 0.25,
+                "acc7": 0.15,
+                "acc5": 0.15,
+                "acc2_excl0": 0.05,
+                "acc2_nonneg": 0.05,
+            },
+        )
+        self.assertEqual(config.lr_schedule, "warmup_cosine")
+        self.assertEqual(config.warmup_steps, 500)
+        self.assertEqual(config.min_lr_ratio, 0.05)
+        self.assertIn("binary_margin_auxiliary", config.losses_by_stage["T5"])
+        self.assertTrue(config.loss_metadata["ordinal_acc5_acc7_auxiliary"]["class_balanced"])
+        self.assertEqual(config.loss_metadata["binary_margin_auxiliary"]["margin"], 0.15)
+
     def test_cmu_tanso_primary_baselines_do_not_inherit_tanso_base_composition(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
         from scripts.multimodal.run_public_smoke import _ovha_composition_kwargs
@@ -125,6 +157,134 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
         self.assertGreater(payload["residual_alignment"], 0.0)
         self.assertGreater(payload["non_interference_delta"], 0.0)
         self.assertIn("paired_bootstrap_p", payload)
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "torch not installed")
+    def test_mosei_composite_selection_and_lr_schedule_helpers_follow_pro_plan(self):
+        import torch
+
+        from scripts.multimodal.run_public_main import _lr_for_step, _mosei_composite_score
+
+        score = _mosei_composite_score(
+            {
+                "mae": 0.56,
+                "pearson_correlation": 0.74,
+                "acc7": 0.52,
+                "acc5": 0.54,
+                "acc2_excl0": 0.84,
+                "acc2_nonneg": 0.82,
+            },
+            {
+                "mae": 0.35,
+                "pearson_correlation": 0.25,
+                "acc7": 0.15,
+                "acc5": 0.15,
+                "acc2_excl0": 0.05,
+                "acc2_nonneg": 0.05,
+            },
+        )
+
+        self.assertAlmostEqual(score, 0.407, places=6)
+        self.assertAlmostEqual(_lr_for_step(250, 0.0003, 500, 12000, 0.05), 0.00015)
+        self.assertAlmostEqual(_lr_for_step(500, 0.0003, 500, 12000, 0.05), 0.0003)
+        self.assertLess(_lr_for_step(12000, 0.0003, 500, 12000, 0.05), 0.00002)
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "torch not installed")
+    def test_metric_aware_calibration_returns_all_required_affine_variants(self):
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_main import _apply_task_calibration, _fit_task_calibrator
+
+        config = MultimodalExperimentConfig.from_file(
+            ROOT / "configs" / "multimodal_cmu_mosei_tanso_no_rceo_selfmm_official.json"
+        )
+        batch = replace(
+            _sentiment_batch(torch),
+            target_y=torch.tensor([[[1.0], [-1.0], [2.0]], [[0.0], [1.0], [-2.0]]]),
+        )
+        prediction = torch.tensor([[[0.5], [-0.4], [1.2]], [[0.1], [0.4], [-1.0]]])
+
+        calibrator = _fit_task_calibrator(config, prediction, batch)
+        self.assertEqual(calibrator["selected"], "composite_affine_calibration")
+        self.assertEqual(
+            set(calibrator["calibrators"]),
+            {"mse_affine_calibration", "huber_affine_calibration", "composite_affine_calibration"},
+        )
+        self.assertIn("validation_metrics", calibrator)
+        calibrated = _apply_task_calibration(prediction, calibrator)
+        self.assertEqual(tuple(calibrated.shape), tuple(prediction.shape))
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "torch not installed")
+    def test_class_balanced_ordinal_and_binary_margin_losses_are_available(self):
+        import torch
+
+        from scripts.multimodal.run_public_smoke import (
+            _binary_margin_auxiliary_loss,
+            _class_balanced_ordinal_ce_from_scalar,
+        )
+
+        batch = replace(
+            _sentiment_batch(torch),
+            target_y=torch.tensor([[[1.0], [-1.0], [0.0]], [[2.0], [-2.0], [1.0]]]),
+        )
+        prediction = torch.tensor([[[0.05], [-0.05], [-0.02]], [[0.2], [-0.2], [0.01]]])
+        binary_loss = _binary_margin_auxiliary_loss(
+            prediction,
+            batch,
+            margin=0.15,
+            targets=("excl0", "nonneg"),
+        )
+        ordinal_loss = _class_balanced_ordinal_ce_from_scalar(
+            prediction[..., 0].reshape(-1),
+            batch.target_y[..., 0].reshape(-1),
+            bins=torch.arange(-3, 4, dtype=torch.float32),
+        )
+
+        self.assertGreater(float(binary_loss.item()), 0.0)
+        self.assertGreater(float(ordinal_loss.item()), 0.0)
+
+    def test_mosei_operator_admission_runner_writes_admitted_bank_and_val_table(self):
+        runner = ROOT / "scripts" / "multimodal" / "run_mosei_operator_admission.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            output_dir = tmp_path / "admission"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(runner),
+                    "--base-config",
+                    str(ROOT / "configs" / "multimodal_cmu_mosei_tanso_no_rceo_selfmm_official.json"),
+                    "--candidate-residual",
+                    "LRIO",
+                    "--base-composite",
+                    "0.407",
+                    "--candidate-composite",
+                    "0.405",
+                    "--candidate-mae",
+                    "0.560",
+                    "--base-mae",
+                    "0.559",
+                    "--candidate-acc7",
+                    "0.522",
+                    "--base-acc7",
+                    "0.523",
+                    "--output-dir",
+                    str(output_dir),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue((output_dir / "admitted_bank.json").exists())
+            self.assertTrue((output_dir / "base_vs_candidate_val_table.csv").exists())
+            payload = json.loads((output_dir / "admitted_bank.json").read_text())
+
+        self.assertEqual(payload["base_model"], "TANSOBase-noRCEO")
+        self.assertEqual(payload["candidate_residuals"], ["LRIO"])
+        self.assertEqual(payload["admitted_residuals"], ["LRIO"])
 
 
 def _sentiment_batch(torch):
