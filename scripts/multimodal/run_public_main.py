@@ -2123,6 +2123,24 @@ def _raw_metric_row(
     diagnostics: Any,
 ) -> dict[str, Any]:
     standard = mosei_standard_metrics(prediction, batch.target_y, batch.target_mask) if _is_sentiment_task(config.task_type) else {}
+    public_metrics = _public_main_metrics(
+        config,
+        batch,
+        prediction=prediction,
+        router_load_by_candidate=router_load_by_candidate,
+        router_entropy=router_entropy,
+        candidate_loss=candidate_loss,
+        diagnostics=diagnostics,
+    )
+    task_loss = float(score)
+    if _is_region_task(config.task_type):
+        metric_name = "acc_at_0_5"
+        primary_score = float(public_metrics[metric_name])
+        higher_is_better = True
+    else:
+        metric_name = "mse_loss" if _is_sentiment_task(config.task_type) else "heldout_task_loss"
+        primary_score = task_loss
+        higher_is_better = False
     row = {
         "artifact_type": "public_main_raw_metric",
         "evidence_scope": "public_main_table",
@@ -2132,11 +2150,12 @@ def _raw_metric_row(
         "stage": "T5_eval",
         "split": batch.split,
         "seed": seed,
-        "metric_name": "mse_loss" if _is_sentiment_task(config.task_type) else "heldout_task_loss",
-        "score": score,
+        "metric_name": metric_name,
+        "score": primary_score,
+        "task_loss": task_loss,
         "mse_loss": standard.get("mse_loss", score),
         "l1_loss": standard.get("l1_loss"),
-        "higher_is_better": False,
+        "higher_is_better": higher_is_better,
         "parameter_count": parameter_count,
         "training_steps": training_steps,
         "frozen_feature_extractor_version": dict(batch.provenance.feature_extractor_version),
@@ -2145,15 +2164,7 @@ def _raw_metric_row(
         "seed_count_rationale": "configured five-seed public main evaluation",
         "model_protocol": model_protocol,
         "same_feature_source": True,
-        "public_metrics": _public_main_metrics(
-            config,
-            batch,
-            prediction=prediction,
-            router_load_by_candidate=router_load_by_candidate,
-            router_entropy=router_entropy,
-            candidate_loss=candidate_loss,
-            diagnostics=diagnostics,
-        ),
+        "public_metrics": public_metrics,
         "public_metrics_scope": "public_main_metrics",
         "raw_metric_path": str(raw_metrics_path),
     }

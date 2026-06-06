@@ -260,6 +260,37 @@ class RefCOCOStrictAuditPlanContracts(unittest.TestCase):
         self.assertIsNone(mean)
         self.assertIsNone(std)
 
+    def test_region_public_main_raw_metric_uses_refcoco_accuracy_not_loss_as_score(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for raw metric checks")
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_main import _ovha_raw_metric_row
+        from scripts.multimodal.run_public_smoke import _task_loss
+
+        batch = _region_batch(torch)
+        output = _minimal_output(torch, batch)
+        config = MultimodalExperimentConfig.from_mapping(_refcoco_config(Path("/tmp/cache")))
+
+        row = _ovha_raw_metric_row(
+            config,
+            batch,
+            output,
+            seed=1,
+            training_steps=10,
+            parameter_count=123,
+            raw_metrics_path=Path("/tmp/raw_metrics.jsonl"),
+            hardware={"accelerator": "cpu", "device": "cpu", "wall_clock_hours": 0.0},
+            model_name="ovha_refcoco_prso_sro_tleo_cato_primary",
+        )
+
+        self.assertEqual(row["metric_name"], "acc_at_0_5")
+        self.assertTrue(row["higher_is_better"])
+        self.assertEqual(row["score"], 1.0)
+        self.assertEqual(row["public_metrics"]["acc_at_0_5"], 1.0)
+        self.assertAlmostEqual(row["task_loss"], float(_task_loss(output.y_hat, batch)), places=6)
+
     def test_region_grounding_metrics_are_canonical_and_fail_without_candidate_boxes(self):
         if not TORCH_AVAILABLE:
             self.skipTest("torch is required for metric checks")
