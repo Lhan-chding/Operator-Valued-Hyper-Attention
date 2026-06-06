@@ -94,9 +94,10 @@ class RefCOCOAdapter:
         root = layout.root
         _ensure_cache_dirs(root)
         _write_common_cache_files(root, manifest, self.name, cache_version, split_source_ids)
-        _write_feature_versions(root, manifest)
+        _write_feature_versions_once(root, manifest)
         _write_split_cache_files(root, manifest, split, split_source_ids[split], records_by_source_id)
-        _write_checksums(root)
+        if _all_declared_split_artifacts_exist(root, tuple(split_source_ids)):
+            _write_checksums(root)
 
     def validate_cache(self, cache_root: Path, cache_version: str | None = None) -> ValidationReport:
         version = cache_version or self.version
@@ -157,6 +158,13 @@ def _write_feature_versions(root: Path, manifest: RawDatasetManifest) -> None:
         baselines[baseline] = dict(reference)
     payload = {"text": text_version, "region": region_version, "baselines": baselines}
     (root / "provenance" / "feature_versions.json").write_text(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def _write_feature_versions_once(root: Path, manifest: RawDatasetManifest) -> None:
+    destination = root / "provenance" / "feature_versions.json"
+    if destination.exists():
+        return
+    _write_feature_versions(root, manifest)
 
 
 def _write_split_cache_files(
@@ -460,6 +468,35 @@ def _write_checksums(root: Path) -> None:
         if path.is_file() and path.name != "checksums.json"
     }
     (root / "checksums.json").write_text(json.dumps(checksums, sort_keys=True) + "\n")
+
+
+def _all_declared_split_artifacts_exist(root: Path, splits: tuple[str, ...]) -> bool:
+    for split in splits:
+        for relative in _declared_split_artifacts(split):
+            if not (root / relative).exists():
+                return False
+    return True
+
+
+def _declared_split_artifacts(split: str) -> tuple[Path, ...]:
+    return (
+        Path("token_fields") / f"text_{split}.npy",
+        Path("token_fields") / f"region_{split}.npy",
+        Path("token_fields") / f"manifest_{split}.json",
+        Path("positions") / f"text_pos_{split}.npy",
+        Path("positions") / f"region_pos_{split}.npy",
+        Path("masks") / f"text_mask_{split}.npy",
+        Path("masks") / f"region_mask_{split}.npy",
+        Path("provenance") / f"source_ids_{split}.txt",
+        Path("provenance") / f"sample_records_{split}.jsonl",
+        Path("provenance") / f"failed_samples_{split}.jsonl",
+        Path("supervision") / f"task_labels_{split}.npy",
+        Path("supervision") / f"alignment_pairs_{split}.parquet",
+        Path("supervision") / f"bbox_targets_{split}.npy",
+        Path("supervision") / f"candidate_region_boxes_{split}.npy",
+        Path("supervision") / f"region_targets_{split}.npy",
+        Path("supervision") / f"corruption_{split}.parquet",
+    )
 
 
 def _read_split_source_ids(path: Path) -> dict[str, list[str]]:

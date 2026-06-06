@@ -100,6 +100,49 @@ class RefCOCOStrictAuditPlanContracts(unittest.TestCase):
         self.assertTrue(torch.allclose(batch.fields["region"].pos, batch.supervision.candidate_region_boxes.new_tensor(region_pos)))
         self.assertEqual(batch.fields["region"].attrs["position_semantics"], "xyxy_cxcywh_area")
 
+    def test_refcoco_candidate_box_upgrade_patches_existing_cache_without_rebuilding_features(self):
+        from argparse import Namespace
+
+        from moat_ovha_torch.data.multimodal.adapters.base import RawDatasetManifest
+        from moat_ovha_torch.data.multimodal.adapters.refcoco import RefCOCOAdapter
+        from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
+        from scripts.multimodal.upgrade_refcoco_candidate_boxes import upgrade_refcoco_candidate_boxes
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / "raw"
+            cache = root / "cache"
+            _write_refcoco_raw(raw)
+            manifest = RawDatasetManifest(
+                dataset_name="refcoco",
+                raw_root=raw,
+                files={
+                    "annotations/instances.json": raw / "annotations" / "instances.json",
+                    "annotations/refs.json": raw / "annotations" / "refs.json",
+                    "features/text_features.npy": raw / "features" / "text_features.npy",
+                    "features/region_features.npy": raw / "features" / "region_features.npy",
+                    "splits.json": raw / "splits.json",
+                },
+            )
+            RefCOCOAdapter().write_cache(manifest, cache, "train", "v0.1")
+            layout = MultimodalCacheLayout(cache, "refcoco", "v0.1")
+            candidate_path = layout.root / "supervision" / "candidate_region_boxes_train.npy"
+            region_pos_path = layout.root / "positions" / "region_pos_train.npy"
+            candidate_path.unlink()
+            np.save(region_pos_path, np.zeros_like(np.load(region_pos_path)))
+
+            payload = upgrade_refcoco_candidate_boxes(
+                Namespace(raw_root=raw, cache_root=cache, dataset_name="refcoco", version="v0.1", splits=["train"])
+            )
+
+            self.assertTrue(payload["ok"])
+            candidate_boxes = np.load(candidate_path)
+            region_pos = np.load(region_pos_path)
+            self.assertEqual(candidate_boxes.shape, (2, 4, 4))
+            self.assertTrue(np.allclose(candidate_boxes[0, 1], [0.3, 0.0, 0.5, 0.2]))
+            self.assertTrue(np.allclose(region_pos[0, 1, :4], candidate_boxes[0, 1]))
+            self.assertTrue(validate_cache_layout(layout, splits=("train",)).ok)
+
     def test_region_task_uses_cross_entropy_iou_metrics_and_no_target_standardization(self):
         if not TORCH_AVAILABLE:
             self.skipTest("torch is required for loss checks")

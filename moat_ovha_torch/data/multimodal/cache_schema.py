@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -441,9 +442,7 @@ def _validate_split_manifest_source_lists(payload: dict[str, Any], errors: list[
             errors.append(f"splits.json {split} source_id entries must be non-empty normalized strings")
             continue
         expected_source_ids = list(expected)
-        duplicate_source_ids = sorted(
-            {source_id for source_id in expected_source_ids if expected_source_ids.count(source_id) > 1}
-        )
+        duplicate_source_ids = sorted(source_id for source_id, count in Counter(expected_source_ids).items() if count > 1)
         for source_id in duplicate_source_ids:
             errors.append(f"splits.json {split} contains duplicate source_id: {source_id}")
         split_source_ids[split] = expected_source_ids
