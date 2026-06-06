@@ -6,7 +6,7 @@ This note collects the current CMU-MOSEI comparison rows that were recomputed wi
 
 ## Protocol Boundary
 
-All rows below are test-split, 5-seed summaries. The metric protocol is the project MOSEI standard recompute path, using the same metric definitions as `scripts/multimodal/recompute_mosei_standard_metrics.py`.
+The main comparison rows below are test-split, 5-seed summaries unless a section explicitly marks a row as a pilot. The metric protocol is the project MOSEI standard recompute path, using the same metric definitions as `scripts/multimodal/recompute_mosei_standard_metrics.py`.
 
 - `acc2_excl0` / `f1_excl0`: binary sentiment after excluding exact-zero labels.
 - `acc2_nonneg` / `f1_nonneg`: binary sentiment with non-negative labels treated as positive.
@@ -123,3 +123,38 @@ For the next OVHA official-split run, write the OVHA records under a sibling rem
 ```
 
 Then compare against the Self-MM official-split summary above, not against the 4,662-sample same-cache row.
+
+## OVHA Official Self-MM Split Pilot
+
+This section records the quick sanity run of the project model on the official Self-MM `unaligned_50.pkl` split/features. It is not a final 5-seed result. Treat it as a pilot for deciding whether to launch the full 50k-step, 5-seed run.
+
+Run setup:
+
+- Date: 2026-06-06
+- Remote repo: `/home/david/work/Operator-Valued-Hyper-Attention`
+- Config: `configs/multimodal_cmu_mosei_tanso_primary_selfmm_official.json`
+- Cache version: `v0.1_selfmm_official`
+- Artifact root: `outputs/multimodal/cmu_mosei_official_split/ovha_tanso_primary_pilot_seed301`
+- Raw metrics: `outputs/multimodal/cmu_mosei_official_split/ovha_tanso_primary_pilot_seed301/raw_metrics.jsonl`
+- Train split: `train`; selection split: `val`; eval split: `test`
+- Seed: `301`
+- Train steps: `3500`
+- Best OVHA checkpoint: step `800`
+- Best validation task loss: `0.412021`
+
+Pilot test metrics versus the Self-MM official fixed-order 5-seed mean:
+
+| Model | MAE ↓ | Δ MAE vs Self-MM ↑ | Corr ↑ | Δ Corr | Acc7 ↑ | Δ Acc7 | Acc5 ↑ | Δ Acc5 | Acc2 excl0 ↑ | Δ Acc2 excl0 | F1 excl0 ↑ | Δ F1 excl0 | Acc2 nonneg ↑ | Δ Acc2 nonneg | F1 nonneg ↑ | Δ F1 nonneg |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ovha_tanso_primary | 0.578809 | -0.008215 | 0.722255 | -0.002109 | 0.511912 | -0.005409 | 0.523503 | -0.005151 | 0.843148 | -0.000220 | 0.842017 | -0.000263 | 0.813479 | -0.001374 | 0.817197 | -0.001317 |
+| ovha_lrio_tanso | 0.562505 | +0.008089 | 0.738477 | +0.014114 | 0.525220 | +0.007899 | 0.537669 | +0.009015 | 0.847826 | +0.004458 | 0.846369 | +0.004089 | 0.814338 | -0.000515 | 0.817862 | -0.000652 |
+| ovha_all_candidates_exploratory | 0.568420 | +0.002174 | 0.730396 | +0.006033 | 0.516849 | -0.000472 | 0.530371 | +0.001717 | 0.835993 | -0.007375 | 0.834439 | -0.007841 | 0.805967 | -0.008886 | 0.809603 | -0.008911 |
+| ovha_no_rceo | 0.562654 | +0.007940 | 0.736323 | +0.011959 | 0.517064 | -0.000258 | 0.530371 | +0.001717 | 0.839296 | -0.004073 | 0.837926 | -0.004353 | 0.811548 | -0.003305 | 0.815019 | -0.003496 |
+| ovha_with_evidence_router | 0.553932 | +0.016662 | 0.745212 | +0.020849 | 0.531445 | +0.014123 | 0.545396 | +0.016742 | 0.845625 | +0.002256 | 0.843995 | +0.001715 | 0.819918 | +0.005065 | 0.822679 | +0.004164 |
+
+Pilot reading:
+
+- `ovha_with_evidence_router` is the strongest 3500-step pilot row. It beats the Self-MM official 5-seed mean on every listed metric.
+- `ovha_lrio_tanso` is also strong on MAE, correlation, Acc7, Acc5, and exclude-zero binary metrics, but is slightly below Self-MM on the nonnegative binary metrics.
+- `ovha_tanso_primary` underperforms Self-MM at 3500 steps, so the evidence-router variant is the better candidate to prioritize for the next official-split run.
+- Because this is a single seed and only 3500 steps, the result is a launch signal, not a final paper-table comparison. The next comparable run should use the same official split/features with 50k steps and seeds `301` to `305`.
