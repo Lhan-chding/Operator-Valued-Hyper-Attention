@@ -20,6 +20,7 @@ All rows below are test-split, 5-seed summaries. The metric protocol is the proj
 | OVHA/TANSO | latest project result, `configs/multimodal_cmu_mosei_tanso_primary_main.json` | 0.671856 | 0.6152 | 0.6785 | 0.4931 | 0.5021 | 0.8045 | 0.8004 | - | - |
 | MULT | external MULT reproduction, standard metric recompute | - | 0.6029 ± 0.0070 | 0.6306 ± 0.0071 | 0.5139 | 0.5281 | 0.7967 | 0.7926 | 0.7922 | 0.7936 |
 | Self-MM fixed-order | same OVHA cached features, non-BERT, official Self-MM repo, `M` head, standard metric recompute | 0.717077 ± 0.006987 | 0.639256 ± 0.004770 | 0.647211 ± 0.003942 | 0.479494 ± 0.004788 | 0.485929 ± 0.005763 | 0.806269 ± 0.002850 | 0.803905 ± 0.003100 | 0.784127 ± 0.004982 | 0.787582 ± 0.003843 |
+| Self-MM official fixed-order | official Self-MM `unaligned_50.pkl` split/features, non-BERT, fixed valid/test order | - | 0.570594 ± 0.003959 | 0.724363 ± 0.004160 | 0.517321 ± 0.002730 | 0.528654 ± 0.003278 | 0.843368 ± 0.004046 | 0.842280 ± 0.003832 | 0.814853 ± 0.011680 | 0.818514 ± 0.009758 |
 
 ## Self-MM Fixed-Order Details
 
@@ -73,3 +74,52 @@ The current fair comparison separates same-cache external reproductions from off
 - The prior Self-MM object/numeric artifacts with shuffled test truths should not be used for order-sensitive comparison. The fixed-order row above supersedes that same-cache Self-MM comparison.
 
 This supports a fair same-cache comparison claim: under the shared CMU-MOSEI cache and shared metric recompute protocol, OVHA/TANSO is stronger than Self-MM fixed-order on the main regression and multiclass sentiment metrics, while Self-MM is marginally stronger on exclude-zero binary classification. The next separate experiment is an official Self-MM BERT/raw-text feature run, which must be reported as a different evidence row rather than merged into the same-cache fixed-order row.
+
+## Official Self-MM Split/Feature Baseline
+
+This row records the separate official Self-MM split/feature run. It must not be merged with the same-cache comparison above because the official Self-MM test split has 4,659 samples, while the project cache comparison uses 4,662 test samples.
+
+Remote official feature source:
+
+- `/home/david/work/external_repros/self_mm_cmu_mosei/data/MOSEI/Processed/unaligned_50.pkl`
+
+Remote numeric artifacts:
+
+- `/home/david/work/external_repros/self_mm_cmu_mosei/results/results/normals/predictions_numeric_fixed_order_official`
+
+Remote unified metric records:
+
+- `/home/david/work/Operator-Valued-Hyper-Attention/outputs/multimodal/cmu_mosei_official_split/self_mm_fixed_order/metrics.jsonl`
+- `/home/david/work/Operator-Valued-Hyper-Attention/outputs/multimodal/cmu_mosei_official_split/self_mm_fixed_order/summary.csv`
+- `/home/david/work/Operator-Valued-Hyper-Attention/outputs/multimodal/cmu_mosei_official_split/self_mm_fixed_order/summary.json`
+
+The official split truth arrays were verified after object-to-numeric conversion:
+
+```text
+selfmm_mosei_seed1111_test_truths.npy shape (4659,) allclose True mismatch_n 0
+selfmm_mosei_seed1112_test_truths.npy shape (4659,) allclose True mismatch_n 0
+selfmm_mosei_seed1113_test_truths.npy shape (4659,) allclose True mismatch_n 0
+selfmm_mosei_seed1114_test_truths.npy shape (4659,) allclose True mismatch_n 0
+selfmm_mosei_seed1115_test_truths.npy shape (4659,) allclose True mismatch_n 0
+```
+
+Official Self-MM fixed-order 5-seed summary:
+
+| Metric | Mean | Std |
+|---|---:|---:|
+| MAE | 0.570594 | 0.003959 |
+| Corr | 0.724363 | 0.004160 |
+| Acc7 | 0.517321 | 0.002730 |
+| Acc5 | 0.528654 | 0.003278 |
+| Acc2 excl0 | 0.843368 | 0.004046 |
+| F1 excl0 | 0.842280 | 0.003832 |
+| Acc2 nonneg | 0.814853 | 0.011680 |
+| F1 nonneg | 0.818514 | 0.009758 |
+
+For the next OVHA official-split run, write the OVHA records under a sibling remote directory, for example:
+
+```text
+/home/david/work/Operator-Valued-Hyper-Attention/outputs/multimodal/cmu_mosei_official_split/ovha_fixed_order/
+```
+
+Then compare against the Self-MM official-split summary above, not against the 4,662-sample same-cache row.
