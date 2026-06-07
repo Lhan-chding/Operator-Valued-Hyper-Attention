@@ -225,6 +225,8 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
 
         self.assertIn("multimodal_cmu_mosei_tanso_mechanism_selfmm_official.json", source)
         self.assertIn("scripts/multimodal/run_public_main.py", source)
+        self.assertIn("CACHE_ROOT", source)
+        self.assertIn("--cache-root", source)
         self.assertIn("--skip-main-model", source)
         self.assertIn("--only-baseline", source)
         self.assertIn("RUN_SCOPE=\"${RUN_SCOPE:-missing_only}\"", source)

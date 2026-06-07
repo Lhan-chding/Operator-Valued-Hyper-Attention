@@ -3,6 +3,7 @@ set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 CONFIG="${CONFIG:-configs/multimodal_cmu_mosei_tanso_mechanism_selfmm_official.json}"
+CACHE_ROOT="${CACHE_ROOT:-}"
 CONTROLLED_REPORT="${CONTROLLED_REPORT:-outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-outputs/multimodal/cmu_mosei_tanso_mechanism_missing_only}"
 DEVICE="${DEVICE:-cuda}"
@@ -20,11 +21,19 @@ RUN_SCOPE="${RUN_SCOPE:-missing_only}"
 ONLY_BASELINES_DEFAULT="raw_tanso_mlp ovha_tanso_no_source_gate ovha_tanso_no_hyper_adapter ovha_tanso_no_operator_memory ovha_tanso_no_gate_aux"
 ONLY_BASELINES="${ONLY_BASELINES:-${ONLY_BASELINES_DEFAULT}}"
 REFERENCE_RAW_METRICS="${REFERENCE_RAW_METRICS:-}"
+SKIP_CACHE_VALIDATION="${SKIP_CACHE_VALIDATION:-0}"
 
 mkdir -p "${ARTIFACT_ROOT}"
 
 RUN_ARGS=()
+CACHE_ARGS=()
 BASELINE_ARRAY=()
+if [[ -n "${CACHE_ROOT}" ]]; then
+  CACHE_ARGS+=(--cache-root "${CACHE_ROOT}")
+fi
+if [[ "${SKIP_CACHE_VALIDATION}" == "1" ]]; then
+  CACHE_ARGS+=(--skip-cache-validation)
+fi
 if [[ "${RUN_SCOPE}" == "full_matrix" ]]; then
   echo "[cmu-mosei-tanso-mechanism] training full proof-plan matrix"
 else
@@ -37,6 +46,7 @@ else
 fi
 
 "${PYTHON_BIN}" scripts/multimodal/run_public_main.py "${CONFIG}" \
+  "${CACHE_ARGS[@]}" \
   --controlled-report "${CONTROLLED_REPORT}" \
   --artifact-root "${ARTIFACT_ROOT}" \
   --train-steps "${TRAIN_STEPS}" \
