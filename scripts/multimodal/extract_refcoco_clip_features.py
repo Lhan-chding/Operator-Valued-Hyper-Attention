@@ -397,7 +397,7 @@ def _extract_region_features(args: argparse.Namespace, samples, image_processor,
                         missing[int(sample["index"])] = True
                     else:
                         images.append(_as_rgb_image(crop, image_module))
-            encoded = image_processor(images=images, return_tensors="pt")
+            encoded = image_processor(images=[_as_rgb_array(image) for image in images], return_tensors="pt")
             encoded = {key: value.to(device) for key, value in encoded.items()}
             features = model.get_image_features(**encoded)
             if args.normalize:
@@ -455,6 +455,11 @@ def _blank_image(image_module):
 
 
 def _as_rgb_image(image: Any, image_module):
+    array = _as_rgb_array(image)
+    return image_module.fromarray(array, mode="RGB")
+
+
+def _as_rgb_array(image: Any) -> np.ndarray:
     if hasattr(image, "convert"):
         image = image.convert("RGB")
     array = np.asarray(image, dtype=np.uint8)
@@ -463,10 +468,10 @@ def _as_rgb_image(image: Any, image_module):
     elif array.ndim == 3 and array.shape[-1] >= 3:
         array = array[..., :3]
     else:
-        return _blank_image(image_module)
+        return np.zeros((224, 224, 3), dtype=np.uint8)
     if array.size == 0 or array.shape[0] <= 0 or array.shape[1] <= 0:
-        return _blank_image(image_module)
-    return image_module.fromarray(np.ascontiguousarray(array), mode="RGB")
+        return np.zeros((224, 224, 3), dtype=np.uint8)
+    return np.ascontiguousarray(array, dtype=np.uint8)
 
 
 def _chunks(values: list[Any], size: int):

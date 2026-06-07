@@ -656,10 +656,13 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
 
         module = importlib.import_module("scripts.multimodal.extract_refcoco_clip_features")
         image = module._as_rgb_image(np.zeros((1, 1, 8), dtype=np.uint8), Image)
+        array = module._as_rgb_array(np.zeros((1, 1, 8), dtype=np.uint8))
 
         self.assertEqual(image.mode, "RGB")
         self.assertEqual(image.size, (1, 1))
         self.assertEqual(np.asarray(image).shape, (1, 1, 3))
+        self.assertEqual(array.shape, (1, 1, 3))
+        self.assertTrue(array.flags["C_CONTIGUOUS"])
 
     def test_align_refcoco_stage_features_cli_reorders_feature_banks_by_stage_splits(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
