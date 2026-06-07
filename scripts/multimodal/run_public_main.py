@@ -1478,14 +1478,15 @@ def _fit_affine_huber_calibrator(
     a = torch.nn.Parameter(torch.ones((), dtype=torch.float64, device=pred.device))
     b = torch.nn.Parameter(torch.zeros((), dtype=torch.float64, device=pred.device))
     optimizer = torch.optim.Adam([a, b], lr=float(lr))
-    for _ in range(max(1, int(steps))):
-        optimizer.zero_grad(set_to_none=True)
-        loss = torch.nn.functional.smooth_l1_loss(a * pred + b, truth)
-        loss.backward()
-        optimizer.step()
-        with torch.no_grad():
-            a.clamp_(-5.0, 5.0)
-            b.clamp_(-5.0, 5.0)
+    with torch.enable_grad():
+        for _ in range(max(1, int(steps))):
+            optimizer.zero_grad(set_to_none=True)
+            loss = torch.nn.functional.smooth_l1_loss(a * pred + b, truth)
+            loss.backward()
+            optimizer.step()
+            with torch.no_grad():
+                a.clamp_(-5.0, 5.0)
+                b.clamp_(-5.0, 5.0)
     return {
         "a": float(a.detach().cpu().item()),
         "b": float(b.detach().cpu().item()),

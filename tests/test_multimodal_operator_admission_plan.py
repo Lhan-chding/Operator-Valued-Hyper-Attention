@@ -216,6 +216,28 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
         self.assertEqual(tuple(calibrated.shape), tuple(prediction.shape))
 
     @unittest.skipUnless(TORCH_AVAILABLE, "torch not installed")
+    def test_metric_aware_calibration_can_fit_inside_no_grad_evaluation_block(self):
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_main import _fit_task_calibrator
+
+        config = MultimodalExperimentConfig.from_file(
+            ROOT / "configs" / "multimodal_cmu_mosei_tanso_no_rceo_selfmm_official.json"
+        )
+        batch = replace(
+            _sentiment_batch(torch),
+            target_y=torch.tensor([[[1.0], [-1.0], [2.0]], [[0.0], [1.0], [-2.0]]]),
+        )
+        prediction = torch.tensor([[[0.5], [-0.4], [1.2]], [[0.1], [0.4], [-1.0]]])
+
+        with torch.no_grad():
+            calibrator = _fit_task_calibrator(config, prediction, batch)
+
+        self.assertEqual(calibrator["selected"], "composite_affine_calibration")
+        self.assertEqual(calibrator["calibrators"]["huber_affine_calibration"]["objective"], "validation_huber_affine")
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "torch not installed")
     def test_class_balanced_ordinal_and_binary_margin_losses_are_available(self):
         import torch
 
