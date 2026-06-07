@@ -193,3 +193,70 @@ Run setup:
 - `spo_only` is roughly tied on correlation but below Self-MM on MAE and classification metrics, so the gain is not coming from the SPO path alone.
 - `text_only` and `vision_only` are sanity baselines and are clearly below the multimodal rows.
 - This supports a fair official-split claim that OVHA improves the main regression and multiclass sentiment metrics over the fixed-order Self-MM non-BERT baseline at 4000 steps, but it should not be phrased as a complete win across all MOSEI metrics.
+
+## EMOE Fair Precomputed-BERT-Text Run
+
+This section records an external EMOE training run on the same official Self-MM MOSEI pkl and the same precomputed 768-dimensional BERT text features used by the fair feature-matched comparison. This is the appropriate row for a fair training-metric comparison under the shared pkl feature protocol.
+
+Run setup:
+
+- Date: 2026-06-07
+- Remote repo: `/home/david/work/external_repros/emoe_cmu_mosei`
+- Upstream code target: `https://github.com/fuyyyyy/EMOE`
+- Data source: `/home/david/work/external_repros/self_mm_cmu_mosei/data/MOSEI/Processed/unaligned_50.pkl`
+- Result root: `result/emoe_mosei_5seed`
+- Metrics: `result/emoe_mosei_5seed/metrics.jsonl`
+- Log: `result/emoe_mosei_5seed/train_precomputed_bert_text.log`
+- Prediction artifacts: `result/emoe_mosei_5seed/predictions_numeric/`
+- Runtime environment: `/home/david/work/external_repros/mult_cmu_mosei/.venv-mult`
+- Runtime versions observed: PyTorch `2.2.2+cu121`; Transformers `4.30.2`
+- Seeds: `1111`, `1112`, `1113`, `1114`, `1115`
+- Test samples: `4659`
+
+The official pkl text fields were inspected before the run:
+
+```text
+train text      (16326, 50, 768) float32
+train text_bert (16326, 3, 50) int64
+valid text      (1871, 50, 768) float32
+valid text_bert (1871, 3, 50) int64
+test text       (4659, 50, 768) float32
+test text_bert  (4659, 3, 50) int64
+```
+
+Feature protocol:
+
+- `use_bert=false` and `use_finetune=false`, so the run reads `data[split]["text"]` directly.
+- `feature_dims[0]=768` to match the precomputed BERT-text feature dimension.
+- The pkl's `text` field already contains downloaded/precomputed 768-dimensional BERT text features, so the run does not regenerate text features online.
+- The DataLoader was patched to shuffle only train, not valid/test, to keep saved test predictions order-stable.
+- A local run script, `run_mosei_emoe_5seed.py`, was used because upstream `train.py` defaults to MOSI and does not save numeric prediction/truth artifacts.
+
+Per-seed test metrics:
+
+| Seed | MAE ↓ | Corr ↑ | Acc7 ↑ | Acc5 ↑ | Acc2 excl0 ↑ | F1 excl0 ↑ | Acc2 nonneg ↑ | F1 nonneg ↑ |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1111 | 0.588121 | 0.710483 | 0.500966 | 0.514917 | 0.832691 | 0.832537 | 0.794376 | 0.800282 |
+| 1112 | 0.581926 | 0.724158 | 0.512342 | 0.525435 | 0.813704 | 0.815840 | 0.748873 | 0.759815 |
+| 1113 | 0.577864 | 0.717914 | 0.512771 | 0.528654 | 0.839571 | 0.837215 | 0.811977 | 0.814445 |
+| 1114 | 0.579724 | 0.719961 | 0.511912 | 0.529298 | 0.843974 | 0.843938 | 0.800601 | 0.806583 |
+| 1115 | 0.590436 | 0.711857 | 0.499893 | 0.513200 | 0.829939 | 0.827957 | 0.805108 | 0.808112 |
+
+5-seed summary:
+
+| Metric | Mean | Std |
+|---|---:|---:|
+| MAE | 0.583614 | 0.005429 |
+| Corr | 0.716875 | 0.005694 |
+| Acc7 | 0.507577 | 0.006543 |
+| Acc5 | 0.522301 | 0.007689 |
+| Acc2 excl0 | 0.831976 | 0.011621 |
+| F1 excl0 | 0.831497 | 0.010562 |
+| Acc2 nonneg | 0.792187 | 0.025051 |
+| F1 nonneg | 0.797847 | 0.021849 |
+
+EMOE fair-run reading:
+
+- This EMOE fair precomputed-BERT-text run is below both the Self-MM official fixed-order baseline and the OVHA 5-seed 4000-step rows on the main metrics.
+- This is the fair comparison row to use when comparing models trained on the same official pkl, same 4,659-sample test split, same precomputed BERT text features, and stable test ordering.
+- Paper-reported SOTA numbers that use different text-encoding or fine-tuning protocols should be kept in a separate reported-results table rather than mixed into this fair feature-matched table.
