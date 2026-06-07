@@ -255,6 +255,21 @@ Per-seed test metrics:
 | Acc2 nonneg | 0.792187 | 0.025051 |
 | F1 nonneg | 0.797847 | 0.021849 |
 
+Fair precomputed-BERT-text comparison table:
+
+| Model | Role | MAE ↓ | Corr ↑ | Acc7 ↑ | Acc5 ↑ | Acc2 excl0 ↑ | F1 excl0 ↑ | Acc2 nonneg ↑ | F1 nonneg ↑ |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Self-MM official fixed-order | external baseline | 0.570594 ± 0.003959 | 0.724363 ± 0.004160 | 0.517321 ± 0.002730 | 0.528654 ± 0.003278 | 0.843368 ± 0.004046 | 0.842280 ± 0.003832 | 0.814853 ± 0.011680 | 0.818514 ± 0.009758 |
+| EMOE fair precomputed-BERT-text | external SOTA architecture under shared feature protocol | 0.583614 ± 0.005429 | 0.716875 ± 0.005694 | 0.507577 ± 0.006543 | 0.522301 ± 0.007689 | 0.831976 ± 0.011621 | 0.831497 ± 0.010562 | 0.792187 ± 0.025051 | 0.797847 ± 0.021849 |
+| OVHA/TANSO primary | ours | 0.562936 ± 0.003907 | 0.740043 ± 0.002928 | 0.520369 ± 0.003489 | 0.533419 ± 0.004085 | 0.842653 ± 0.002090 | 0.841717 ± 0.002345 | 0.809101 ± 0.006159 | 0.813377 ± 0.005070 |
+| OVHA with evidence router | ours, strongest row | 0.561342 ± 0.004430 | 0.741131 ± 0.004057 | 0.523417 ± 0.006274 | 0.536510 ± 0.006669 | 0.843919 ± 0.002144 | 0.843007 ± 0.001976 | 0.810346 ± 0.007118 | 0.814595 ± 0.005761 |
+
+Reading of the fair precomputed-BERT-text comparison:
+
+- `OVHA with evidence router` is the best row on MAE, Pearson correlation, Acc7, Acc5, Acc2 excl0, and F1 excl0.
+- `Self-MM official fixed-order` remains strongest on the nonnegative binary metrics.
+- `EMOE fair precomputed-BERT-text` is below both OVHA rows and the Self-MM row under this shared feature protocol.
+
 EMOE fair-run reading:
 
 - This EMOE fair precomputed-BERT-text run is below both the Self-MM official fixed-order baseline and the OVHA 5-seed 4000-step rows on the main metrics.
