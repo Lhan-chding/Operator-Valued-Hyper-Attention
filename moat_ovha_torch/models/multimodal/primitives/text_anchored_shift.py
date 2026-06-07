@@ -313,8 +313,13 @@ def _temporal_lag_attention(
     weights = torch.softmax(scores.flatten(start_dim=2), dim=-1).view_as(scores)
     weights = torch.where(valid, weights, torch.zeros_like(weights))
     weights = weights / weights.sum(dim=(2, 3), keepdim=True).clamp_min(1e-12)
-    attended = (weights.unsqueeze(-1) * source_value[:, None, :, None, :]).sum(dim=(2, 3))
+    attended = _temporal_weighted_source_sum(weights, source_value)
     entropy = -(weights * weights.clamp_min(1e-12).log()).sum(dim=(2, 3)).mean()
     lag_load = weights.sum(dim=(0, 1, 2))
     lag_load = lag_load / lag_load.sum().clamp_min(1e-12)
     return attended, entropy, {f"lag_{index}": lag_load[index] for index in range(int(lag_load.shape[0]))}
+
+
+def _temporal_weighted_source_sum(weights: torch.Tensor, source_value: torch.Tensor) -> torch.Tensor:
+    source_weights = weights.sum(dim=-1)
+    return torch.bmm(source_weights, source_value)

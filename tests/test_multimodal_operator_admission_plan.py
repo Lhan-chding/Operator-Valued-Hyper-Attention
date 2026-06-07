@@ -53,6 +53,22 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
         self.assertEqual(output.diagnostics["composition"]["residual_candidates"], ("TANSOShift",))
         self.assertEqual(tuple(output.y_hat.shape), tuple(batch.target_y.shape))
 
+    @unittest.skipUnless(TORCH_AVAILABLE, "torch not installed")
+    def test_temporal_lag_attention_weighted_sum_matches_naive_broadcast(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.primitives.text_anchored_shift import _temporal_weighted_source_sum
+
+        generator = torch.Generator().manual_seed(17)
+        weights = torch.rand(2, 3, 4, 5, generator=generator)
+        weights = weights / weights.sum(dim=(2, 3), keepdim=True).clamp_min(1e-12)
+        source_value = torch.randn(2, 4, 6, generator=generator)
+
+        expected = (weights.unsqueeze(-1) * source_value[:, None, :, None, :]).sum(dim=(2, 3))
+        actual = _temporal_weighted_source_sum(weights, source_value)
+
+        self.assertTrue(torch.allclose(actual, expected, atol=1e-6))
+
     def test_cmu_tanso_primary_config_encodes_five_seed_official_protocol(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
 
