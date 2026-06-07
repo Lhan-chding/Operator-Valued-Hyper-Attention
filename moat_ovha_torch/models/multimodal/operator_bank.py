@@ -54,8 +54,10 @@ def make_candidate_bank(
     output_dim: int,
     candidate_names: tuple[str, ...] = MULTIMODAL_CANDIDATE_NAMES,
     lrio_pairs: tuple[tuple[str, str], ...] | None = None,
+    candidate_options: dict[str, dict[str, object]] | None = None,
 ) -> nn.ModuleDict:
     assert_candidate_names(candidate_names)
+    candidate_options = candidate_options or {}
     modules = {}
     for name in candidate_names:
         if name == "TLEO":
@@ -71,11 +73,11 @@ def make_candidate_bank(
         elif name == "CATO":
             modules[name] = CATOPrimitive(d_model, output_dim)
         elif name == "TANSO":
-            modules[name] = TANSOPrimitive(d_model, output_dim, role="shift", candidate_name=name)
+            modules[name] = TANSOPrimitive(d_model, output_dim, role="shift", candidate_name=name, **candidate_options.get(name, {}))
         elif name == "TANSOBase":
-            modules[name] = TANSOPrimitive(d_model, output_dim, role="base", candidate_name=name)
+            modules[name] = TANSOPrimitive(d_model, output_dim, role="base", candidate_name=name, **candidate_options.get(name, {}))
         elif name == "TANSOShift":
-            modules[name] = TANSOPrimitive(d_model, output_dim, role="shift", candidate_name=name)
+            modules[name] = TANSOPrimitive(d_model, output_dim, role="shift", candidate_name=name, **candidate_options.get(name, {}))
     return nn.ModuleDict(modules)
 
 

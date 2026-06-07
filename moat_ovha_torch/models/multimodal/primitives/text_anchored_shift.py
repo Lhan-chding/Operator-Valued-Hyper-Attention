@@ -16,13 +16,21 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
         sources: tuple[str, ...] = ("audio", "vision"),
         role: str = "shift",
         candidate_name: str = "TANSO",
+        source_gate_mode: str = "learned",
+        use_operator_memory: bool = True,
+        use_hyper_adapter: bool = True,
     ):
         super().__init__()
         if role not in {"base", "shift"}:
             raise ValueError("TANSO role must be base or shift")
+        if source_gate_mode not in {"learned", "uniform_nonverbal"}:
+            raise ValueError("TANSO source_gate_mode must be learned or uniform_nonverbal")
         self.name = str(candidate_name)
         self.role = role
         self.sources = tuple(str(source) for source in sources)
+        self.source_gate_mode = str(source_gate_mode)
+        self.use_operator_memory = bool(use_operator_memory)
+        self.use_hyper_adapter = bool(use_hyper_adapter)
         self.anchor_query_proj = nn.Linear(d_model, d_model)
         self.text_key_proj = nn.Linear(d_model, d_model)
         self.text_value_proj = nn.Linear(d_model, d_model)
@@ -38,6 +46,7 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
         self._small_initialize_residual_paths()
 
     def forward(self, batch, memory_slot: torch.Tensor, evidence, params: dict[str, torch.Tensor], output_dim: int) -> CandidateOutput:
+        params = self._effective_params(params)
         text_tokens = evidence.field_features.get("text")
         if text_tokens is None or "text" not in batch.fields:
             text_anchor = evidence.query_features
@@ -69,7 +78,10 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
         source_lag_load = {}
         source_specific_raw_delta = {}
         source_valid_by_name = {}
-        memory = self.memory_proj(memory_slot.mean(dim=1)).unsqueeze(1)
+        if self.use_operator_memory:
+            memory = self.memory_proj(memory_slot.mean(dim=1)).unsqueeze(1)
+        else:
+            memory = torch.zeros_like(evidence.query_features)
         for source in self.sources:
             tokens = evidence.field_features.get(source)
             if tokens is None or source not in batch.fields:
@@ -135,11 +147,16 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
             dim=-1,
         )[:, None, :]
         gate_logits = torch.cat(source_gate_logits, dim=-1)
-        gate_logits = gate_logits.masked_fill(~valid_stack, torch.finfo(gate_logits.dtype).min)
-        gate = torch.softmax(gate_logits, dim=-1)
-        gate = torch.where(valid_stack, gate, torch.zeros_like(gate))
-        gate = gate / gate.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-        gate = gate.unsqueeze(-1)
+        if self.source_gate_mode == "uniform_nonverbal":
+            gate = _uniform_nonverbal_gate(valid_stack, source_names, gate_logits)
+            fixed_source_gate_applied = torch.ones((), dtype=gate_logits.dtype, device=gate_logits.device)
+        else:
+            gate_logits = gate_logits.masked_fill(~valid_stack, torch.finfo(gate_logits.dtype).min)
+            gate = torch.softmax(gate_logits, dim=-1)
+            gate = torch.where(valid_stack, gate, torch.zeros_like(gate))
+            gate = gate / gate.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+            gate = gate.unsqueeze(-1)
+            fixed_source_gate_applied = torch.zeros((), dtype=gate_logits.dtype, device=gate_logits.device)
         shift_feature = (gate * shift_stack).sum(dim=-2)
         source_load = {source: gate[..., index, :].mean() for index, source in enumerate(source_names)}
         source_gate_tensor = {source: gate[..., index, 0] for index, source in enumerate(source_names)}
@@ -168,6 +185,10 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
             "candidate": self.name,
             "tanso_version": "v2_temporal_lag_residual",
             "tanso_source_gate_version": "v3_null_source",
+            "source_gate_mode": self.source_gate_mode,
+            "fixed_source_gate_applied": fixed_source_gate_applied,
+            "operator_memory_enabled": self.use_operator_memory,
+            "hyper_adapter_enabled": self.use_hyper_adapter,
             "semantic_role": semantic_role,
             "null_source_enabled": True,
             "text_anchor_entropy": text_entropy,
@@ -196,6 +217,18 @@ class TANSOPrimitive(MultimodalCandidatePrimitive):
         nn.init.normal_(self.head.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(self.head.bias)
 
+    def _effective_params(self, params: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        if self.use_hyper_adapter:
+            return params
+        fixed = dict(params)
+        for key in ("audio_shift_scale", "vision_shift_scale", "shift_temperature", "lag_width", "temporal_temperature", "scale"):
+            if key in fixed:
+                fixed[key] = torch.ones_like(fixed[key])
+        for key in ("audio_lag_logits", "vision_lag_logits", "bias"):
+            if key in fixed:
+                fixed[key] = torch.zeros_like(fixed[key])
+        return fixed
+
 
 def _valid_source_count_by_sample(source_valid_by_name: dict[str, torch.Tensor], value_reference: torch.Tensor) -> torch.Tensor:
     if not source_valid_by_name:
@@ -204,6 +237,23 @@ def _valid_source_count_by_sample(source_valid_by_name: dict[str, torch.Tensor],
         [valid.to(dtype=value_reference.dtype, device=value_reference.device) for valid in source_valid_by_name.values()],
         dim=-1,
     ).sum(dim=-1)
+
+
+def _uniform_nonverbal_gate(valid_stack: torch.Tensor, source_names: list[str], gate_logits: torch.Tensor) -> torch.Tensor:
+    valid = valid_stack.expand_as(gate_logits).to(dtype=torch.bool, device=gate_logits.device)
+    non_null = torch.as_tensor(
+        [source != "null" for source in source_names],
+        dtype=torch.bool,
+        device=gate_logits.device,
+    ).view(1, 1, -1)
+    non_null_valid = valid & non_null
+    weights = non_null_valid.to(dtype=gate_logits.dtype)
+    denom = weights.sum(dim=-1, keepdim=True)
+    null_index = source_names.index("null")
+    fallback = torch.zeros_like(weights)
+    fallback[..., null_index] = 1.0
+    gate = torch.where(denom > 0.0, weights / denom.clamp_min(1.0), fallback)
+    return gate.unsqueeze(-1)
 
 
 def _masked_attention_with_weights(

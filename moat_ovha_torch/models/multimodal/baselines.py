@@ -75,6 +75,13 @@ SENTIMENT_EMOTION_OVHA_ABLATIONS = (
     "ovha_no_rceo",
     "ovha_with_evidence_router",
 )
+SENTIMENT_EMOTION_MECHANISM_BASELINES = (
+    "raw_tanso_mlp",
+    "ovha_tanso_no_source_gate",
+    "ovha_tanso_no_hyper_adapter",
+    "ovha_tanso_no_operator_memory",
+    "ovha_tanso_no_gate_aux",
+)
 
 REGION_TEXT_EXTERNAL_REFERENCES = (
     "MDETR",
@@ -137,6 +144,11 @@ def ovha_ablation_names_for_task(task_type: str) -> tuple[str, ...]:
 
 
 def baseline_protocol_for_name(task_type: str, baseline_name: str) -> str:
+    if task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
+        if baseline_name in SENTIMENT_EMOTION_MECHANISM_BASELINES:
+            if baseline_name == "raw_tanso_mlp":
+                return "same_feature_mechanism_baseline"
+            return "internal_ovha_mechanism_ablation"
     if baseline_name in same_feature_probe_names_for_task(task_type):
         return "same_feature_sanity_probe"
     if task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:

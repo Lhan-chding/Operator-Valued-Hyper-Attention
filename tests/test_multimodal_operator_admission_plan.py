@@ -279,7 +279,7 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
             },
         )
 
-        self.assertAlmostEqual(score, 0.407, places=6)
+        self.assertAlmostEqual(score, 0.419, places=6)
         self.assertAlmostEqual(_lr_for_step(250, 0.0003, 500, 12000, 0.05), 0.00015)
         self.assertAlmostEqual(_lr_for_step(500, 0.0003, 500, 12000, 0.05), 0.0003)
         self.assertLess(_lr_for_step(12000, 0.0003, 500, 12000, 0.05), 0.00002)

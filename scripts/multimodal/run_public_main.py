@@ -1883,6 +1883,98 @@ def _baseline_rows(
     per_sample_prediction_rows: list[dict[str, Any]] = []
     for baseline_name in config.baseline_names:
         baseline_protocol = baseline_protocol_for_name(config.task_type, str(baseline_name))
+        if _is_tanso_raw_mlp_baseline(config.task_type, str(baseline_name)):
+            model, summary = _train_raw_tanso_mlp_baseline(
+                config,
+                str(baseline_name),
+                train_batch=train_batch,
+                selection_batch=selection_batch,
+                seed=seed,
+                train_steps=baseline_train_steps,
+                learning_rate=learning_rate,
+                progress_interval=progress_interval,
+                batch_size=batch_size,
+                eval_interval=eval_interval,
+                early_stopping_patience=early_stopping_patience,
+                weight_decay=weight_decay,
+                device=device,
+                d_model=d_model,
+            )
+            target_mean = summary.pop("_target_mean")
+            target_std = summary.pop("_target_std")
+            with torch.no_grad():
+                selection_batch_std = _standardize_batch_targets(selection_batch, target_mean, target_std)
+                selection_prediction = _destandardize_prediction(
+                    _raw_tanso_mlp_prediction(model, _move_batch_to_device(selection_batch_std, device)),
+                    target_mean.to(device=device) if target_mean is not None else None,
+                    target_std.to(device=device) if target_std is not None else None,
+                )
+                calibrator = _fit_task_calibrator(config, selection_prediction.detach().cpu(), selection_batch)
+                eval_batch_std = _standardize_batch_targets(eval_batch, target_mean, target_std)
+                pre_calibration_prediction = _destandardize_prediction(
+                    _raw_tanso_mlp_prediction(model, _move_batch_to_device(eval_batch_std, device)),
+                    target_mean.to(device=device) if target_mean is not None else None,
+                    target_std.to(device=device) if target_std is not None else None,
+                )
+                eval_prediction = _apply_task_calibration(pre_calibration_prediction, calibrator)
+                loss = _task_loss(eval_prediction, _move_batch_to_device(eval_batch, device))
+                eval_prediction = eval_prediction.detach().cpu()
+                calibration_diagnostics = _task_calibration_diagnostics(
+                    config,
+                    eval_batch,
+                    pre_prediction=pre_calibration_prediction.detach().cpu(),
+                    post_prediction=eval_prediction,
+                    calibrator=calibrator,
+                )
+            router_load = _uniform_candidate_load(config.candidate_names)
+            rows.append(
+                _raw_metric_row(
+                    config,
+                    eval_batch,
+                    model_name=str(baseline_name),
+                    seed=seed,
+                    prediction=eval_prediction,
+                    score=_as_float(loss),
+                    training_steps=baseline_train_steps,
+                    parameter_count=_linear_parameter_count(model),
+                    raw_metrics_path=raw_metrics_path,
+                    hardware=hardware,
+                    router_load_by_candidate=router_load,
+                    router_entropy=torch.zeros((), dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device),
+                    candidate_loss={candidate: loss for candidate in config.candidate_names},
+                    diagnostics={
+                        **calibration_diagnostics,
+                        "baseline": summary,
+                        "mechanism_baseline": "raw_tanso_mlp_no_operator_memory_no_hyper_adapter_no_admission",
+                    },
+                    model_protocol=f"{baseline_protocol}_public_main_v1",
+                )
+            )
+            per_sample_prediction_rows.extend(
+                _per_sample_prediction_rows(
+                    config,
+                    eval_batch,
+                    None,
+                    model_name=str(baseline_name),
+                    seed=seed,
+                    prediction=eval_prediction,
+                )
+            )
+            robustness_rows.extend(
+                _raw_tanso_mlp_robustness_rows(
+                    config,
+                    baseline_name=str(baseline_name),
+                    model=model,
+                    batch=eval_batch,
+                    seed=seed,
+                    raw_metric_path=raw_metrics_path,
+                    device=device,
+                    target_mean=target_mean,
+                    target_std=target_std,
+                )
+            )
+            summaries.append({**summary, "model": str(baseline_name)})
+            continue
         if _is_region_task(config.task_type) and _is_region_rule_baseline(str(baseline_name)):
             eval_prediction, summary = _region_rule_baseline_prediction(
                 str(baseline_name),
@@ -1996,7 +2088,7 @@ def _baseline_rows(
             )
             summaries.append({**summary, "model": str(baseline_name)})
             continue
-        if str(baseline_name) in ovha_ablation_names_for_task(config.task_type):
+        if str(baseline_name) in ovha_ablation_names_for_task(config.task_type) or _is_tanso_mechanism_ovha_ablation(config.task_type, str(baseline_name)):
             model, eval_output, summary = _train_ovha_ablation(
                 config,
                 str(baseline_name),
@@ -2172,6 +2264,7 @@ def _train_ovha_ablation(
     device: torch.device | None = None,
 ) -> tuple[MultimodalOVHA, MultimodalOVHAOutput, dict[str, Any]]:
     device = device or train_batch.target_y.device
+    train_config = _config_for_ovha_ablation(config, baseline_name)
     selection_batch = selection_batch or train_batch
     target_mean, target_std = _target_standardizer(train_batch)
     fit_batch_std = _standardize_batch_targets(train_batch, target_mean, target_std)
@@ -2179,12 +2272,12 @@ def _train_ovha_ablation(
     eval_batch_std = _standardize_batch_targets(eval_batch, target_mean, target_std)
     field_dims = {name: int(field.x.shape[-1]) for name, field in train_batch.fields.items()}
     torch.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name))
-    variant_kwargs = _ovha_variant_kwargs(baseline_name, config.candidate_pool_names)
-    active_candidate_names = variant_kwargs.pop("candidate_names", config.candidate_names)
+    variant_kwargs = _ovha_variant_kwargs(baseline_name, train_config.candidate_pool_names)
+    active_candidate_names = variant_kwargs.pop("candidate_names", train_config.candidate_names)
     model_kwargs = {
-        "use_evidence_router": config.use_evidence_router,
-        "use_reliability_prior": config.use_reliability_prior,
-        **_ovha_composition_kwargs(config, active_candidate_names),
+        "use_evidence_router": train_config.use_evidence_router,
+        "use_reliability_prior": train_config.use_reliability_prior,
+        **_ovha_composition_kwargs(train_config, active_candidate_names),
         **variant_kwargs,
     }
     model = MultimodalOVHA(
@@ -2194,12 +2287,12 @@ def _train_ovha_ablation(
         d_model=d_model,
         memory_tokens=memory_tokens,
         candidate_names=active_candidate_names,
-        lrio_pairs=config.lrio_pairs or None,
+        lrio_pairs=train_config.lrio_pairs or None,
         **model_kwargs,
     ).to(device)
     initial = _parameter_vector(model)
     fit_summary = _fit_public_ovha_model(
-        config,
+        train_config,
         model,
         fit_batch_std=fit_batch_std,
         val_batch_std=val_batch_std,
@@ -2226,14 +2319,14 @@ def _train_ovha_ablation(
             target_mean,
             target_std,
         )
-        calibrator = _fit_task_calibrator(config, val_output.y_hat.detach().cpu(), selection_batch)
+        calibrator = _fit_task_calibrator(train_config, val_output.y_hat.detach().cpu(), selection_batch)
         eval_output = _destandardize_output(
             _predict_ovha_on_device(model, eval_batch_std, device, batch_size=inference_batch_size),
             target_mean,
             target_std,
         )
         eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std, eval_batch)
-        eval_output = _apply_task_calibration_to_output(eval_output, calibrator, config, eval_batch)
+        eval_output = _apply_task_calibration_to_output(eval_output, calibrator, train_config, eval_batch)
     return model, eval_output, {
         "baseline_optimizer_steps": int(fit_summary["optimizer_steps"]),
         "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial).item()),
@@ -2257,6 +2350,15 @@ def _train_ovha_ablation(
     }
 
 
+def _config_for_ovha_ablation(config: MultimodalExperimentConfig, baseline_name: str) -> MultimodalExperimentConfig:
+    if baseline_name != "ovha_tanso_no_gate_aux":
+        return config
+    loss_metadata = {key: dict(value) for key, value in (config.loss_metadata or {}).items()}
+    loss_metadata.setdefault("tanso_source_oracle_gate_loss", {})["weight"] = 0.0
+    loss_metadata["tanso_source_oracle_gate_loss"]["diagnostic_only"] = True
+    return replace(config, loss_metadata=loss_metadata)
+
+
 def _ovha_variant_kwargs(
     baseline_name: str,
     active_candidate_names: tuple[str, ...] = ("TLEO", "SPO", "LRIO", "CATO"),
@@ -2267,6 +2369,26 @@ def _ovha_variant_kwargs(
         return {"use_evidence_router": False}
     if baseline_name == "ovha_with_evidence_router":
         return {"use_evidence_router": True}
+    if baseline_name == "ovha_tanso_no_source_gate":
+        return {
+            "candidate_names": _require_candidates(active_candidate_names, ("TANSOBase",)),
+            "composition_mode": "tanso_base",
+            "candidate_options": {"TANSOBase": {"source_gate_mode": "uniform_nonverbal"}},
+        }
+    if baseline_name == "ovha_tanso_no_hyper_adapter":
+        return {
+            "candidate_names": _require_candidates(active_candidate_names, ("TANSOBase",)),
+            "composition_mode": "tanso_base",
+            "candidate_options": {"TANSOBase": {"use_hyper_adapter": False}},
+        }
+    if baseline_name == "ovha_tanso_no_operator_memory":
+        return {
+            "candidate_names": _require_candidates(active_candidate_names, ("TANSOBase",)),
+            "composition_mode": "tanso_base",
+            "candidate_options": {"TANSOBase": {"use_operator_memory": False}},
+        }
+    if baseline_name == "ovha_tanso_no_gate_aux":
+        return {"candidate_names": _require_candidates(active_candidate_names, ("TANSOBase",)), "composition_mode": "tanso_base"}
     if baseline_name == "cato_only":
         return {"candidate_names": ("CATO",)}
     if baseline_name == "spo_only":
@@ -2812,6 +2934,260 @@ def _train_linear_baseline(
         "baseline_min_lr_ratio": float(config.min_lr_ratio),
         "_target_mean": target_mean,
         "_target_std": target_std,
+    }
+
+
+class _RawTansoMLPBaseline(torch.nn.Module):
+    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
+        super().__init__()
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(input_dim, hidden_dim),
+            torch.nn.GELU(),
+            torch.nn.LayerNorm(hidden_dim),
+            torch.nn.Linear(hidden_dim, hidden_dim),
+            torch.nn.GELU(),
+            torch.nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.net(inputs)
+
+
+def _train_raw_tanso_mlp_baseline(
+    config: MultimodalExperimentConfig,
+    baseline_name: str,
+    *,
+    train_batch: MultimodalEpisodeBatch,
+    selection_batch: MultimodalEpisodeBatch,
+    seed: int,
+    train_steps: int,
+    learning_rate: float,
+    progress_interval: int,
+    batch_size: int,
+    eval_interval: int,
+    early_stopping_patience: int,
+    weight_decay: float,
+    device: torch.device,
+    d_model: int,
+) -> tuple[torch.nn.Module, dict[str, Any]]:
+    target_mean, target_std = _target_standardizer(train_batch)
+    fit_batch_std = _standardize_batch_targets(train_batch, target_mean, target_std)
+    val_batch_std = _standardize_batch_targets(selection_batch, target_mean, target_std)
+    input_probe = _move_batch_to_device(
+        _slice_batch(fit_batch_std, torch.arange(0, 1, device=fit_batch_std.target_y.device)),
+        device,
+    )
+    train_inputs = _raw_tanso_mlp_inputs(input_probe)
+    target_dim = int(train_batch.target_y.shape[-1])
+    torch.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name))
+    model = _RawTansoMLPBaseline(int(train_inputs.shape[-1]), int(d_model), target_dim).to(device)
+    initial = _linear_parameter_vector(model)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    max_grad_norm = 0.0
+    final_loss = 0.0
+    best_val_loss = float("inf")
+    best_step = 0
+    best_state = _clone_state_dict(model)
+    stale_evals = 0
+    model.train()
+    started_at = time.perf_counter()
+    _print_progress(
+        "model:start",
+        seed=seed,
+        model=baseline_name,
+        steps=train_steps,
+        learning_rate=learning_rate,
+        protocol="raw_tanso_mlp_no_memory_no_adapter_no_admission",
+    )
+    batch_generator = torch.Generator(device=fit_batch_std.target_y.device)
+    batch_generator.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name) + 29)
+    for step in range(1, train_steps + 1):
+        current_lr = _lr_for_step(
+            step,
+            learning_rate,
+            config.warmup_steps,
+            train_steps,
+            config.min_lr_ratio,
+        ) if config.lr_schedule == "warmup_cosine" else learning_rate
+        _set_optimizer_lr(optimizer, current_lr)
+        train_step_batch = _move_batch_to_device(_sample_batch(fit_batch_std, batch_size, batch_generator), device)
+        optimizer.zero_grad(set_to_none=True)
+        prediction = _raw_tanso_mlp_prediction(model, train_step_batch)
+        loss = _task_loss(prediction, train_step_batch)
+        loss.backward()
+        max_grad_norm = max(max_grad_norm, _linear_grad_l2_norm(model))
+        optimizer.step()
+        final_loss = _as_float(loss)
+        if _should_validate(step, train_steps, eval_interval):
+            val_loss = _evaluate_raw_tanso_mlp_loss_on_device(
+                model,
+                val_batch_std,
+                device,
+                batch_size=_eval_batch_size(batch_size),
+            )
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_step = step
+                best_state = _clone_state_dict(model)
+                stale_evals = 0
+            else:
+                stale_evals += 1
+            if early_stopping_patience > 0 and stale_evals >= early_stopping_patience:
+                _print_progress(
+                    "model:early_stop",
+                    seed=seed,
+                    model=baseline_name,
+                    step=step,
+                    best_step=best_step,
+                    best_val_loss=f"{best_val_loss:.6g}",
+                )
+                break
+        if _should_log_progress(step, train_steps, progress_interval):
+            _print_step_progress(
+                seed=seed,
+                model=baseline_name,
+                step=step,
+                total_steps=train_steps,
+                loss=final_loss,
+                started_at=started_at,
+            )
+    _print_progress(
+        "model:done",
+        seed=seed,
+        model=baseline_name,
+        steps=train_steps,
+        loss=f"{final_loss:.6g}",
+        elapsed=f"{time.perf_counter() - started_at:.1f}s",
+    )
+    model.load_state_dict(best_state)
+    model.eval()
+    return model, {
+        "baseline_optimizer_steps": train_steps,
+        "baseline_parameter_count": _linear_parameter_count(model),
+        "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_linear_parameter_vector(model) - initial).item()),
+        "baseline_grad_l2_norm": max_grad_norm,
+        "baseline_train_loss_final": final_loss,
+        "baseline_best_val_task_loss": best_val_loss,
+        "baseline_best_checkpoint_step": best_step,
+        "baseline_training_protocol": "raw_tanso_mlp_validation_best_checkpoint",
+        "baseline_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
+        "baseline_architecture": "mean_pooled_text_audio_vision_mlp",
+        "baseline_hidden_dim": int(d_model),
+        "baseline_no_operator_memory": True,
+        "baseline_no_hyper_adapter": True,
+        "baseline_no_admission_gate": True,
+        "baseline_batch_size": batch_size,
+        "baseline_selection_split": selection_batch.split,
+        "baseline_target_standardized": target_mean is not None and target_std is not None,
+        "baseline_weight_decay": weight_decay,
+        "baseline_lr_schedule": config.lr_schedule,
+        "baseline_warmup_steps": int(config.warmup_steps),
+        "baseline_min_lr_ratio": float(config.min_lr_ratio),
+        "_target_mean": target_mean,
+        "_target_std": target_std,
+    }
+
+
+def _evaluate_raw_tanso_mlp_loss_on_device(
+    model: torch.nn.Module,
+    batch: MultimodalEpisodeBatch,
+    device: torch.device,
+    *,
+    batch_size: int,
+) -> float:
+    total = int(batch.target_y.shape[0])
+    if total <= 0:
+        return 0.0
+    was_training = model.training
+    model.eval()
+    weighted_loss = 0.0
+    total_weight = 0.0
+    with torch.no_grad():
+        for start in range(0, total, max(1, int(batch_size))):
+            stop = min(total, start + max(1, int(batch_size)))
+            indices = torch.arange(start, stop, device=batch.target_y.device)
+            chunk = _move_batch_to_device(_slice_batch(batch, indices), device)
+            loss = _task_loss(_raw_tanso_mlp_prediction(model, chunk), chunk)
+            weight = float(chunk.target_mask.to(dtype=torch.float32).sum().detach().cpu())
+            weighted_loss += _as_float(loss) * weight
+            total_weight += weight
+    if was_training:
+        model.train()
+    return weighted_loss / max(1.0, total_weight)
+
+
+def _raw_tanso_mlp_prediction(model: torch.nn.Module, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    prediction = model(_raw_tanso_mlp_inputs(batch))
+    query_count = int(batch.target_y.shape[1])
+    return prediction.unsqueeze(1).expand(-1, query_count, -1).contiguous()
+
+
+def _raw_tanso_mlp_inputs(batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    return _same_feature_probe_inputs("concat_fusion", batch)
+
+
+def _raw_tanso_mlp_robustness_rows(
+    config: MultimodalExperimentConfig,
+    *,
+    baseline_name: str,
+    model: torch.nn.Module,
+    batch: MultimodalEpisodeBatch,
+    seed: int,
+    raw_metric_path: Path,
+    device: torch.device,
+    target_mean: torch.Tensor | None = None,
+    target_std: torch.Tensor | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for corruption_type in ("clean", *DEFAULT_REQUIRED_STRESS_TARGETS):
+        corrupted = _corrupted_batch(batch, corruption_type)
+        corrupted_device = _move_batch_to_device(corrupted, device)
+        model_batch = corrupted_device
+        if target_mean is not None and target_std is not None:
+            model_batch = _standardize_batch_targets(
+                corrupted_device,
+                target_mean.to(device=device),
+                target_std.to(device=device),
+            )
+        with torch.no_grad():
+            prediction = _raw_tanso_mlp_prediction(model, model_batch)
+            if target_mean is not None and target_std is not None:
+                prediction = _destandardize_prediction(
+                    prediction,
+                    target_mean.to(device=device),
+                    target_std.to(device=device),
+                )
+            loss = _task_loss(prediction, corrupted_device)
+            score = _robustness_score(config, corrupted_device, prediction, loss)
+        rows.append(
+            _robustness_row(
+                config,
+                corrupted,
+                model_name=baseline_name,
+                seed=seed,
+                raw_metric_path=raw_metric_path,
+                corruption_type=corruption_type,
+                score=score,
+                task_loss=_as_float(loss),
+                router_load_by_candidate=_uniform_candidate_load(config.candidate_names),
+                operator_load_by_candidate=_uniform_candidate_load(config.candidate_names),
+                candidate_loss={candidate: loss for candidate in config.candidate_names},
+                model_reliability=None,
+            )
+        )
+    return rows
+
+
+def _is_tanso_raw_mlp_baseline(task_type: str, baseline_name: str) -> bool:
+    return _is_sentiment_task(task_type) and baseline_name == "raw_tanso_mlp"
+
+
+def _is_tanso_mechanism_ovha_ablation(task_type: str, baseline_name: str) -> bool:
+    return _is_sentiment_task(task_type) and baseline_name in {
+        "ovha_tanso_no_source_gate",
+        "ovha_tanso_no_hyper_adapter",
+        "ovha_tanso_no_operator_memory",
+        "ovha_tanso_no_gate_aux",
     }
 
 

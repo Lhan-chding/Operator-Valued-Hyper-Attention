@@ -51,6 +51,7 @@ class MultimodalOVHA(nn.Module):
         use_evidence_router: bool = True,
         router_weight_policy: dict[str, str] | None = None,
         lrio_pairs: tuple[tuple[str, str], ...] | None = None,
+        candidate_options: dict[str, dict[str, object]] | None = None,
         composition_mode: str = "convex_mixture",
         base_candidate: str | None = None,
         residual_candidates: tuple[str, ...] = (),
@@ -97,6 +98,7 @@ class MultimodalOVHA(nn.Module):
             output_dim=output_dim,
             candidate_names=candidate_names,
             lrio_pairs=lrio_pairs,
+            candidate_options=candidate_options,
         )
 
     def forward(
