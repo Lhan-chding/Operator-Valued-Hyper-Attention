@@ -152,6 +152,7 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 self.assertEqual(len(set(config.seeds)), len(config.seeds))
                 if dataset == "refcoco":
                     self.assertEqual(set(config.eval_splits), {"val", "testA", "testB"})
+                    self.assertEqual(config.checkpoint_selection_metric, "acc_at_0_5")
                 else:
                     self.assertEqual(set(config.eval_splits), {"val", "test"})
                 self.assertTrue(config.enforce_same_features_for_baselines)
@@ -169,6 +170,29 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
                 if alignment_loss is not None:
                     self.assertIn(alignment_loss, config.losses_by_stage["T5"])
                     self.assertTrue(config.require_public_alignment_labels)
+
+    def test_region_checkpoint_selection_accepts_grounding_metrics(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig, selection_score_from_public_metrics
+
+        base_public = json.loads((ROOT / "configs" / "multimodal_refcoco_public_smoke.json").read_text())
+        for metric_name in ("acc_at_0_5", "recall_at_1", "mean_iou", "mrr"):
+            with self.subTest(metric_name=metric_name):
+                config = MultimodalExperimentConfig.from_mapping(
+                    {
+                        **base_public,
+                        "checkpoint_selection_metric": metric_name,
+                    }
+                )
+                self.assertEqual(config.checkpoint_selection_metric, metric_name)
+                score = selection_score_from_public_metrics(
+                    config,
+                    {"acc_at_0_5": 0.75, "recall_at_1": 0.70, "mean_iou": 0.65, "mrr": 0.80},
+                )
+                self.assertAlmostEqual(score, 1.0 - {"acc_at_0_5": 0.75, "recall_at_1": 0.70, "mean_iou": 0.65, "mrr": 0.80}[metric_name])
+
+        cmu_public = json.loads((ROOT / "configs" / "multimodal_cmu_mosei_public_main.json").read_text())
+        with self.assertRaisesRegex(ValueError, "grounding checkpoint selection metric"):
+            MultimodalExperimentConfig.from_mapping({**cmu_public, "checkpoint_selection_metric": "acc_at_0_5"})
 
     def test_cmu_tanso_public_main_config_is_admission_run_not_original_table_overwrite(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig

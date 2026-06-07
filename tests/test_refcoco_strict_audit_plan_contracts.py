@@ -142,6 +142,36 @@ class RefCOCOStrictAuditPlanContracts(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["sorted_fraction"], 0.0)
 
+    def test_balanced_rebuild_can_purge_legacy_raw_and_cache_artifacts(self):
+        from scripts.multimodal.rebuild_refcoco_balanced_cache import _purge_refcoco_outputs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / "raw_refcoco"
+            cache_root = root / "cache"
+            for path in (
+                raw / "annotations" / "refs.json",
+                raw / "annotations" / "instances.json",
+                raw / "features" / "text_features.npy",
+                raw / "features" / "region_features.npy",
+                raw / "splits.json",
+                cache_root / "refcoco" / "v0.1" / "supervision" / "target_region_train.npy",
+            ):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("legacy\n")
+            keep = cache_root / "cmu_mosei" / "v0.1" / "features" / "text_train.npy"
+            keep.parent.mkdir(parents=True, exist_ok=True)
+            keep.write_text("keep\n")
+
+            payload = _purge_refcoco_outputs(raw, cache_root, dataset_name="refcoco", version="v0.1")
+
+            self.assertTrue(payload["ok"])
+            self.assertFalse((raw / "annotations" / "refs.json").exists())
+            self.assertFalse((raw / "features" / "text_features.npy").exists())
+            self.assertFalse((cache_root / "refcoco" / "v0.1").exists())
+            self.assertTrue(keep.exists())
+            self.assertGreaterEqual(len(payload["removed"]), 3)
+
     def test_refcoco_cache_writes_region_geometry_positions_and_candidate_boxes(self):
         if not TORCH_AVAILABLE:
             self.skipTest("torch is required for public batch loading checks")

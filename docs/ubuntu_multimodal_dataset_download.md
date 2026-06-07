@@ -284,7 +284,8 @@ python scripts/multimodal/rebuild_refcoco_balanced_cache.py \
   --version v0.1 \
   --text-features data/raw_multimodal/_downloads/refcoco_stage_inputs/refcoco_text_features.npy \
   --region-features data/raw_multimodal/_downloads/refcoco_stage_inputs/refcoco_region_features.npy \
-  --feature-version refcoco-frozen-features-v0.1
+  --feature-version refcoco-frozen-features-v0.1 \
+  --purge-existing-raw-and-cache
 
 python scripts/multimodal/validate_refcoco_candidate_order.py \
   data/raw_multimodal/_downloads/refcoco_balanced_rebuild/stage_records/refcoco_phrase_region_records.json
@@ -297,6 +298,17 @@ Required gates:
 - `val/testA/testB` must remain distinct for RefCOCO and RefCOCO+; RefCOCOg uses `val/test`.
 - Cache validation must include `target_slot_histogram_by_valid_count_{split}.json`.
 - Region task metrics must report `metrics_source=canonical_grounding_metrics_v1`.
+- RefCOCO public-main checkpoint selection must use `checkpoint_selection_metric=acc_at_0_5` or another explicit grounding metric, not `standardized_mse`.
+
+如果服务器上已经跑过旧排序 candidate/cache，并且要彻底避免旧数据继续影响新实验，可以在重新 build 前手动清掉 RefCOCO staging 与当前 cache version。下面命令只删 RefCOCO raw staging 和 `refcoco/v0.1` cache，不会删 CMU-MOSEI 等其他数据集：
+
+```bash
+rm -rf data/raw_multimodal/refcoco/annotations \
+       data/raw_multimodal/refcoco/features \
+       data/raw_multimodal/refcoco/provenance \
+       data/raw_multimodal/refcoco/splits.json \
+       data/multimodal_cache/refcoco/v0.1
+```
 
 ## 3. Region-text grounding 数据
 

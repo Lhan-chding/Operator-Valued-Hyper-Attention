@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shutil
 import sys
 from typing import Any
 
@@ -49,6 +50,15 @@ def main() -> int:
         action="store_true",
         help="Reuse data/raw_multimodal/refcoco/features/*.npy when already staged with matching row count.",
     )
+    parser.add_argument(
+        "--purge-existing-raw-and-cache",
+        action="store_true",
+        help=(
+            "Delete the staged RefCOCO raw annotations/features/splits and the target "
+            "cache version before rebuilding. Use this to prevent legacy sorted-candidate "
+            "records or old cache tensors from leaking into a new formal run."
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -69,6 +79,14 @@ def rebuild_refcoco_balanced_cache(args: argparse.Namespace) -> dict[str, Any]:
     work_dir = Path(args.work_dir)
     stage_dir = work_dir / "stage_records"
     feature_dir = work_dir / "aligned_features"
+    purge_payload = None
+    if bool(getattr(args, "purge_existing_raw_and_cache", False)):
+        purge_payload = _purge_refcoco_outputs(
+            Path(args.raw_root),
+            Path(args.cache_root),
+            dataset_name=str(args.dataset_name),
+            version=str(args.version),
+        )
     stage_payload = build_refcoco_stage_records(
         argparse.Namespace(
             dataset_name=args.dataset_name,
@@ -151,6 +169,7 @@ def rebuild_refcoco_balanced_cache(args: argparse.Namespace) -> dict[str, Any]:
         "records": stage_payload,
         "candidate_order_report": order_report,
         "alignment": alignment_payload,
+        "purge": purge_payload,
         "raw_stage": stage_raw_payload,
         "cache_root": str(layout.root),
         "cache_validation": {
@@ -160,6 +179,36 @@ def rebuild_refcoco_balanced_cache(args: argparse.Namespace) -> dict[str, Any]:
         },
         "errors": cache_report.errors,
         "warnings": cache_report.warnings,
+    }
+
+
+def _purge_refcoco_outputs(raw_root: Path, cache_root: Path, *, dataset_name: str, version: str) -> dict[str, Any]:
+    if dataset_name not in {"refcoco", "refcoco_plus", "refcocog"}:
+        raise ValueError(f"unsupported RefCOCO dataset_name for purge: {dataset_name}")
+    raw_root = Path(raw_root)
+    cache_root = Path(cache_root)
+    removed: list[str] = []
+    for path in (
+        raw_root / "annotations",
+        raw_root / "features",
+        raw_root / "provenance",
+        raw_root / "splits.json",
+        cache_root / dataset_name / version,
+    ):
+        if path.is_dir():
+            shutil.rmtree(path)
+            removed.append(str(path))
+        elif path.exists():
+            path.unlink()
+            removed.append(str(path))
+    return {
+        "ok": True,
+        "raw_root": str(raw_root),
+        "cache_root": str(cache_root),
+        "dataset_name": dataset_name,
+        "version": version,
+        "removed": removed,
+        "policy": "explicit_refcoco_raw_and_versioned_cache_purge_before_balanced_rebuild",
     }
 
 

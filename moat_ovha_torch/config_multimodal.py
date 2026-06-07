@@ -25,6 +25,7 @@ REGION_TEXT_TASK_TYPES = (
     "flickr30k_entities",
     "visual_genome",
 )
+GROUNDING_CHECKPOINT_SELECTION_METRICS = ("acc_at_0_5", "recall_at_1", "region_recall_at_1", "mean_iou", "mrr")
 SENTIMENT_EMOTION_TASK_TYPES = (
     "sentiment_emotion",
     "sentiment_regression",
@@ -282,8 +283,19 @@ def _float_mapping(value: Any) -> dict[str, float] | None:
 
 
 def _validate_checkpoint_selection_config(config: MultimodalExperimentConfig) -> None:
-    if config.checkpoint_selection_metric not in {"standardized_mse", "mosei_composite"}:
-        raise ValueError("checkpoint_selection_metric must be standardized_mse or mosei_composite")
+    grounding_metrics = set(GROUNDING_CHECKPOINT_SELECTION_METRICS)
+    allowed = {"standardized_mse", "mosei_composite", *grounding_metrics}
+    if config.checkpoint_selection_metric not in allowed:
+        raise ValueError(
+            "checkpoint_selection_metric must be standardized_mse, mosei_composite, "
+            "or a grounding checkpoint selection metric"
+        )
+    if config.checkpoint_selection_metric in grounding_metrics:
+        if config.task_type not in REGION_TEXT_TASK_TYPES:
+            raise ValueError("grounding checkpoint selection metric is only valid for region-text tasks")
+        return
+    if config.checkpoint_selection_metric == "mosei_composite" and config.task_type not in SENTIMENT_EMOTION_TASK_TYPES:
+        raise ValueError("mosei_composite checkpoint selection is only valid for sentiment/emotion tasks")
     if config.checkpoint_selection_metric != "mosei_composite":
         return
     required = {"mae", "pearson_correlation", "acc7", "acc5", "acc2_excl0", "acc2_nonneg"}
@@ -294,6 +306,15 @@ def _validate_checkpoint_selection_config(config: MultimodalExperimentConfig) ->
     non_positive = sorted(name for name in required if float(weights.get(name, 0.0)) < 0.0)
     if non_positive:
         raise ValueError("mosei_composite checkpoint weights must be non-negative: " + ", ".join(non_positive))
+
+
+def selection_score_from_public_metrics(config: MultimodalExperimentConfig, metrics: dict[str, float]) -> float:
+    metric = str(config.checkpoint_selection_metric)
+    aliases = {"region_recall_at_1": "recall_at_1"}
+    metric = aliases.get(metric, metric)
+    if metric not in {"acc_at_0_5", "recall_at_1", "mean_iou", "mrr"}:
+        raise ValueError(f"unknown region checkpoint_selection_metric: {config.checkpoint_selection_metric}")
+    return 1.0 - float(metrics[metric])
 
 
 def _validate_lr_schedule_config(config: MultimodalExperimentConfig) -> None:

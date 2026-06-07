@@ -22,6 +22,7 @@
     "ovha_no_evidence_router"
   ],
   "eval_splits": ["val", "testA", "testB"],
+  "checkpoint_selection_metric": "acc_at_0_5",
   "eval_episode_count": 4096,
   "enforce_same_features_for_baselines": true,
   "fail_on_missing_cache_artifact": true,

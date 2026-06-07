@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 
 import torch
 
-from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig, selection_score_from_public_metrics
 from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, file_sha256, validate_cache_layout
 from moat_ovha_torch.data.multimodal.typed_batch import MultimodalEpisodeBatch, SupervisionBank, TokenField
 from moat_ovha_torch.eval.grounding_metrics import METRICS_SOURCE, grounding_candidate_metrics
@@ -973,6 +973,11 @@ def _evaluate_selection_score_on_device(
 ) -> float:
     if config.checkpoint_selection_metric == "standardized_mse":
         return _evaluate_task_loss_on_device(model, val_batch_std, device, batch_size=batch_size)
+    if _is_region_task(config.task_type):
+        output_std = _predict_ovha_on_device(model, val_batch_std, device, batch_size=batch_size)
+        output_raw = _destandardize_output(output_std, target_mean, target_std)
+        metrics = _region_text_metrics(output_raw.y_hat, raw_val_batch)
+        return selection_score_from_public_metrics(config, metrics)
     if config.checkpoint_selection_metric != "mosei_composite":
         raise ValueError(f"unknown checkpoint_selection_metric: {config.checkpoint_selection_metric}")
     output_std = _predict_ovha_on_device(model, val_batch_std, device, batch_size=batch_size)
