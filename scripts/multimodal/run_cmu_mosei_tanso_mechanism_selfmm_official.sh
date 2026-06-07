@@ -21,6 +21,7 @@ RUN_SCOPE="${RUN_SCOPE:-missing_only}"
 ONLY_BASELINES_DEFAULT="raw_tanso_mlp ovha_tanso_no_source_gate ovha_tanso_no_hyper_adapter ovha_tanso_no_operator_memory ovha_tanso_no_gate_aux"
 ONLY_BASELINES="${ONLY_BASELINES:-${ONLY_BASELINES_DEFAULT}}"
 REFERENCE_RAW_METRICS="${REFERENCE_RAW_METRICS:-}"
+FULL_MODEL_NAME="${FULL_MODEL_NAME:-ovha_tanso_full}"
 SKIP_CACHE_VALIDATION="${SKIP_CACHE_VALIDATION:-0}"
 
 mkdir -p "${ARTIFACT_ROOT}"
@@ -86,10 +87,10 @@ if [[ -n "${REFERENCE_RAW_METRICS}" ]]; then
     read -r -a BASELINE_ARRAY <<< "${ONLY_BASELINES}"
   fi
   for BASELINE in "${BASELINE_ARRAY[@]}"; do
-    echo "[cmu-mosei-tanso-mechanism] summarizing ovha_tanso_full vs ${BASELINE}"
+    echo "[cmu-mosei-tanso-mechanism] summarizing ${FULL_MODEL_NAME} vs ${BASELINE}"
     "${PYTHON_BIN}" scripts/multimodal/summarize_public_results.py \
       "${COMBINED_RAW_METRICS}" \
-      --full-model ovha_tanso_full \
+      --full-model "${FULL_MODEL_NAME}" \
       --baseline-model "${BASELINE}" \
       > "${ARTIFACT_ROOT}/summary_vs_${BASELINE}.json"
   done
