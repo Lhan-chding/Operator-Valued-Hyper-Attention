@@ -13,7 +13,7 @@ class SROPrimitive(MultimodalCandidatePrimitive):
     def __init__(self, d_model: int, output_dim: int):
         super().__init__()
         self.text_proj = nn.Linear(d_model, d_model)
-        self.geometry_proj = nn.Linear(9, d_model)
+        self.geometry_proj = nn.Linear(12, d_model)
         self.score = nn.Sequential(
             nn.Linear(d_model * 3, d_model),
             nn.GELU(),
@@ -36,7 +36,7 @@ class SROPrimitive(MultimodalCandidatePrimitive):
         region = evidence.field_features["region"]
         region_field = batch.fields["region"]
         region_mask = region_field.mask.to(device=region.device)
-        geometry = _region_geometry(region_field.pos, dtype=region.dtype, device=region.device)
+        geometry = _region_geometry_with_ranks(region_field.pos, dtype=region.dtype, device=region.device)
         phrase = self.text_proj(_masked_mean(text, batch.fields["text"].mask))
         geo = self.geometry_proj(geometry)
         phrase_by_region = phrase.unsqueeze(1).expand_as(geo)
@@ -50,6 +50,8 @@ class SROPrimitive(MultimodalCandidatePrimitive):
             "candidate": self.name,
             "direct_region_logits": True,
             "spatial_relation_geometry": True,
+            "language_conditioned_geometry": True,
+            "geometry_rank_features": True,
             "geometry_dim": torch.as_tensor(float(geometry.shape[-1]), dtype=value.dtype, device=value.device),
         }
         return CandidateOutput(value=value, feature=feature, diagnostics=diagnostics)
@@ -69,3 +71,12 @@ def _region_geometry(pos: torch.Tensor, *, dtype: torch.dtype, device: torch.dev
         return torch.stack([x1, y1, x2, y2, cx, cy, width, height, area], dim=-1)
     pad = torch.zeros(*geometry.shape[:-1], 9 - int(geometry.shape[-1]), dtype=dtype, device=device)
     return torch.cat([geometry, pad], dim=-1)
+
+
+def _region_geometry_with_ranks(pos: torch.Tensor, *, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    geometry = _region_geometry(pos, dtype=dtype, device=device)
+    rank_inputs = geometry[..., [4, 5, 8]]
+    ranks = rank_inputs.argsort(dim=1).argsort(dim=1).to(dtype=geometry.dtype)
+    denom = max(1, int(geometry.shape[1]) - 1)
+    ranks = ranks / float(denom)
+    return torch.cat([geometry, ranks], dim=-1)

@@ -28,6 +28,7 @@ def main() -> int:
     parser.add_argument("--candidate-region-source", default="coco_gt_box")
     parser.add_argument("--box-coordinate-convention", default="xyxy_normalized")
     parser.add_argument("--max-candidate-regions", type=int, default=32)
+    parser.add_argument("--candidate-count-policy", choices=("variable_k", "fixed_k"), default="variable_k")
     args = parser.parse_args()
 
     try:
@@ -71,6 +72,7 @@ def build_refcoco_stage_records(args: argparse.Namespace) -> dict[str, Any]:
                 candidate_region_source=args.candidate_region_source,
                 box_coordinate_convention=args.box_coordinate_convention,
                 max_candidate_regions=args.max_candidate_regions,
+                candidate_count_policy=args.candidate_count_policy,
             )
             records.append(record)
             splits[split].append(record["source_id"])
@@ -99,8 +101,14 @@ def build_refcoco_stage_records(args: argparse.Namespace) -> dict[str, Any]:
         "split_counts": {split: len(source_ids) for split, source_ids in sorted(splits.items())},
         "candidate_region_source": args.candidate_region_source,
         "max_candidate_regions": args.max_candidate_regions,
+        "candidate_count_policy": args.candidate_count_policy,
         "box_coordinate_convention": args.box_coordinate_convention,
         "candidate_permutation_policy": "stable_source_id_seeded_target_slot_randomization",
+        "candidate_protocol": (
+            "fixed_k_balanced_v0.2"
+            if args.candidate_count_policy == "fixed_k"
+            else "variable_k_balanced_stratified_v0.2"
+        ),
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return {
@@ -216,6 +224,7 @@ def _record_for_sentence(
     candidate_region_source: str,
     box_coordinate_convention: str,
     max_candidate_regions: int,
+    candidate_count_policy: str = "variable_k",
 ) -> dict[str, Any]:
     sent_id = _int_value(sentence.get("sent_id"), field="sentence sent_id")
     tokens = sentence.get("tokens")
@@ -230,6 +239,7 @@ def _record_for_sentence(
         base,
         max_candidate_regions=max_candidate_regions,
         source_id=source_id,
+        candidate_count_policy=candidate_count_policy,
     )
     return {
         "source_id": source_id,
@@ -242,6 +252,7 @@ def _record_for_sentence(
         "target_region_index": target_region_index,
         "candidate_permutation_seed": candidate_permutation_seed,
         "candidate_region_source": candidate_region_source,
+        "candidate_count_policy": candidate_count_policy,
         "box_coordinate_convention": box_coordinate_convention,
         "original_split": split,
         "raw_ref": f"{dataset_name}://ref{base['ref_id']}/sent{sent_id}",
@@ -254,6 +265,7 @@ def _candidate_regions_balanced(
     max_candidate_regions: int,
     source_id: str,
     hard_negative_policy: str = "same_category_then_spatial_then_random",
+    candidate_count_policy: str = "variable_k",
 ) -> tuple[list[list[float]], list[int], int, int]:
     target_ann_id = int(base["ann_id"])
     width = float(base["image_width"])
@@ -264,7 +276,14 @@ def _candidate_regions_balanced(
         raise ValueError(f"target annotation {target_ann_id} missing from image candidate annotations")
     target_annotation = target[0]
     distractors = [annotation for annotation in annotations if int(annotation["id"]) != target_ann_id]
-    slot_count = min(max_candidate_regions, len(distractors) + 1)
+    if candidate_count_policy not in {"variable_k", "fixed_k"}:
+        raise ValueError(f"unsupported candidate_count_policy: {candidate_count_policy}")
+    if candidate_count_policy == "fixed_k" and len(distractors) + 1 < max_candidate_regions:
+        raise ValueError(
+            "fixed_k candidate policy requires enough same-image COCO candidates; "
+            f"target image has {len(distractors) + 1}, requested {max_candidate_regions}"
+        )
+    slot_count = max_candidate_regions if candidate_count_policy == "fixed_k" else min(max_candidate_regions, len(distractors) + 1)
     rng, seed = _stable_rng(source_id)
     distractors = _select_hard_distractors(
         target_annotation,

@@ -58,6 +58,25 @@ class RefCOCOStrictAuditPlanContracts(unittest.TestCase):
         counts = np.bincount(np.asarray(slots), minlength=4)
         self.assertLessEqual(int(counts.max() - counts.min()), 16)
 
+        fixed_boxes, fixed_ann_ids, fixed_target_slot, _ = _candidate_regions_balanced(
+            base,
+            max_candidate_regions=4,
+            source_id="refcoco::fixed::enough",
+            candidate_count_policy="fixed_k",
+        )
+        self.assertEqual(len(fixed_boxes), 4)
+        self.assertEqual(len(fixed_ann_ids), 4)
+        self.assertEqual(fixed_ann_ids[fixed_target_slot], base["ann_id"])
+
+        too_small = {**base, "candidate_annotations": base["candidate_annotations"][:2]}
+        with self.assertRaisesRegex(ValueError, "fixed_k candidate policy requires enough"):
+            _candidate_regions_balanced(
+                too_small,
+                max_candidate_regions=4,
+                source_id="refcoco::fixed::too-small",
+                candidate_count_policy="fixed_k",
+            )
+
         record = _record_for_sentence(
             "refcoco",
             base,
@@ -610,6 +629,12 @@ def _refcoco_config(cache_root: Path) -> dict:
         "candidate_names": ["PRSO", "SRO", "TLEO", "CATO"],
         "candidate_pool_names": ["PRSO", "SRO", "TLEO", "CATO"],
         "baseline_names": [
+            "random_valid",
+            "train_slot_prior",
+            "box_prior",
+            "prso_clip_similarity",
+            "candidate_mlp_reranker",
+            "cross_attention_reranker",
             "index_prior_only",
             "text_only",
             "region_only",

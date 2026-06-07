@@ -259,7 +259,25 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         )
 
         region = set(baseline_names_for_task("phrase_region_grounding"))
-        self.assertEqual(region, {"text_only", "region_only", "concat_fusion", "cato_only", "ovha_no_cato", "ovha_no_rceo", "ovha_no_evidence_router"})
+        self.assertEqual(
+            region,
+            {
+                "random_valid",
+                "train_slot_prior",
+                "box_prior",
+                "prso_clip_similarity",
+                "candidate_mlp_reranker",
+                "cross_attention_reranker",
+                "index_prior_only",
+                "text_only",
+                "region_only",
+                "concat_fusion",
+                "cato_only",
+                "ovha_no_cato",
+                "ovha_no_rceo",
+                "ovha_no_evidence_router",
+            },
+        )
 
         sentiment = set(baseline_names_for_task("sentiment_emotion"))
         self.assertEqual(
@@ -282,11 +300,23 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertNotIn("GroundingDINO", region)
         self.assertNotIn("MISA", sentiment)
         self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "concat_fusion"), "same_feature_sanity_probe")
+        self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "prso_clip_similarity"), "same_candidate_strong_reranker")
+        self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "cross_attention_reranker"), "same_candidate_strong_reranker")
         self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "ovha_no_cato"), "internal_ovha_ablation")
         self.assertEqual(baseline_protocol_for_name("sentiment_emotion", "Self-MM"), "external_sota_reference_or_reproduction")
         self.assertEqual(
             set(same_feature_probe_names_for_task("sentiment_emotion")),
             {"text_only", "audio_only", "vision_only", "concat_fusion"},
+        )
+        self.assertTrue(
+            {
+                "random_valid",
+                "train_slot_prior",
+                "index_prior_only",
+                "text_only",
+                "region_only",
+                "concat_fusion",
+            }.issubset(set(same_feature_probe_names_for_task("phrase_region_grounding")))
         )
         self.assertEqual(
             set(ovha_ablation_names_for_task("sentiment_emotion")),

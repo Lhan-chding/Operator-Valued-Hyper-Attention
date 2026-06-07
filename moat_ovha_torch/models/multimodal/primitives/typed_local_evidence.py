@@ -118,10 +118,11 @@ class TLEOPrimitive(MultimodalCandidatePrimitive):
 
         geometry = _region_geometry(region_field.pos, dtype=region.dtype, device=region.device)
         geo_dist = _pairwise_geometry_distance(geometry)
+        pair_iou = _pairwise_box_iou(geometry)
         semantic = torch.matmul(self.region_query(region), self.region_key(region).transpose(1, 2)) / max(region.shape[-1] ** 0.5, 1.0)
         lengthscale = params["lengthscale"].mean(dim=1).clamp_min(1e-4).unsqueeze(-1)
         temperature = params["local_temperature"].mean(dim=1).clamp_min(1e-4).unsqueeze(-1)
-        kernel = -geo_dist / lengthscale.square().clamp_min(1e-6) + semantic / temperature
+        kernel = -geo_dist / lengthscale.square().clamp_min(1e-6) + 0.5 * pair_iou + semantic / temperature
         pair_mask = region_mask.unsqueeze(1) & region_mask.unsqueeze(2)
         kernel = kernel.masked_fill(~pair_mask, -1e9)
         weights = torch.softmax(kernel, dim=-1)
@@ -143,6 +144,8 @@ class TLEOPrimitive(MultimodalCandidatePrimitive):
             "modality_gate": {"region": torch.ones((), dtype=value.dtype, device=value.device)},
             "valid_source_rate": {"region": region_mask.any(dim=1).to(dtype=value.dtype).mean()},
             "region_local_context": True,
+            "region_graph_kernel": "center_size_distance_plus_iou_plus_visual_similarity",
+            "mean_pairwise_iou": pair_iou[pair_mask].mean() if bool(pair_mask.any()) else torch.zeros((), dtype=value.dtype, device=value.device),
             "direct_region_logits": True,
             "candidate": self.name,
         }
@@ -180,3 +183,14 @@ def _pairwise_geometry_distance(geometry: torch.Tensor) -> torch.Tensor:
     center_distance = (centers.unsqueeze(2) - centers.unsqueeze(1)).square().sum(dim=-1)
     size_distance = (sizes.unsqueeze(2) - sizes.unsqueeze(1)).square().sum(dim=-1)
     return center_distance + 0.25 * size_distance
+
+
+def _pairwise_box_iou(geometry: torch.Tensor) -> torch.Tensor:
+    x1 = torch.maximum(geometry[..., 0].unsqueeze(2), geometry[..., 0].unsqueeze(1))
+    y1 = torch.maximum(geometry[..., 1].unsqueeze(2), geometry[..., 1].unsqueeze(1))
+    x2 = torch.minimum(geometry[..., 2].unsqueeze(2), geometry[..., 2].unsqueeze(1))
+    y2 = torch.minimum(geometry[..., 3].unsqueeze(2), geometry[..., 3].unsqueeze(1))
+    inter = (x2 - x1).clamp_min(0.0) * (y2 - y1).clamp_min(0.0)
+    area = geometry[..., 8].clamp_min(0.0)
+    union = area.unsqueeze(2) + area.unsqueeze(1) - inter
+    return inter / union.clamp_min(1e-8)

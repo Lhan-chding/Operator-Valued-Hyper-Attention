@@ -70,6 +70,7 @@ def build_external_sota_runbook(references_path: Path, output_dir: Path) -> tupl
         "datasets": sorted(grouped),
         "references_by_dataset": grouped,
         "manual_actions": _manual_actions(references),
+        "refcoco_comparison_tracks": _refcoco_comparison_tracks(),
     }
     runbook_path.write_text(json.dumps(runbook, indent=2, sort_keys=True) + "\n")
     markdown_path.write_text(_markdown(runbook) + "\n")
@@ -139,6 +140,32 @@ def _manual_actions(references: list[dict[str, str]]) -> list[dict[str, str]]:
     ]
 
 
+def _refcoco_comparison_tracks() -> list[dict[str, str]]:
+    return [
+        {
+            "track": "A_external_open_box_reference",
+            "input": "raw image plus referring expression",
+            "output": "free-form predicted boxes",
+            "comparison_scope": "external detector/reference table only",
+            "required_metrics": "Acc@0.5, mean IoU, split-specific val/testA/testB where available",
+        },
+        {
+            "track": "B_same_candidate_scorer",
+            "input": "OVHA candidate boxes plus external detector predictions",
+            "output": "candidate score_i=max_j IoU(candidate_i, box_j) * score_j",
+            "comparison_scope": "same-candidate table",
+            "required_metrics": "R@1, R@5, Acc@0.5, mean IoU, MRR",
+        },
+        {
+            "track": "C_proposal_generator_plus_reranker",
+            "input": "shared GroundingDINO top-K proposals for every reranker",
+            "output": "proposal upper bound plus reranker metrics",
+            "comparison_scope": "proposal-conditioned reranker table",
+            "required_metrics": "proposal_recall@K first, then reranker R@1/R@5/Acc@0.5/mean IoU/MRR",
+        },
+    ]
+
+
 def _markdown(runbook: dict[str, Any]) -> str:
     lines = [
         "# External SOTA Reference Runbook",
@@ -155,6 +182,24 @@ def _markdown(runbook: dict[str, Any]) -> str:
                 )
             )
         lines.append("")
+    lines.extend(
+        [
+            "## RefCOCO Comparison Tracks",
+            "",
+        ]
+    )
+    for row in runbook.get("refcoco_comparison_tracks", []):
+        lines.extend(
+            [
+                f"### {row['track']}",
+                "",
+                f"- Input: {row['input']}",
+                f"- Output: {row['output']}",
+                f"- Scope: {row['comparison_scope']}",
+                f"- Required metrics: {row['required_metrics']}",
+                "",
+            ]
+        )
     lines.extend(
         [
             "## Rules",

@@ -1883,6 +1883,119 @@ def _baseline_rows(
     per_sample_prediction_rows: list[dict[str, Any]] = []
     for baseline_name in config.baseline_names:
         baseline_protocol = baseline_protocol_for_name(config.task_type, str(baseline_name))
+        if _is_region_task(config.task_type) and _is_region_rule_baseline(str(baseline_name)):
+            eval_prediction, summary = _region_rule_baseline_prediction(
+                str(baseline_name),
+                train_batch=train_batch,
+                eval_batch=eval_batch,
+                seed=seed,
+            )
+            loss = _task_loss(eval_prediction, eval_batch)
+            router_load = _uniform_candidate_load(config.candidate_names)
+            rows.append(
+                _raw_metric_row(
+                    config,
+                    eval_batch,
+                    model_name=str(baseline_name),
+                    seed=seed,
+                    prediction=eval_prediction,
+                    score=_as_float(loss),
+                    training_steps=int(summary["baseline_optimizer_steps"]),
+                    parameter_count=int(summary["baseline_parameter_count"]),
+                    raw_metrics_path=raw_metrics_path,
+                    hardware=hardware,
+                    router_load_by_candidate=router_load,
+                    router_entropy=torch.zeros((), dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device),
+                    candidate_loss={candidate: loss for candidate in config.candidate_names},
+                    diagnostics={"baseline": summary},
+                    model_protocol=f"{baseline_protocol}_public_main_v2",
+                )
+            )
+            per_sample_prediction_rows.extend(
+                _per_sample_prediction_rows(
+                    config,
+                    eval_batch,
+                    None,
+                    model_name=str(baseline_name),
+                    seed=seed,
+                    prediction=eval_prediction,
+                )
+            )
+            robustness_rows.extend(
+                _region_rule_baseline_robustness_rows(
+                    config,
+                    str(baseline_name),
+                    train_batch=train_batch,
+                    batch=eval_batch,
+                    seed=seed,
+                    raw_metric_path=raw_metrics_path,
+                )
+            )
+            summaries.append({**summary, "model": str(baseline_name)})
+            continue
+        if _is_region_task(config.task_type) and _is_region_trainable_reranker(str(baseline_name)):
+            model, summary = _train_region_reranker_baseline(
+                config,
+                str(baseline_name),
+                train_batch=train_batch,
+                selection_batch=selection_batch,
+                seed=seed,
+                train_steps=baseline_train_steps,
+                learning_rate=learning_rate,
+                progress_interval=progress_interval,
+                batch_size=batch_size,
+                eval_interval=eval_interval,
+                early_stopping_patience=early_stopping_patience,
+                weight_decay=weight_decay,
+                device=device,
+                d_model=d_model,
+            )
+            with torch.no_grad():
+                eval_prediction = _region_reranker_prediction(str(baseline_name), model, _move_batch_to_device(eval_batch, device)).detach().cpu()
+            loss = _task_loss(eval_prediction, eval_batch)
+            router_load = _uniform_candidate_load(config.candidate_names)
+            rows.append(
+                _raw_metric_row(
+                    config,
+                    eval_batch,
+                    model_name=str(baseline_name),
+                    seed=seed,
+                    prediction=eval_prediction,
+                    score=_as_float(loss),
+                    training_steps=int(summary["baseline_optimizer_steps"]),
+                    parameter_count=int(summary["baseline_parameter_count"]),
+                    raw_metrics_path=raw_metrics_path,
+                    hardware=hardware,
+                    router_load_by_candidate=router_load,
+                    router_entropy=torch.zeros((), dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device),
+                    candidate_loss={candidate: loss for candidate in config.candidate_names},
+                    diagnostics={"baseline": summary},
+                    model_protocol=f"{baseline_protocol}_public_main_v2",
+                )
+            )
+            per_sample_prediction_rows.extend(
+                _per_sample_prediction_rows(
+                    config,
+                    eval_batch,
+                    None,
+                    model_name=str(baseline_name),
+                    seed=seed,
+                    prediction=eval_prediction,
+                )
+            )
+            robustness_rows.extend(
+                _region_reranker_robustness_rows(
+                    config,
+                    baseline_name=str(baseline_name),
+                    model=model,
+                    batch=eval_batch,
+                    seed=seed,
+                    raw_metric_path=raw_metrics_path,
+                    device=device,
+                )
+            )
+            summaries.append({**summary, "model": str(baseline_name)})
+            continue
         if str(baseline_name) in ovha_ablation_names_for_task(config.task_type):
             model, eval_output, summary = _train_ovha_ablation(
                 config,
@@ -2220,6 +2333,352 @@ def _drop_candidate(active_candidate_names: tuple[str, ...], candidate: str) -> 
     if not kept:
         raise ValueError(f"structural ablation would remove all active candidates: {candidate}")
     return kept
+
+
+def _is_region_rule_baseline(name: str) -> bool:
+    return name in {"random_valid", "train_slot_prior", "prso_clip_similarity"}
+
+
+def _is_region_trainable_reranker(name: str) -> bool:
+    return name in {"box_prior", "candidate_mlp_reranker", "cross_attention_reranker"}
+
+
+def _region_rule_baseline_prediction(
+    baseline_name: str,
+    *,
+    train_batch: MultimodalEpisodeBatch,
+    eval_batch: MultimodalEpisodeBatch,
+    seed: int,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    if baseline_name == "random_valid":
+        prediction = _random_valid_logits(eval_batch, seed=seed + _stable_baseline_seed_offset(baseline_name))
+        protocol = "uniform_random_valid_candidate_logits"
+    elif baseline_name == "train_slot_prior":
+        prediction = _train_slot_prior_logits(train_batch, eval_batch)
+        protocol = "train_target_slot_distribution_prior"
+    elif baseline_name == "prso_clip_similarity":
+        prediction = _prso_clip_similarity_logits(eval_batch)
+        protocol = "candidatewise_cosine_text_region_similarity"
+    else:
+        raise ValueError(f"unknown region rule baseline: {baseline_name}")
+    return prediction, {
+        "baseline_optimizer_steps": 0,
+        "baseline_parameter_count": 0,
+        "baseline_training_protocol": "deterministic_same_candidate_baseline",
+        "baseline_checkpoint_selection_protocol": "not_applicable_no_training",
+        "baseline_rule_protocol": protocol,
+        "baseline_selection_split": train_batch.split,
+        "baseline_target_standardized": False,
+    }
+
+
+def _region_rule_baseline_robustness_rows(
+    config: MultimodalExperimentConfig,
+    baseline_name: str,
+    *,
+    train_batch: MultimodalEpisodeBatch,
+    batch: MultimodalEpisodeBatch,
+    seed: int,
+    raw_metric_path: Path,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for corruption_type in ("clean", *DEFAULT_REQUIRED_STRESS_TARGETS):
+        corrupted = _corrupted_batch(batch, corruption_type)
+        prediction, _ = _region_rule_baseline_prediction(
+            baseline_name,
+            train_batch=train_batch,
+            eval_batch=corrupted,
+            seed=seed,
+        )
+        loss = _task_loss(prediction, corrupted)
+        rows.append(
+            _robustness_row(
+                config,
+                corrupted,
+                model_name=baseline_name,
+                seed=seed,
+                raw_metric_path=raw_metric_path,
+                corruption_type=corruption_type,
+                score=_robustness_score(config, corrupted, prediction, loss),
+                task_loss=_as_float(loss),
+                router_load_by_candidate=_uniform_candidate_load(config.candidate_names),
+                operator_load_by_candidate=_uniform_candidate_load(config.candidate_names),
+                candidate_loss={candidate: loss for candidate in config.candidate_names},
+                model_reliability=None,
+            )
+        )
+    return rows
+
+
+def _random_valid_logits(batch: MultimodalEpisodeBatch, *, seed: int) -> torch.Tensor:
+    region_mask = _region_candidate_mask(batch)
+    generator = torch.Generator(device=batch.target_y.device)
+    generator.manual_seed(int(seed))
+    logits = torch.rand(
+        region_mask.shape,
+        dtype=batch.target_y.dtype,
+        device=batch.target_y.device,
+        generator=generator,
+    )
+    logits = logits.masked_fill(~region_mask, -1e9)
+    return logits.unsqueeze(1).expand(-1, int(batch.target_y.shape[1]), -1).contiguous()
+
+
+def _train_slot_prior_logits(train_batch: MultimodalEpisodeBatch, eval_batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    target_dim = int(eval_batch.target_y.shape[-1])
+    labels = train_batch.supervision.region_targets
+    if labels is None:
+        prior = torch.ones(target_dim, dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device)
+    else:
+        labels = labels.to(dtype=torch.long, device=eval_batch.target_y.device).reshape(-1)
+        labels = labels[(labels >= 0) & (labels < target_dim)]
+        prior = torch.bincount(labels, minlength=target_dim).to(dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device)
+        prior = prior + 1.0
+    logits = prior.log().view(1, -1).expand(int(eval_batch.target_y.shape[0]), -1)
+    logits = logits.masked_fill(~_region_candidate_mask(eval_batch), -1e9)
+    return logits.unsqueeze(1).expand(-1, int(eval_batch.target_y.shape[1]), -1).contiguous()
+
+
+def _prso_clip_similarity_logits(batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    if "text" not in batch.fields or "region" not in batch.fields:
+        return torch.zeros_like(batch.target_y)
+    text = _masked_field_mean(batch.fields["text"])
+    region = batch.fields["region"].x
+    dim = min(int(text.shape[-1]), int(region.shape[-1]))
+    text = torch.nn.functional.normalize(text[..., :dim], dim=-1)
+    region = torch.nn.functional.normalize(region[..., :dim], dim=-1)
+    logits = (region * text.unsqueeze(1)).sum(dim=-1)
+    logits = logits.masked_fill(~_region_candidate_mask(batch), -1e9)
+    return logits.unsqueeze(1).expand(-1, int(batch.target_y.shape[1]), -1).contiguous()
+
+
+class _BoxPriorReranker(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = torch.nn.Linear(12, 1)
+
+    def forward(self, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+        geometry = _region_geometry_features(batch)
+        rank = _geometry_ranks(geometry)
+        features = torch.cat([geometry, rank], dim=-1)
+        logits = self.linear(features).squeeze(-1)
+        return _masked_region_logits(logits, batch)
+
+
+class _CandidateMLPReranker(torch.nn.Module):
+    def __init__(self, text_dim: int, region_dim: int, d_model: int):
+        super().__init__()
+        self.text_proj = torch.nn.Linear(text_dim, d_model)
+        self.region_proj = torch.nn.Linear(region_dim, d_model)
+        self.box_proj = torch.nn.Linear(9, d_model)
+        self.score = torch.nn.Sequential(
+            torch.nn.Linear(d_model * 5, d_model),
+            torch.nn.GELU(),
+            torch.nn.Linear(d_model, 1),
+        )
+
+    def forward(self, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+        text = self.text_proj(_masked_field_mean(batch.fields["text"]))
+        region = self.region_proj(batch.fields["region"].x)
+        box = self.box_proj(_region_geometry_features(batch))
+        text_by_region = text.unsqueeze(1).expand_as(region)
+        features = torch.cat([text_by_region, region, box, text_by_region * region, (text_by_region - region).abs()], dim=-1)
+        logits = self.score(features).squeeze(-1)
+        return _masked_region_logits(logits, batch)
+
+
+class _CrossAttentionReranker(torch.nn.Module):
+    def __init__(self, text_dim: int, region_dim: int, d_model: int):
+        super().__init__()
+        self.text_proj = torch.nn.Linear(text_dim, d_model)
+        self.region_proj = torch.nn.Linear(region_dim, d_model)
+        self.box_proj = torch.nn.Linear(9, d_model)
+        self.score = torch.nn.Linear(d_model * 3, 1)
+
+    def forward(self, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+        text_tokens = self.text_proj(batch.fields["text"].x)
+        region_tokens = self.region_proj(batch.fields["region"].x)
+        text_mask = batch.fields["text"].mask.to(dtype=torch.bool, device=text_tokens.device)
+        region_mask = batch.fields["region"].mask.to(dtype=torch.bool, device=region_tokens.device)
+        scores = torch.matmul(region_tokens, text_tokens.transpose(1, 2)) / max(text_tokens.shape[-1] ** 0.5, 1.0)
+        scores = scores.masked_fill(~text_mask.unsqueeze(1), -1e9)
+        weights = torch.softmax(scores, dim=-1)
+        attended_text = torch.matmul(weights, text_tokens)
+        box = self.box_proj(_region_geometry_features(batch))
+        logits = self.score(torch.cat([region_tokens, attended_text, box], dim=-1)).squeeze(-1)
+        logits = logits.masked_fill(~region_mask, -1e9)
+        return logits.unsqueeze(1).expand(-1, int(batch.target_y.shape[1]), -1).contiguous()
+
+
+def _train_region_reranker_baseline(
+    config: MultimodalExperimentConfig,
+    baseline_name: str,
+    *,
+    train_batch: MultimodalEpisodeBatch,
+    selection_batch: MultimodalEpisodeBatch,
+    seed: int,
+    train_steps: int,
+    learning_rate: float,
+    progress_interval: int,
+    batch_size: int,
+    eval_interval: int,
+    early_stopping_patience: int,
+    weight_decay: float,
+    device: torch.device,
+    d_model: int,
+) -> tuple[torch.nn.Module, dict[str, Any]]:
+    torch.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name))
+    model = _make_region_reranker(baseline_name, train_batch, d_model=d_model).to(device)
+    initial = _linear_parameter_vector(model)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    best_score = float("inf")
+    best_loss = float("inf")
+    best_step = 0
+    best_state = _clone_state_dict(model)
+    max_grad_norm = 0.0
+    final_loss = 0.0
+    stale_evals = 0
+    batch_generator = torch.Generator(device=train_batch.target_y.device)
+    batch_generator.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name) + 23)
+    started_at = time.perf_counter()
+    _print_progress("model:start", seed=seed, model=baseline_name, steps=train_steps, learning_rate=learning_rate)
+    for step in range(1, train_steps + 1):
+        current_lr = _lr_for_step(step, learning_rate, config.warmup_steps, train_steps, config.min_lr_ratio) if config.lr_schedule == "warmup_cosine" else learning_rate
+        _set_optimizer_lr(optimizer, current_lr)
+        train_step_batch = _move_batch_to_device(_sample_batch(train_batch, batch_size, batch_generator), device)
+        optimizer.zero_grad(set_to_none=True)
+        prediction = _region_reranker_prediction(baseline_name, model, train_step_batch)
+        loss = _task_loss(prediction, train_step_batch)
+        loss.backward()
+        max_grad_norm = max(max_grad_norm, _linear_grad_l2_norm(model))
+        optimizer.step()
+        final_loss = _as_float(loss)
+        if _should_validate(step, train_steps, eval_interval):
+            val_batch = _move_batch_to_device(selection_batch, device)
+            with torch.no_grad():
+                val_prediction = _region_reranker_prediction(baseline_name, model, val_batch)
+                val_loss = _as_float(_task_loss(val_prediction, val_batch))
+                val_metrics = _region_text_metrics(val_prediction.detach().cpu(), selection_batch)
+                val_score = selection_score_from_public_metrics(config, val_metrics)
+            if val_score < best_score:
+                best_score = val_score
+                best_loss = val_loss
+                best_step = step
+                best_state = _clone_state_dict(model)
+                stale_evals = 0
+            else:
+                stale_evals += 1
+            if early_stopping_patience > 0 and stale_evals >= early_stopping_patience:
+                break
+        if _should_log_progress(step, train_steps, progress_interval):
+            _print_step_progress(seed=seed, model=baseline_name, step=step, total_steps=train_steps, loss=final_loss, started_at=started_at)
+    model.load_state_dict(best_state)
+    model.eval()
+    return model, {
+        "baseline_optimizer_steps": int(train_steps),
+        "baseline_parameter_count": _linear_parameter_count(model),
+        "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_linear_parameter_vector(model) - initial).item()),
+        "baseline_grad_l2_norm": float(max_grad_norm),
+        "baseline_train_loss_final": float(final_loss),
+        "baseline_best_val_task_loss": float(best_loss),
+        "baseline_best_val_selection_score": float(best_score),
+        "baseline_best_checkpoint_step": int(best_step),
+        "baseline_training_protocol": "same_candidate_reranker_validation_best_checkpoint",
+        "baseline_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
+        "baseline_checkpoint_selection_metric": str(config.checkpoint_selection_metric),
+        "baseline_selection_split": selection_batch.split,
+        "baseline_target_standardized": False,
+        "baseline_lr_schedule": config.lr_schedule,
+        "baseline_warmup_steps": int(config.warmup_steps),
+        "baseline_min_lr_ratio": float(config.min_lr_ratio),
+    }
+
+
+def _make_region_reranker(baseline_name: str, batch: MultimodalEpisodeBatch, *, d_model: int) -> torch.nn.Module:
+    if baseline_name == "box_prior":
+        return _BoxPriorReranker()
+    text_dim = int(batch.fields["text"].x.shape[-1])
+    region_dim = int(batch.fields["region"].x.shape[-1])
+    if baseline_name == "candidate_mlp_reranker":
+        return _CandidateMLPReranker(text_dim, region_dim, d_model)
+    if baseline_name == "cross_attention_reranker":
+        return _CrossAttentionReranker(text_dim, region_dim, d_model)
+    raise ValueError(f"unknown region reranker baseline: {baseline_name}")
+
+
+def _region_reranker_prediction(baseline_name: str, model: torch.nn.Module, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    del baseline_name
+    return model(batch)
+
+
+def _region_reranker_robustness_rows(
+    config: MultimodalExperimentConfig,
+    *,
+    baseline_name: str,
+    model: torch.nn.Module,
+    batch: MultimodalEpisodeBatch,
+    seed: int,
+    raw_metric_path: Path,
+    device: torch.device,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for corruption_type in ("clean", *DEFAULT_REQUIRED_STRESS_TARGETS):
+        corrupted = _corrupted_batch(batch, corruption_type)
+        corrupted_device = _move_batch_to_device(corrupted, device)
+        with torch.no_grad():
+            prediction = _region_reranker_prediction(baseline_name, model, corrupted_device)
+            loss = _task_loss(prediction, corrupted_device)
+            score = _robustness_score(config, corrupted_device, prediction, loss)
+        rows.append(
+            _robustness_row(
+                config,
+                corrupted,
+                model_name=baseline_name,
+                seed=seed,
+                raw_metric_path=raw_metric_path,
+                corruption_type=corruption_type,
+                score=score,
+                task_loss=_as_float(loss),
+                router_load_by_candidate=_uniform_candidate_load(config.candidate_names),
+                operator_load_by_candidate=_uniform_candidate_load(config.candidate_names),
+                candidate_loss={candidate: loss for candidate in config.candidate_names},
+                model_reliability=None,
+            )
+        )
+    return rows
+
+
+def _region_candidate_mask(batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    if "region" in batch.fields:
+        return batch.fields["region"].mask.to(dtype=torch.bool, device=batch.target_y.device)
+    return torch.ones(batch.target_y.shape[0], batch.target_y.shape[-1], dtype=torch.bool, device=batch.target_y.device)
+
+
+def _region_geometry_features(batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    pos = batch.fields["region"].pos.to(dtype=batch.fields["region"].x.dtype, device=batch.fields["region"].x.device)
+    if int(pos.shape[-1]) >= 9:
+        return pos[..., :9]
+    if int(pos.shape[-1]) >= 4:
+        x1, y1, x2, y2 = pos[..., 0], pos[..., 1], pos[..., 2], pos[..., 3]
+        w = (x2 - x1).clamp_min(0.0)
+        h = (y2 - y1).clamp_min(0.0)
+        cx = 0.5 * (x1 + x2)
+        cy = 0.5 * (y1 + y2)
+        return torch.stack([x1, y1, x2, y2, cx, cy, w, h, w * h], dim=-1)
+    pad = torch.zeros(*pos.shape[:-1], 9 - int(pos.shape[-1]), dtype=pos.dtype, device=pos.device)
+    return torch.cat([pos, pad], dim=-1)
+
+
+def _geometry_ranks(geometry: torch.Tensor) -> torch.Tensor:
+    rank_inputs = geometry[..., [4, 5, 8]]
+    order = rank_inputs.argsort(dim=1).argsort(dim=1).to(dtype=geometry.dtype)
+    denom = max(1, int(geometry.shape[1]) - 1)
+    return order / float(denom)
+
+
+def _masked_region_logits(logits: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    logits = logits.masked_fill(~_region_candidate_mask(batch).to(device=logits.device), -1e9)
+    return logits.unsqueeze(1).expand(-1, int(batch.target_y.shape[1]), -1).contiguous()
 
 
 def _train_linear_baseline(

@@ -9,6 +9,13 @@ This project now separates two evidence types:
 
 RefCOCO internal rows:
 
+- `random_valid`
+- `train_slot_prior`
+- `box_prior`
+- `prso_clip_similarity`
+- `candidate_mlp_reranker`
+- `cross_attention_reranker`
+- `index_prior_only`
 - `text_only`
 - `region_only`
 - `concat_fusion`
@@ -31,6 +38,16 @@ CMU-MOSEI internal rows:
 - `ovha_no_evidence_router`
 
 These rows are not claims that the project reproduced MDETR, GLIP, GroundingDINO, TFN, MulT, MISA, MAG-BERT, or Self-MM. They are mechanism-isolation comparisons over the same cached features.
+
+## RefCOCO External Comparison Tracks
+
+RefCOCO/GroundingDINO-style results must be split into three tracks:
+
+- Track A, external open-box reference: raw image + expression in, model outputs free boxes. Report separately as external detector/reference evidence.
+- Track B, same-candidate scorer: external detector boxes are mapped onto the exact OVHA candidate boxes with `max IoU(candidate_i, predicted_box_j) * score_j`, then evaluated with the same candidate metrics.
+- Track C, proposal generator plus OVHA reranker: GroundingDINO supplies shared top-K proposals, proposal recall@K is reported first, then rerankers are compared on that shared proposal set.
+
+Do not put Track A rows in `baseline_names`. Only Track B/C outputs may be imported into a candidate-table comparison, and only with the exact candidate/proposal manifest, checkpoint, commit, and metric source recorded.
 
 ## External SOTA References
 

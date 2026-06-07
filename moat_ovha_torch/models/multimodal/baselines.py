@@ -2,6 +2,13 @@ from __future__ import annotations
 
 
 REGION_TEXT_BASELINES = (
+    "random_valid",
+    "train_slot_prior",
+    "box_prior",
+    "prso_clip_similarity",
+    "candidate_mlp_reranker",
+    "cross_attention_reranker",
+    "index_prior_only",
     "text_only",
     "region_only",
     "concat_fusion",
@@ -42,7 +49,20 @@ CONTROLLED_BASELINES = (
     "concat_transformer",
 )
 
-REGION_TEXT_SANITY_PROBES = ("index_prior_only", "text_only", "region_only", "concat_fusion")
+REGION_TEXT_SANITY_PROBES = (
+    "random_valid",
+    "train_slot_prior",
+    "index_prior_only",
+    "text_only",
+    "region_only",
+    "concat_fusion",
+)
+REGION_TEXT_STRONG_RERANKERS = (
+    "box_prior",
+    "prso_clip_similarity",
+    "candidate_mlp_reranker",
+    "cross_attention_reranker",
+)
 REGION_TEXT_OVHA_ABLATIONS = ("cato_only", "ovha_no_cato", "ovha_no_rceo", "ovha_no_evidence_router")
 SENTIMENT_EMOTION_SANITY_PROBES = ("text_only", "audio_only", "vision_only", "concat_fusion")
 SENTIMENT_EMOTION_OVHA_ABLATIONS = (
@@ -119,6 +139,9 @@ def ovha_ablation_names_for_task(task_type: str) -> tuple[str, ...]:
 def baseline_protocol_for_name(task_type: str, baseline_name: str) -> str:
     if baseline_name in same_feature_probe_names_for_task(task_type):
         return "same_feature_sanity_probe"
+    if task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
+        if baseline_name in REGION_TEXT_STRONG_RERANKERS:
+            return "same_candidate_strong_reranker"
     if baseline_name in ovha_ablation_names_for_task(task_type):
         return "internal_ovha_ablation"
     if baseline_name in external_reference_names_for_task(task_type):

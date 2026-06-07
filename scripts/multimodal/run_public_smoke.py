@@ -789,6 +789,8 @@ def _residual_oracle_alpha(
     alpha_max: float = 1.0,
     eps: float = 1e-8,
 ) -> torch.Tensor:
+    if batch.supervision.region_targets is not None and base.shape[-1] > 1:
+        return _classification_residual_oracle_alpha(base, delta, batch, alpha_max=alpha_max)
     target = batch.target_y.to(dtype=base.dtype, device=base.device)
     mask = batch.target_mask.to(dtype=base.dtype, device=base.device).unsqueeze(-1)
     residual = target - base
@@ -796,6 +798,46 @@ def _residual_oracle_alpha(
     denominator = delta.square().sum(dim=-1, keepdim=True).clamp_min(float(eps))
     alpha = (numerator / denominator).clamp(min=0.0, max=float(alpha_max))
     return alpha * mask
+
+
+def _classification_residual_oracle_alpha(
+    base: torch.Tensor,
+    delta: torch.Tensor,
+    batch: MultimodalEpisodeBatch,
+    *,
+    alpha_max: float = 1.0,
+    grid: tuple[float, ...] = (0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
+) -> torch.Tensor:
+    labels = batch.supervision.region_targets
+    if labels is None:
+        return torch.zeros(*base.shape[:-1], 1, dtype=base.dtype, device=base.device)
+    labels = labels.to(device=base.device, dtype=torch.long)
+    if labels.ndim == 1:
+        labels = labels.unsqueeze(1)
+    if labels.ndim > 2:
+        labels = labels.reshape(labels.shape[0], -1)
+    query_count = min(int(base.shape[1]), int(labels.shape[1]))
+    labels = labels[:, :query_count]
+    valid = batch.target_mask.to(dtype=torch.bool, device=base.device)[:, :query_count]
+    if not bool(valid.any()):
+        return torch.zeros(base.shape[0], base.shape[1], 1, dtype=base.dtype, device=base.device)
+    candidates = [max(0.0, min(float(alpha_max), float(value))) for value in grid]
+    losses = []
+    for alpha in candidates:
+        logits = base[:, :query_count, :] + float(alpha) * delta[:, :query_count, :]
+        ce = torch.nn.functional.cross_entropy(
+            logits.reshape(-1, logits.shape[-1]),
+            labels.reshape(-1),
+            reduction="none",
+        ).reshape(labels.shape)
+        losses.append(ce)
+    loss_stack = torch.stack(losses, dim=-1)
+    best_index = loss_stack.argmin(dim=-1)
+    alpha_values = torch.as_tensor(candidates, dtype=base.dtype, device=base.device)
+    target = alpha_values[best_index].unsqueeze(-1)
+    full = torch.zeros(base.shape[0], base.shape[1], 1, dtype=base.dtype, device=base.device)
+    full[:, :query_count, :] = target * valid.to(dtype=base.dtype).unsqueeze(-1)
+    return full
 
 
 def _public_alignment_ce(prediction: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:
@@ -948,8 +990,43 @@ def _with_region_text_gate_candidate_metrics(
     else:
         cato.setdefault("top_alignment_accuracy", metrics["phrase_region_topk_accuracy"])
     cato.setdefault("grounding_accuracy", metrics["acc_at_0_5"])
+    transport_metrics = _candidate_transport_metrics(output.candidate_outputs["CATO"].value, batch)
+    cato.setdefault("target_region_transport_mass", transport_metrics["target_region_transport_mass"])
+    cato.setdefault("transport_top1_acc", transport_metrics["transport_top1_acc"])
+    cato.setdefault("transport_top5_acc", transport_metrics["transport_top5_acc"])
+    cato.setdefault("token_region_entropy", cato.get("token_alignment_entropy", cato.get("alignment_entropy", 0.0)))
     candidate_diagnostics["CATO"] = cato
     return candidate_diagnostics
+
+
+def _candidate_transport_metrics(logits: torch.Tensor, batch: MultimodalEpisodeBatch) -> dict[str, torch.Tensor]:
+    labels = batch.supervision.region_targets
+    if labels is None or logits.shape[-1] <= 1:
+        zero = logits.sum() * 0.0
+        return {"target_region_transport_mass": zero, "transport_top1_acc": zero, "transport_top5_acc": zero}
+    labels = labels.to(device=logits.device, dtype=torch.long)
+    if labels.ndim == 1:
+        labels = labels.unsqueeze(1)
+    if labels.ndim > 2:
+        labels = labels.reshape(labels.shape[0], -1)
+    query_count = min(int(logits.shape[1]), int(labels.shape[1]))
+    valid = batch.target_mask.to(dtype=torch.bool, device=logits.device)[:, :query_count]
+    if not bool(valid.any()):
+        zero = logits.sum() * 0.0
+        return {"target_region_transport_mass": zero, "transport_top1_acc": zero, "transport_top5_acc": zero}
+    scoped_logits = logits[:, :query_count, :]
+    probs = torch.softmax(scoped_logits, dim=-1)
+    scoped_labels = labels[:, :query_count]
+    target_mass = torch.gather(probs, dim=-1, index=scoped_labels.unsqueeze(-1)).squeeze(-1)
+    top1 = scoped_logits.argmax(dim=-1)
+    k = min(5, int(scoped_logits.shape[-1]))
+    topk = torch.topk(scoped_logits, k=k, dim=-1).indices
+    top5 = (topk == scoped_labels.unsqueeze(-1)).any(dim=-1)
+    return {
+        "target_region_transport_mass": target_mass[valid].mean(),
+        "transport_top1_acc": (top1[valid] == scoped_labels[valid]).to(dtype=logits.dtype).mean(),
+        "transport_top5_acc": top5[valid].to(dtype=logits.dtype).mean(),
+    }
 
 
 def _pair_key(pair: tuple[str, str]) -> str:

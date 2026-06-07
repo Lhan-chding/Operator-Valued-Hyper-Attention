@@ -32,7 +32,9 @@ Internal same-feature tables may include:
 
 | family | rows |
 |---|---|
-| sanity probes | `text_only`, `region_only`, `concat_fusion` |
+| slot-prior sanity probes | `random_valid`, `train_slot_prior`, `index_prior_only` |
+| weak pooled sanity probes | `text_only`, `region_only`, `concat_fusion` |
+| strong same-candidate rerankers | `box_prior`, `prso_clip_similarity`, `candidate_mlp_reranker`, `cross_attention_reranker` |
 | OVHA operator rows | `PRSO`, `PRSO+SRO`, `PRSO+TLEO`, `PRSO+CATO`, `PRSO+SRO+TLEO`, `PRSO+SRO+CATO`, `PRSO+SRO+TLEO+CATO` |
 | diagnostics | `metrics_source=canonical_grounding_metrics_v1`, residual utility, leave-one-residual-out deltas, alignment entropy, CATO load, TLEO local evidence load, Acc@0.5 IoU, Recall@K |
 
@@ -49,6 +51,18 @@ GroundingDINO comparisons must be split into three tracks:
 ## Ubuntu File Audit Commands
 
 Run these commands on the Ubuntu machine that holds the processed COCO / RefCOCO data, then send back the generated JSON and the first few listed paths:
+
+Preferred project-aware audit:
+
+```bash
+python scripts/multimodal/audit_refcoco_legacy_artifacts.py \
+  --raw-root data/raw_multimodal/refcoco \
+  --cache-root data/multimodal_cache \
+  --dataset-name refcoco \
+  --version v0.1
+```
+
+Generic file inventory:
 
 ```bash
 DATA_ROOT=/path/to/your/coco_refcoco_root

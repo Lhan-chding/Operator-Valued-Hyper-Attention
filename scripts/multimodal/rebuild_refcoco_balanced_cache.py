@@ -45,6 +45,7 @@ def main() -> int:
     parser.add_argument("--feature-version", required=True)
     parser.add_argument("--license-tag", default="refcoco-coco2014")
     parser.add_argument("--max-candidate-regions", type=int, default=32)
+    parser.add_argument("--candidate-count-policy", choices=("variable_k", "fixed_k"), default="variable_k")
     parser.add_argument(
         "--reuse-existing-raw-features",
         action="store_true",
@@ -96,6 +97,7 @@ def rebuild_refcoco_balanced_cache(args: argparse.Namespace) -> dict[str, Any]:
             candidate_region_source="coco_gt_box",
             box_coordinate_convention="xyxy_normalized",
             max_candidate_regions=int(args.max_candidate_regions),
+            candidate_count_policy=str(args.candidate_count_policy),
         )
     )
     records_path = Path(stage_payload["records"])

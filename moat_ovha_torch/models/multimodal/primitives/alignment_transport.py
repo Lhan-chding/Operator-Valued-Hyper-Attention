@@ -152,32 +152,47 @@ class CATOPrimitive(MultimodalCandidatePrimitive):
     def _forward_region_alignment(self, batch, evidence, params: dict[str, torch.Tensor], output_dim: int) -> CandidateOutput:
         text = evidence.field_features["text"]
         region = evidence.field_features["region"]
+        text_field = batch.fields["text"]
         region_field = batch.fields["region"]
-        phrase = _masked_mean(text, batch.fields["text"].mask).unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1)
         q_proj, k_proj, _v_proj, _gate_proj = self._modules_for("region")
-        query = q_proj(phrase)
+        query = q_proj(text)
         key = k_proj(region)
         temperature = params["alignment_temperature"].clamp_min(0.05)
-        logits = torch.matmul(query, key.transpose(1, 2)) / temperature
-        logits = logits + _region_geometry_bias(region_field.pos, dtype=logits.dtype, device=logits.device).unsqueeze(1)
-        region_mask = region_field.mask.to(device=logits.device)
-        logits = logits.masked_fill(~region_mask.unsqueeze(1), -1e9)
+        token_region_logits = torch.matmul(query, key.transpose(1, 2)) / temperature.mean(dim=1, keepdim=True)
+        token_region_logits = token_region_logits + _region_geometry_bias(region_field.pos, dtype=token_region_logits.dtype, device=token_region_logits.device).unsqueeze(1)
+        text_mask = text_field.mask.to(dtype=torch.bool, device=token_region_logits.device)
+        region_mask = region_field.mask.to(dtype=torch.bool, device=token_region_logits.device)
+        token_region_logits = token_region_logits.masked_fill(~region_mask.unsqueeze(1), -1e9)
+        token_region_logits = token_region_logits.masked_fill(~text_mask.unsqueeze(-1), -1e9)
+        transport = torch.softmax(token_region_logits, dim=-1)
+        transport = torch.where(text_mask.unsqueeze(-1), transport, torch.zeros_like(transport))
+        text_weights = text_mask.to(dtype=transport.dtype).unsqueeze(-1)
+        phrase_region_logits = (transport * text_weights).sum(dim=1) / text_weights.sum(dim=1).clamp_min(1.0)
+        phrase_region_logits = phrase_region_logits.masked_fill(~region_mask, -1e9)
+        logits = phrase_region_logits.unsqueeze(1).expand(-1, evidence.query_features.shape[1], -1).contiguous()
         value = apply_scale_bias(_fit_output_dim(logits, output_dim), params)
         weights = torch.softmax(logits, dim=-1)
         feature = self.norm(torch.matmul(weights, region))
+        token_entropy = -(transport * transport.clamp_min(1e-12).log()).sum(dim=-1)
+        valid_token_entropy = (token_entropy * text_mask.to(dtype=token_entropy.dtype)).sum() / text_mask.to(dtype=token_entropy.dtype).sum().clamp_min(1.0)
+        transport_row_error = ((transport.sum(dim=-1) - 1.0).abs() * text_mask.to(dtype=transport.dtype)).sum() / text_mask.to(dtype=transport.dtype).sum().clamp_min(1.0)
+        target_transport_mass = transport.max(dim=1).values.mean()
         diagnostics = {
-            "alignment_entropy": -(weights * weights.clamp_min(1e-12).log()).sum(dim=-1).mean(),
-            "token_alignment_entropy": -(weights * weights.clamp_min(1e-12).log()).sum(dim=-1).mean(),
+            "alignment_entropy": valid_token_entropy,
+            "token_alignment_entropy": valid_token_entropy,
             "top_k_alignment": weights.argmax(dim=-1).to(dtype=torch.float32).mean(),
             "source_top_k_gate": torch.zeros((), dtype=value.dtype, device=value.device),
-            "transport_marginal_error": (weights.sum(dim=-1) - 1.0).abs().mean(),
+            "transport_marginal_error": transport_row_error,
             "alignment_temperature": params.get("alignment_temperature"),
             "transport_scale": params.get("transport_scale"),
             "source_modality": ("region",),
             "source_gate": {"region": torch.ones((), dtype=value.dtype, device=value.device)},
             "valid_source_rate": {"region": region_mask.any(dim=1).to(dtype=value.dtype).mean()},
-            "source_token_marginal": {"region": weights.mean(dim=(0, 1))},
-            "query_token_marginal": {"region": weights.sum(dim=-1).mean()},
+            "source_token_marginal": {"region": transport.mean(dim=(0, 1))},
+            "query_token_marginal": {"region": (transport.sum(dim=-1) * text_mask.to(dtype=transport.dtype)).sum() / text_mask.to(dtype=transport.dtype).sum().clamp_min(1.0)},
+            "token_region_transport": True,
+            "transport_shape": tuple(int(dim) for dim in transport.shape),
+            "target_region_transport_mass_proxy": target_transport_mass,
             "null_mass": torch.zeros((), dtype=value.dtype, device=value.device),
             "learned_null_mass": torch.zeros((), dtype=value.dtype, device=value.device),
             "invalid_source_rate": (~region_mask.any(dim=1)).to(dtype=value.dtype).mean(),

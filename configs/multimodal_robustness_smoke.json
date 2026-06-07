@@ -9,6 +9,13 @@
   "training_stages": ["T0", "T6"],
   "candidate_names": ["TLEO", "SPO", "LRIO", "CATO"],
   "baseline_names": [
+    "random_valid",
+    "train_slot_prior",
+    "box_prior",
+    "prso_clip_similarity",
+    "candidate_mlp_reranker",
+    "cross_attention_reranker",
+    "index_prior_only",
     "text_only",
     "region_only",
     "concat_fusion",

@@ -302,6 +302,18 @@ Required gates:
 
 如果服务器上已经跑过旧排序 candidate/cache，并且要彻底避免旧数据继续影响新实验，可以在重新 build 前手动清掉 RefCOCO staging 与当前 cache version。下面命令只删 RefCOCO raw staging 和 `refcoco/v0.1` cache，不会删 CMU-MOSEI 等其他数据集：
 
+先用只读 audit 看清楚会删什么：
+
+```bash
+python scripts/multimodal/audit_refcoco_legacy_artifacts.py \
+  --raw-root data/raw_multimodal/refcoco \
+  --cache-root data/multimodal_cache \
+  --dataset-name refcoco \
+  --version v0.1
+```
+
+确认 `delete_targets` 后再执行删除。最常见的删除命令是：
+
 ```bash
 rm -rf data/raw_multimodal/refcoco/annotations \
        data/raw_multimodal/refcoco/features \
@@ -309,6 +321,17 @@ rm -rf data/raw_multimodal/refcoco/annotations \
        data/raw_multimodal/refcoco/splits.json \
        data/multimodal_cache/refcoco/v0.1
 ```
+
+如果旧 stage records/features 或旧输出也可能混入新实验，再删：
+
+```bash
+rm -rf data/raw_multimodal/_downloads/refcoco_stage_inputs \
+       data/raw_multimodal/_downloads/refcoco_balanced_rebuild \
+       outputs/multimodal/refcoco_main \
+       outputs/multimodal/refcoco_public_smoke
+```
+
+不要删 `data/raw_multimodal/_downloads/refcoco/extracted` 或下载好的 zip，除非你准备重新下载 COCO/UNC 原始数据。
 
 ## 3. Region-text grounding 数据
 
