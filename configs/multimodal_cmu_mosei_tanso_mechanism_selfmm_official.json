@@ -2,7 +2,7 @@
   "name": "multimodal_cmu_mosei_tanso_mechanism_selfmm_official",
   "dataset_name": "cmu_mosei",
   "task_type": "sentiment_emotion",
-  "cache_version": "v0.1",
+  "cache_version": "v0.1_selfmm_official",
   "cache_root": "data/multimodal_cache",
   "output_dir": "outputs/multimodal/cmu_mosei_tanso_mechanism_selfmm_official",
   "seeds": [

@@ -105,6 +105,7 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
 
         self.assertEqual(config.main_model_name, "ovha_tanso_full")
         self.assertEqual(config.feature_source, "selfmm_official_unaligned_50")
+        self.assertEqual(config.cache_version, "v0.1_selfmm_official")
         self.assertEqual(config.seeds, (301, 302, 303, 304, 305))
         self.assertEqual(config.candidate_names, ("TANSOBase",))
         self.assertEqual(config.composition_mode, "tanso_base")
