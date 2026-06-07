@@ -333,6 +333,44 @@ class RefCOCOStrictAuditPlanContracts(unittest.TestCase):
         self.assertEqual(diagnostics["CATO"]["top_alignment_accuracy"], 1.0)
         self.assertEqual(diagnostics["CATO"]["alignment_entropy"], 0.2)
 
+    def test_region_base_residual_diagnostics_export_operator_load_separately_from_router_load(self):
+        if not TORCH_AVAILABLE:
+            self.skipTest("torch is required for diagnostics checks")
+        import torch
+
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+        from scripts.multimodal.run_public_smoke import _public_training_diagnostics_row
+
+        torch.manual_seed(17)
+        batch = _region_batch(torch)
+        config = MultimodalExperimentConfig.from_mapping(_refcoco_config(Path("/tmp/cache")))
+        model = MultimodalOVHA(
+            field_dims={"text": 5, "region": 4},
+            query_dim=5,
+            output_dim=3,
+            d_model=12,
+            memory_tokens=2,
+            candidate_names=config.candidate_names,
+            composition_mode=config.composition_mode,
+            base_candidate=config.base_candidate,
+            residual_candidates=config.residual_candidates,
+        )
+
+        with torch.no_grad():
+            output = model(batch)
+        row = _public_training_diagnostics_row(output, config, batch, step=1, seed=201)
+
+        self.assertEqual(row["operator_load_source"], "base_plus_residual_normalized_base_and_residual_gates")
+        self.assertEqual(set(row["router_load_by_candidate"]), set(config.candidate_names))
+        self.assertEqual(set(row["operator_load_by_candidate"]), set(config.candidate_names))
+        self.assertAlmostEqual(sum(row["operator_load_by_candidate"].values()), 1.0, places=6)
+        self.assertNotEqual(row["operator_load_by_candidate"], row["router_load_by_candidate"])
+        self.assertIn("residual_gate_by_candidate", row["base_residual_composition"])
+        self.assertIn("CATO", row["base_residual_composition"]["residual_gate_by_candidate"])
+        self.assertIn("cato_router_load_by_phrase_type", row["public_diagnostics"])
+        self.assertIn("cato_operator_load_by_phrase_type", row["public_diagnostics"])
+
     def test_region_grounding_metrics_are_canonical_and_fail_without_candidate_boxes(self):
         if not TORCH_AVAILABLE:
             self.skipTest("torch is required for metric checks")

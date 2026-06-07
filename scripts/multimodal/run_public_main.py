@@ -46,6 +46,8 @@ from scripts.multimodal.run_public_smoke import (
     _linear_parameter_count,
     _linear_parameter_vector,
     _load_public_batch,
+    _operator_load_by_candidate,
+    _operator_load_source,
     _ovha_composition_kwargs,
     _parameter_count,
     _parameter_vector,
@@ -1724,6 +1726,9 @@ def _ovha_raw_metric_row(
     model_name: str = "ovha_full",
 ) -> dict[str, Any]:
     loss = _task_loss(output.y_hat, batch)
+    diagnostics = dict(output.diagnostics)
+    diagnostics["operator_load_by_candidate"] = _operator_load_by_candidate(output, candidate_names=config.candidate_names)
+    diagnostics["operator_load_source"] = _operator_load_source(output)
     return _raw_metric_row(
         config,
         batch,
@@ -1738,7 +1743,7 @@ def _ovha_raw_metric_row(
         router_load_by_candidate=output.diagnostics.get("router_load_by_candidate", {}),
         router_entropy=output.diagnostics.get("router_entropy"),
         candidate_loss=output.diagnostics.get("candidate_loss", {}),
-        diagnostics=output.diagnostics,
+        diagnostics=diagnostics,
         model_protocol="operator_valued_hyper_attention_public_main",
     )
 
@@ -2422,6 +2427,10 @@ def _raw_metric_row(
         "raw_metric_path": str(raw_metrics_path),
     }
     if isinstance(diagnostics, dict):
+        if "operator_load_by_candidate" in diagnostics:
+            row["operator_load_by_candidate"] = _json_ready(diagnostics["operator_load_by_candidate"])
+        if "operator_load_source" in diagnostics:
+            row["operator_load_source"] = str(diagnostics["operator_load_source"])
         for key in (
             "calibration",
             "affine_calibration",
@@ -2554,6 +2563,7 @@ def _ovha_robustness_rows(
                 score=score,
                 task_loss=_as_float(loss),
                 router_load_by_candidate=output.diagnostics.get("router_load_by_candidate", {}),
+                operator_load_by_candidate=_operator_load_by_candidate(output, candidate_names=config.candidate_names),
                 candidate_loss=output.diagnostics.get("candidate_loss", {}),
                 model_reliability=_model_reliability_mean(output.diagnostics),
             )
@@ -2605,6 +2615,7 @@ def _baseline_robustness_rows(
                 score=score,
                 task_loss=_as_float(loss),
                 router_load_by_candidate=_uniform_candidate_load(config.candidate_names),
+                operator_load_by_candidate=_uniform_candidate_load(config.candidate_names),
                 candidate_loss={candidate: loss for candidate in config.candidate_names},
                 model_reliability=None,
             )
@@ -2621,10 +2632,11 @@ def _robustness_row(
     raw_metric_path: Path,
     corruption_type: str,
     score: float,
-    task_loss: float,
-    router_load_by_candidate: Any,
-    candidate_loss: Any,
-    model_reliability: float | None,
+    task_loss: float | None = None,
+    router_load_by_candidate: Any = None,
+    operator_load_by_candidate: Any = None,
+    candidate_loss: Any = None,
+    model_reliability: float | None = None,
 ) -> dict[str, Any]:
     strength = _corruption_strength(corruption_type)
     rceo_reliability = 0.0 if model_reliability is None else max(0.0, min(1.0, float(model_reliability)))
@@ -2640,11 +2652,15 @@ def _robustness_row(
         "corruption_strength": strength,
         "missing_modalities": _missing_modalities(corruption_type),
         "score": score,
-        "task_loss": task_loss,
+        "task_loss": float(score) if task_loss is None else float(task_loss),
         "rceo_reliability": rceo_reliability,
         "rceo_reliability_source": "model_reliability_prior" if model_reliability is not None else "not_applicable_no_model_reliability",
         "rceo_observed_reliability": score,
         "router_load_by_candidate": _complete_candidate_probability_map(router_load_by_candidate, candidate_names=config.candidate_names),
+        "operator_load_by_candidate": _complete_candidate_probability_map(
+            operator_load_by_candidate or router_load_by_candidate,
+            candidate_names=config.candidate_names,
+        ),
         "candidate_loss": _json_ready(candidate_loss),
         "source_raw_metric_path": str(raw_metric_path),
     }

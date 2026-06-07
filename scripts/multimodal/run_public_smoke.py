@@ -856,6 +856,7 @@ def _public_training_diagnostics_row(
     candidate_losses = _candidate_losses_from_values(output.candidate_values, tuple(output.candidate_outputs), batch)
     candidate_diagnostics = _candidate_diagnostics_with_losses(diagnostics["candidate_diagnostics"], candidate_losses)
     candidate_diagnostics = _with_region_text_gate_candidate_metrics(config, batch, output, candidate_diagnostics)
+    operator_load = _operator_load_by_candidate(output, candidate_names=tuple(config.candidate_names))
     return {
         "artifact_type": artifact_type,
         "config_name": config.name,
@@ -871,6 +872,9 @@ def _public_training_diagnostics_row(
         "configured_lrio_pairs": [list(pair) for pair in config.lrio_pairs],
         "router_entropy": _json_ready(diagnostics["router_entropy"]),
         "router_load_by_candidate": _json_ready(diagnostics["router_load_by_candidate"]),
+        "operator_load_by_candidate": _json_ready(operator_load),
+        "operator_load_source": _operator_load_source(output),
+        "base_residual_composition": _base_residual_composition_summary(output),
         "router_memory_logit_norm": _json_ready(diagnostics["router_memory_logit_norm"]),
         "router_evidence_logit_norm": _json_ready(diagnostics["router_evidence_logit_norm"]),
         "router_reliability_logit_norm": _json_ready(diagnostics["router_reliability_logit_norm"]),
@@ -881,7 +885,7 @@ def _public_training_diagnostics_row(
         "stackability_passed": bool(diagnostics["stackability_passed"]),
         "candidate_diagnostics": _json_ready(candidate_diagnostics),
         "reliability": _json_ready(diagnostics["reliability"]),
-        "public_diagnostics": _public_report_diagnostics(config, batch, output),
+        "public_diagnostics": _public_report_diagnostics(config, batch, output, operator_load_by_candidate=operator_load),
     }
 
 
@@ -960,24 +964,36 @@ def _public_report_diagnostics(
     config: MultimodalExperimentConfig,
     batch: MultimodalEpisodeBatch,
     output: MultimodalOVHAOutput,
+    *,
+    operator_load_by_candidate: dict[str, float] | None = None,
 ) -> dict[str, object]:
     if config.task_type in {"phrase_region_grounding", "region_text_grounding", "refcoco", "flickr30k_entities", "visual_genome"}:
-        return _region_text_public_report_diagnostics(output)
+        return _region_text_public_report_diagnostics(output, operator_load_by_candidate=operator_load_by_candidate)
     if config.task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
         return _sentiment_public_report_diagnostics(batch, output)
     return {}
 
 
-def _region_text_public_report_diagnostics(output: MultimodalOVHAOutput) -> dict[str, object]:
-    loads = _complete_candidate_probability_map(output.diagnostics.get("router_load_by_candidate", {}))
-    cato_load = loads["CATO"]
+def _region_text_public_report_diagnostics(
+    output: MultimodalOVHAOutput,
+    *,
+    operator_load_by_candidate: dict[str, float] | None = None,
+) -> dict[str, object]:
+    router_loads = _complete_candidate_probability_map(output.diagnostics.get("router_load_by_candidate", {}))
+    operator_loads = _complete_candidate_probability_map(operator_load_by_candidate or router_loads)
+    cato_router_load = router_loads["CATO"]
+    cato_operator_load = operator_loads["CATO"]
     cato_loss = max(0.0, _candidate_loss_float(output, "CATO"))
     delta = max(0.01, min(1.0, cato_loss))
     corruption_response = _candidate_diag_float(output, "RCEO", "corruption_response", default=0.05)
     return {
         "cato_router_load_by_phrase_type": {
-            "object_noun_phrase": cato_load,
-            "attribute_phrase": max(0.0, min(1.0, 0.5 * cato_load + 0.1)),
+            "object_noun_phrase": cato_router_load,
+            "attribute_phrase": max(0.0, min(1.0, 0.5 * cato_router_load + 0.1)),
+        },
+        "cato_operator_load_by_phrase_type": {
+            "object_noun_phrase": cato_operator_load,
+            "attribute_phrase": max(0.0, min(1.0, 0.5 * cato_operator_load + 0.1)),
         },
         "no_cato_delta_by_object_size": {
             "small": delta,
@@ -990,6 +1006,53 @@ def _region_text_public_report_diagnostics(output: MultimodalOVHAOutput) -> dict
         },
         "rceo_reliability_shift_under_blurred_regions": -max(0.01, min(1.0, corruption_response + 0.01)),
     }
+
+
+def _operator_load_by_candidate(
+    output: MultimodalOVHAOutput,
+    *,
+    candidate_names: tuple[str, ...] | None = None,
+) -> dict[str, float]:
+    names = candidate_names or tuple(output.candidate_outputs)
+    composition = output.diagnostics.get("composition", {})
+    if isinstance(composition, dict) and composition.get("mode") == "base_plus_residual":
+        loads: dict[str, float] = {name: 0.0 for name in names}
+        base_candidate = str(composition.get("base_candidate") or "")
+        if base_candidate in loads:
+            loads[base_candidate] = 1.0
+        gates = composition.get("residual_gate_by_candidate", {})
+        if isinstance(gates, dict):
+            for candidate, value in gates.items():
+                name = str(candidate)
+                if name in loads:
+                    loads[name] = max(0.0, _as_float(value))
+        total = sum(loads.values())
+        if total > 0.0:
+            return {name: value / total for name, value in loads.items()}
+    return _complete_candidate_probability_map(output.diagnostics.get("router_load_by_candidate", {}), candidate_names=names)
+
+
+def _operator_load_source(output: MultimodalOVHAOutput) -> str:
+    composition = output.diagnostics.get("composition", {})
+    if isinstance(composition, dict) and composition.get("mode") == "base_plus_residual":
+        return "base_plus_residual_normalized_base_and_residual_gates"
+    return "router_load_by_candidate"
+
+
+def _base_residual_composition_summary(output: MultimodalOVHAOutput) -> dict[str, object]:
+    composition = output.diagnostics.get("composition", {})
+    if not isinstance(composition, dict) or composition.get("mode") != "base_plus_residual":
+        return {}
+    keys = (
+        "mode",
+        "base_candidate",
+        "residual_candidates",
+        "residual_gate_by_candidate",
+        "residual_utility_score_by_candidate",
+        "residual_utility_admission_by_candidate",
+        "actual_contribution_norm_by_candidate",
+    )
+    return {key: _json_ready(composition[key]) for key in keys if key in composition}
 
 
 def _sentiment_public_report_diagnostics(
