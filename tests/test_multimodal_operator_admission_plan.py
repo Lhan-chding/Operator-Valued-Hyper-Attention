@@ -202,15 +202,40 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
         no_aux = _config_for_ovha_ablation(config, "ovha_tanso_no_gate_aux")
         self.assertEqual(no_aux.loss_metadata["tanso_source_oracle_gate_loss"]["weight"], 0.0)
 
-    def test_ubuntu_cmu_mechanism_runner_chains_training_validation_and_summary(self):
+    def test_public_main_runner_selects_only_requested_configured_baselines(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+        from scripts.multimodal.run_public_main import _selected_baselines
+
+        config = MultimodalExperimentConfig.from_file(
+            ROOT / "configs" / "multimodal_cmu_mosei_tanso_mechanism_selfmm_official.json"
+        )
+
+        selected = _selected_baselines(
+            config,
+            ("raw_tanso_mlp", "ovha_tanso_no_source_gate", "raw_tanso_mlp"),
+        )
+
+        self.assertEqual(selected, ("raw_tanso_mlp", "ovha_tanso_no_source_gate"))
+        with self.assertRaises(ValueError):
+            _selected_baselines(config, ("not_a_configured_baseline",))
+
+    def test_ubuntu_cmu_mechanism_runner_defaults_to_missing_only_continuation(self):
         path = ROOT / "scripts" / "multimodal" / "run_cmu_mosei_tanso_mechanism_selfmm_official.sh"
         source = path.read_text()
 
         self.assertIn("multimodal_cmu_mosei_tanso_mechanism_selfmm_official.json", source)
         self.assertIn("scripts/multimodal/run_public_main.py", source)
+        self.assertIn("--skip-main-model", source)
+        self.assertIn("--only-baseline", source)
+        self.assertIn("RUN_SCOPE=\"${RUN_SCOPE:-missing_only}\"", source)
+        self.assertIn("REFERENCE_RAW_METRICS", source)
         self.assertIn("scripts/multimodal/validate_public_main_artifacts.py", source)
         self.assertIn("scripts/multimodal/summarize_public_results.py", source)
         self.assertIn("raw_tanso_mlp", source)
+        self.assertIn("ovha_tanso_no_source_gate", source)
+        self.assertIn("ovha_tanso_no_hyper_adapter", source)
+        self.assertIn("ovha_tanso_no_operator_memory", source)
+        self.assertIn("ovha_tanso_no_gate_aux", source)
 
     def test_operator_admission_eval_reports_residual_utility_and_rejects_interference(self):
         rows = [

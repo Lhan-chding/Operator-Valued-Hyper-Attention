@@ -112,6 +112,23 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--skip-main-model",
+        action="store_true",
+        help=(
+            "Skip the configured main model and run only selected baselines. This is for "
+            "targeted continuation runs when the main public model has already been trained."
+        ),
+    )
+    parser.add_argument(
+        "--only-baseline",
+        action="append",
+        default=[],
+        help=(
+            "Run one configured baseline by name. Repeat for multiple baselines. When omitted, "
+            "all configured baselines are trained."
+        ),
+    )
+    parser.add_argument(
         "--progress-interval",
         type=int,
         default=None,
@@ -182,6 +199,10 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     seed_reports: list[dict[str, Any]] = []
     selected_seeds = _selected_seeds(config, args.pilot_seed)
     pilot_seed_subset = len(selected_seeds) != len(config.seeds)
+    selected_baselines = _selected_baselines(config, tuple(args.only_baseline))
+    selected_models = ([] if args.skip_main_model else [config.main_model_name]) + list(selected_baselines)
+    if not selected_models:
+        raise ValueError("targeted public-main run selected no models")
     _print_progress(
         "start",
         dataset=config.dataset_name,
@@ -189,7 +210,9 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         seeds=",".join(str(seed) for seed in selected_seeds),
         configured_seeds=",".join(str(seed) for seed in config.seeds),
         pilot_seed_subset=pilot_seed_subset,
-        model_count=1 + len(config.baseline_names),
+        model_count=len(selected_models),
+        skip_main_model=bool(args.skip_main_model),
+        selected_baselines=",".join(selected_baselines),
         train_steps=int(args.train_steps),
         baseline_train_steps=int(args.baseline_train_steps),
         device=str(device),
@@ -206,6 +229,7 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             args=args,
             device=device,
             progress_interval=progress_interval,
+            baseline_names=selected_baselines,
         )
         raw_rows.extend(seed_report["raw_rows"])
         diagnostics_rows.extend(seed_report["diagnostics_rows"])
@@ -234,7 +258,10 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "configured_seeds": list(config.seeds),
         "configured_seed_count": len(config.seeds),
         "pilot_seed_subset": pilot_seed_subset,
-        "models": [config.main_model_name, *config.baseline_names],
+        "models": selected_models,
+        "configured_models": [config.main_model_name, *config.baseline_names],
+        "selected_baselines": list(selected_baselines),
+        "skip_main_model": bool(args.skip_main_model),
         "row_counts": {
             "raw_metrics": len(raw_rows),
             "diagnostics": len(diagnostics_rows),
@@ -262,6 +289,21 @@ def _selected_seeds(config: MultimodalExperimentConfig, pilot_seed: int | None) 
     return (seed,)
 
 
+def _selected_baselines(config: MultimodalExperimentConfig, only_baselines: tuple[str, ...]) -> tuple[str, ...]:
+    if not only_baselines:
+        return config.baseline_names
+    configured = set(config.baseline_names)
+    unknown = [name for name in only_baselines if name not in configured]
+    if unknown:
+        raise ValueError(
+            "--only-baseline must name configured baselines; unknown: "
+            + ", ".join(unknown)
+            + "; configured: "
+            + ", ".join(config.baseline_names)
+        )
+    return tuple(dict.fromkeys(str(name) for name in only_baselines))
+
+
 def _run_seed(
     config: MultimodalExperimentConfig,
     layout: MultimodalCacheLayout,
@@ -271,6 +313,7 @@ def _run_seed(
     args: argparse.Namespace,
     device: torch.device,
     progress_interval: int,
+    baseline_names: tuple[str, ...],
 ) -> dict[str, Any]:
     seed_started_at = time.perf_counter()
     torch.manual_seed(seed)
@@ -284,101 +327,133 @@ def _run_seed(
     val_batch_std = _standardize_batch_targets(selection_batch, target_mean, target_std)
     eval_batch_std = _standardize_batch_targets(eval_batch, target_mean, target_std)
     field_dims = {name: int(field.x.shape[-1]) for name, field in train_batch.fields.items()}
-    model = MultimodalOVHA(
-        field_dims=field_dims,
-        query_dim=int(train_batch.query.x.shape[-1]),
-        output_dim=int(train_batch.target_y.shape[-1]),
-        d_model=int(args.d_model),
-        memory_tokens=int(args.memory_tokens),
-        candidate_names=config.candidate_names,
-        use_evidence_router=config.use_evidence_router,
-        use_reliability_prior=config.use_reliability_prior,
-        lrio_pairs=config.lrio_pairs or None,
-        **_ovha_composition_kwargs(config, config.candidate_names),
-    ).to(device)
-    initial_parameters = _parameter_vector(model)
-    fit_summary = _fit_public_ovha_model(
-        config,
-        model,
-        fit_batch_std=fit_batch_std,
-        val_batch_std=val_batch_std,
-        seed=seed,
-        sampling_seed=int(seed) + 17,
-        model_name=config.main_model_name,
-        train_steps=int(args.train_steps),
-        learning_rate=float(args.learning_rate),
-        raw_val_batch=selection_batch,
-        target_mean=target_mean,
-        target_std=target_std,
-        progress_interval=progress_interval,
-        batch_size=int(args.batch_size),
-        eval_interval=int(args.eval_interval),
-        early_stopping_patience=int(args.early_stopping_patience),
-        weight_decay=float(args.weight_decay),
-        device=device,
-    )
-    model.eval()
-    with torch.no_grad():
-        inference_batch_size = _eval_batch_size(int(args.batch_size))
-        val_output = _destandardize_output(
-            _predict_ovha_on_device(model, val_batch_std, device, batch_size=inference_batch_size),
-            target_mean,
-            target_std,
-        )
-        calibrator = _fit_task_calibrator(config, val_output.y_hat.detach().cpu(), selection_batch)
-        eval_output = _destandardize_output(
-            _predict_ovha_on_device(model, eval_batch_std, device, batch_size=inference_batch_size),
-            target_mean,
-            target_std,
-        )
-        eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std, eval_batch)
-        eval_output = _apply_task_calibration_to_output(eval_output, calibrator, config, eval_batch)
-    elapsed = time.perf_counter() - seed_started_at
-    hardware = _hardware_metadata(device, elapsed)
-    raw_rows = [
-        _ovha_raw_metric_row(
+    raw_rows: list[dict[str, Any]] = []
+    diagnostics_rows: list[dict[str, Any]] = []
+    robustness_rows: list[dict[str, Any]] = []
+    per_sample_prediction_rows: list[dict[str, Any]] = []
+    main_summary: dict[str, Any] = {
+        "ovha_skipped": bool(args.skip_main_model),
+        "ovha_skip_reason": "requested_targeted_baseline_continuation" if args.skip_main_model else None,
+    }
+    if not args.skip_main_model:
+        model = MultimodalOVHA(
+            field_dims=field_dims,
+            query_dim=int(train_batch.query.x.shape[-1]),
+            output_dim=int(train_batch.target_y.shape[-1]),
+            d_model=int(args.d_model),
+            memory_tokens=int(args.memory_tokens),
+            candidate_names=config.candidate_names,
+            use_evidence_router=config.use_evidence_router,
+            use_reliability_prior=config.use_reliability_prior,
+            lrio_pairs=config.lrio_pairs or None,
+            **_ovha_composition_kwargs(config, config.candidate_names),
+        ).to(device)
+        initial_parameters = _parameter_vector(model)
+        fit_summary = _fit_public_ovha_model(
             config,
-            eval_batch,
-            eval_output,
+            model,
+            fit_batch_std=fit_batch_std,
+            val_batch_std=val_batch_std,
             seed=seed,
-            training_steps=int(fit_summary["optimizer_steps"]),
-            parameter_count=_parameter_count(model),
-            raw_metrics_path=raw_metrics_path,
-            hardware=hardware,
+            sampling_seed=int(seed) + 17,
             model_name=config.main_model_name,
+            train_steps=int(args.train_steps),
+            learning_rate=float(args.learning_rate),
+            raw_val_batch=selection_batch,
+            target_mean=target_mean,
+            target_std=target_std,
+            progress_interval=progress_interval,
+            batch_size=int(args.batch_size),
+            eval_interval=int(args.eval_interval),
+            early_stopping_patience=int(args.early_stopping_patience),
+            weight_decay=float(args.weight_decay),
+            device=device,
         )
-    ]
-    diagnostics_rows = [
-        _public_training_diagnostics_row(
-            eval_output,
-            config,
-            eval_batch,
-            0,
-            seed,
-            artifact_type="public_main_diagnostics",
-            stage="T5_eval",
+        model.eval()
+        with torch.no_grad():
+            inference_batch_size = _eval_batch_size(int(args.batch_size))
+            val_output = _destandardize_output(
+                _predict_ovha_on_device(model, val_batch_std, device, batch_size=inference_batch_size),
+                target_mean,
+                target_std,
+            )
+            calibrator = _fit_task_calibrator(config, val_output.y_hat.detach().cpu(), selection_batch)
+            eval_output = _destandardize_output(
+                _predict_ovha_on_device(model, eval_batch_std, device, batch_size=inference_batch_size),
+                target_mean,
+                target_std,
+            )
+            eval_output = _with_raw_space_candidate_diagnostics(eval_output, eval_batch_std, eval_batch)
+            eval_output = _apply_task_calibration_to_output(eval_output, calibrator, config, eval_batch)
+        hardware = _hardware_metadata(device, time.perf_counter() - seed_started_at)
+        raw_rows.append(
+            _ovha_raw_metric_row(
+                config,
+                eval_batch,
+                eval_output,
+                seed=seed,
+                training_steps=int(fit_summary["optimizer_steps"]),
+                parameter_count=_parameter_count(model),
+                raw_metrics_path=raw_metrics_path,
+                hardware=hardware,
+                model_name=config.main_model_name,
+            )
         )
-    ]
-    robustness_rows = _ovha_robustness_rows(
-        config,
-        model,
-        eval_batch,
-        seed=seed,
-        model_name=config.main_model_name,
-        raw_metric_path=raw_metrics_path,
-        target_mean=target_mean,
-        target_std=target_std,
-        device=device,
-        batch_size=int(args.batch_size),
-    )
-    per_sample_prediction_rows = _per_sample_prediction_rows(
-        config,
-        eval_batch,
-        eval_output,
-        model_name=config.main_model_name,
-        seed=seed,
-    )
+        diagnostics_rows.append(
+            _public_training_diagnostics_row(
+                eval_output,
+                config,
+                eval_batch,
+                0,
+                seed,
+                artifact_type="public_main_diagnostics",
+                stage="T5_eval",
+            )
+        )
+        robustness_rows.extend(
+            _ovha_robustness_rows(
+                config,
+                model,
+                eval_batch,
+                seed=seed,
+                model_name=config.main_model_name,
+                raw_metric_path=raw_metrics_path,
+                target_mean=target_mean,
+                target_std=target_std,
+                device=device,
+                batch_size=int(args.batch_size),
+            )
+        )
+        per_sample_prediction_rows.extend(
+            _per_sample_prediction_rows(
+                config,
+                eval_batch,
+                eval_output,
+                model_name=config.main_model_name,
+                seed=seed,
+            )
+        )
+        main_summary = {
+            "ovha_skipped": False,
+            "ovha_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial_parameters).item()),
+            "ovha_max_grad_norm": float(fit_summary["max_grad_norm"]),
+            "ovha_best_val_task_loss": float(fit_summary["best_val_loss"]),
+            "ovha_best_val_selection_score": float(fit_summary["best_val_score"]),
+            "ovha_best_checkpoint_step": int(fit_summary["best_step"]),
+            "ovha_training_protocol": str(fit_summary["training_protocol"]),
+            "ovha_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
+            "ovha_checkpoint_selection_metric": str(fit_summary["selection_metric"]),
+            "ovha_optimizer_steps": int(fit_summary["optimizer_steps"]),
+            "ovha_stage_history": fit_summary["stage_history"],
+            "ovha_lr_schedule": str(fit_summary["lr_schedule"]),
+            "ovha_warmup_steps": int(fit_summary["warmup_steps"]),
+            "ovha_min_lr_ratio": float(fit_summary["min_lr_ratio"]),
+            "ovha_batch_size": int(args.batch_size),
+            "ovha_selection_split": args.selection_split,
+            "ovha_target_standardized": True,
+        }
 
+    hardware = _hardware_metadata(device, time.perf_counter() - seed_started_at)
     baseline_rows, baseline_robustness_rows, baseline_summaries, baseline_prediction_rows = _baseline_rows(
         config,
         train_batch=train_batch,
@@ -398,6 +473,7 @@ def _run_seed(
         early_stopping_patience=int(args.early_stopping_patience),
         weight_decay=float(args.weight_decay),
         device=device,
+        baseline_names=baseline_names,
     )
     raw_rows.extend(baseline_rows)
     robustness_rows.extend(baseline_robustness_rows)
@@ -416,22 +492,8 @@ def _run_seed(
         "per_sample_prediction_rows": per_sample_prediction_rows,
         "summary": {
             "seed": seed,
-            "ovha_parameter_l2_delta": float(torch.linalg.vector_norm(_parameter_vector(model) - initial_parameters).item()),
-            "ovha_max_grad_norm": float(fit_summary["max_grad_norm"]),
-            "ovha_best_val_task_loss": float(fit_summary["best_val_loss"]),
-            "ovha_best_val_selection_score": float(fit_summary["best_val_score"]),
-            "ovha_best_checkpoint_step": int(fit_summary["best_step"]),
-            "ovha_training_protocol": str(fit_summary["training_protocol"]),
-            "ovha_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
-            "ovha_checkpoint_selection_metric": str(fit_summary["selection_metric"]),
-            "ovha_optimizer_steps": int(fit_summary["optimizer_steps"]),
-            "ovha_stage_history": fit_summary["stage_history"],
-            "ovha_lr_schedule": str(fit_summary["lr_schedule"]),
-            "ovha_warmup_steps": int(fit_summary["warmup_steps"]),
-            "ovha_min_lr_ratio": float(fit_summary["min_lr_ratio"]),
-            "ovha_batch_size": int(args.batch_size),
-            "ovha_selection_split": args.selection_split,
-            "ovha_target_standardized": True,
+            **main_summary,
+            "selected_baselines": list(baseline_names),
             "baseline_count": len(baseline_rows),
             "baseline_summaries": baseline_summaries,
         },
@@ -1876,12 +1938,13 @@ def _baseline_rows(
     early_stopping_patience: int,
     weight_decay: float,
     device: torch.device,
+    baseline_names: tuple[str, ...] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     robustness_rows: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
     per_sample_prediction_rows: list[dict[str, Any]] = []
-    for baseline_name in config.baseline_names:
+    for baseline_name in (baseline_names or config.baseline_names):
         baseline_protocol = baseline_protocol_for_name(config.task_type, str(baseline_name))
         if _is_tanso_raw_mlp_baseline(config.task_type, str(baseline_name)):
             model, summary = _train_raw_tanso_mlp_baseline(

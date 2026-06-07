@@ -4,7 +4,7 @@ set -euo pipefail
 PYTHON_BIN="${PYTHON_BIN:-python}"
 CONFIG="${CONFIG:-configs/multimodal_cmu_mosei_tanso_mechanism_selfmm_official.json}"
 CONTROLLED_REPORT="${CONTROLLED_REPORT:-outputs/multimodal/controlled_v1_smoke/seed_101/controlled_report.json}"
-ARTIFACT_ROOT="${ARTIFACT_ROOT:-outputs/multimodal/cmu_mosei_tanso_mechanism_selfmm_official}"
+ARTIFACT_ROOT="${ARTIFACT_ROOT:-outputs/multimodal/cmu_mosei_tanso_mechanism_missing_only}"
 DEVICE="${DEVICE:-cuda}"
 TRAIN_STEPS="${TRAIN_STEPS:-50000}"
 BASELINE_TRAIN_STEPS="${BASELINE_TRAIN_STEPS:-50000}"
@@ -16,10 +16,26 @@ WEIGHT_DECAY="${WEIGHT_DECAY:-0.0001}"
 EVAL_INTERVAL="${EVAL_INTERVAL:-500}"
 EARLY_STOPPING_PATIENCE="${EARLY_STOPPING_PATIENCE:-0}"
 PROGRESS_INTERVAL="${OVHA_PUBLIC_MAIN_PROGRESS_INTERVAL:-500}"
+RUN_SCOPE="${RUN_SCOPE:-missing_only}"
+ONLY_BASELINES_DEFAULT="raw_tanso_mlp ovha_tanso_no_source_gate ovha_tanso_no_hyper_adapter ovha_tanso_no_operator_memory ovha_tanso_no_gate_aux"
+ONLY_BASELINES="${ONLY_BASELINES:-${ONLY_BASELINES_DEFAULT}}"
+REFERENCE_RAW_METRICS="${REFERENCE_RAW_METRICS:-}"
 
 mkdir -p "${ARTIFACT_ROOT}"
 
-echo "[cmu-mosei-tanso-mechanism] training full proof-plan matrix"
+RUN_ARGS=()
+BASELINE_ARRAY=()
+if [[ "${RUN_SCOPE}" == "full_matrix" ]]; then
+  echo "[cmu-mosei-tanso-mechanism] training full proof-plan matrix"
+else
+  echo "[cmu-mosei-tanso-mechanism] training missing proof-plan baselines only"
+  RUN_ARGS+=(--skip-main-model)
+  read -r -a BASELINE_ARRAY <<< "${ONLY_BASELINES}"
+  for BASELINE in "${BASELINE_ARRAY[@]}"; do
+    RUN_ARGS+=(--only-baseline "${BASELINE}")
+  done
+fi
+
 "${PYTHON_BIN}" scripts/multimodal/run_public_main.py "${CONFIG}" \
   --controlled-report "${CONTROLLED_REPORT}" \
   --artifact-root "${ARTIFACT_ROOT}" \
@@ -37,36 +53,43 @@ echo "[cmu-mosei-tanso-mechanism] training full proof-plan matrix"
   --weight-decay "${WEIGHT_DECAY}" \
   --device "${DEVICE}" \
   --progress-interval "${PROGRESS_INTERVAL}" \
+  "${RUN_ARGS[@]}" \
   | tee "${ARTIFACT_ROOT}/run_public_main_payload.json"
 
-echo "[cmu-mosei-tanso-mechanism] validating non-smoke public-main artifacts"
-"${PYTHON_BIN}" scripts/multimodal/validate_public_main_artifacts.py \
-  --config "${CONFIG}" \
-  --raw-metrics "${ARTIFACT_ROOT}/raw_metrics.jsonl" \
-  --diagnostics "${ARTIFACT_ROOT}/diagnostics.jsonl" \
-  --robustness-rows "${ARTIFACT_ROOT}/robustness_rows.jsonl" \
-  --split test \
-  | tee "${ARTIFACT_ROOT}/artifact_validation.json"
+if [[ "${RUN_SCOPE}" == "full_matrix" ]]; then
+  echo "[cmu-mosei-tanso-mechanism] validating non-smoke public-main artifacts"
+  "${PYTHON_BIN}" scripts/multimodal/validate_public_main_artifacts.py \
+    --config "${CONFIG}" \
+    --raw-metrics "${ARTIFACT_ROOT}/raw_metrics.jsonl" \
+    --diagnostics "${ARTIFACT_ROOT}/diagnostics.jsonl" \
+    --robustness-rows "${ARTIFACT_ROOT}/robustness_rows.jsonl" \
+    --split test \
+    | tee "${ARTIFACT_ROOT}/artifact_validation.json"
+else
+  echo "[cmu-mosei-tanso-mechanism] skipped full-matrix artifact validation for targeted continuation output"
+fi
 
-for BASELINE in \
-  raw_tanso_mlp \
-  ovha_tanso_no_source_gate \
-  ovha_tanso_no_hyper_adapter \
-  ovha_tanso_no_operator_memory \
-  ovha_tanso_no_gate_aux \
-  ovha_lrio_tanso \
-  ovha_all_candidates_exploratory \
-  concat_fusion
-do
-  echo "[cmu-mosei-tanso-mechanism] summarizing ovha_tanso_full vs ${BASELINE}"
-  "${PYTHON_BIN}" scripts/multimodal/summarize_public_results.py \
-    "${ARTIFACT_ROOT}/raw_metrics.jsonl" \
-    --full-model ovha_tanso_full \
-    --baseline-model "${BASELINE}" \
-    > "${ARTIFACT_ROOT}/summary_vs_${BASELINE}.json"
-done
+if [[ -n "${REFERENCE_RAW_METRICS}" ]]; then
+  COMBINED_RAW_METRICS="${ARTIFACT_ROOT}/combined_raw_metrics.jsonl"
+  cat "${REFERENCE_RAW_METRICS}" "${ARTIFACT_ROOT}/raw_metrics.jsonl" > "${COMBINED_RAW_METRICS}"
+  if [[ "${#BASELINE_ARRAY[@]}" -eq 0 ]]; then
+    read -r -a BASELINE_ARRAY <<< "${ONLY_BASELINES}"
+  fi
+  for BASELINE in "${BASELINE_ARRAY[@]}"; do
+    echo "[cmu-mosei-tanso-mechanism] summarizing ovha_tanso_full vs ${BASELINE}"
+    "${PYTHON_BIN}" scripts/multimodal/summarize_public_results.py \
+      "${COMBINED_RAW_METRICS}" \
+      --full-model ovha_tanso_full \
+      --baseline-model "${BASELINE}" \
+      > "${ARTIFACT_ROOT}/summary_vs_${BASELINE}.json"
+  done
+else
+  echo "[cmu-mosei-tanso-mechanism] set REFERENCE_RAW_METRICS to summarize against the existing ovha_tanso_full run"
+fi
 
 echo "[cmu-mosei-tanso-mechanism] done"
 echo "raw metrics: ${ARTIFACT_ROOT}/raw_metrics.jsonl"
 echo "per-sample predictions: ${ARTIFACT_ROOT}/per_sample_predictions.jsonl"
-echo "artifact validation: ${ARTIFACT_ROOT}/artifact_validation.json"
+if [[ -n "${REFERENCE_RAW_METRICS}" ]]; then
+  echo "combined raw metrics: ${ARTIFACT_ROOT}/combined_raw_metrics.jsonl"
+fi
