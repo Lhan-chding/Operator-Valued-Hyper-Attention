@@ -97,6 +97,66 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
         self.assertTrue(config.loss_metadata["ordinal_acc5_acc7_auxiliary"]["class_balanced"])
         self.assertEqual(config.loss_metadata["binary_margin_auxiliary"]["margin"], 0.15)
 
+    def test_cmu_tanso_mechanism_config_covers_proof_plan_without_smoke_scope(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+
+        path = ROOT / "configs" / "multimodal_cmu_mosei_tanso_mechanism_selfmm_official.json"
+        config = MultimodalExperimentConfig.from_file(path)
+
+        self.assertEqual(config.main_model_name, "ovha_tanso_full")
+        self.assertEqual(config.feature_source, "selfmm_official_unaligned_50")
+        self.assertEqual(config.seeds, (301, 302, 303, 304, 305))
+        self.assertEqual(config.candidate_names, ("TANSOBase",))
+        self.assertEqual(config.composition_mode, "tanso_base")
+        self.assertNotIn("smoke", str(config.output_dir).lower())
+        proof_plan_models = {
+            "raw_tanso_mlp",
+            "ovha_tanso_no_source_gate",
+            "ovha_tanso_no_hyper_adapter",
+            "ovha_tanso_no_operator_memory",
+            "ovha_tanso_no_gate_aux",
+            "spo_only",
+            "lrio_only",
+            "ovha_lrio_tanso",
+            "ovha_all_candidates_exploratory",
+        }
+        self.assertTrue(proof_plan_models.issubset(set(config.baseline_names)))
+        self.assertEqual(config.loss_metadata["tanso_source_oracle_gate_loss"]["weight"], 0.01)
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "torch not installed")
+    def test_tanso_mechanism_candidate_options_disable_components_with_diagnostics(self):
+        import torch
+
+        from moat_ovha_torch.models.multimodal.ovha_multimodal import MultimodalOVHA
+
+        batch = _sentiment_batch(torch)
+        model = MultimodalOVHA(
+            field_dims={name: int(field.x.shape[-1]) for name, field in batch.fields.items()},
+            query_dim=int(batch.query.x.shape[-1]),
+            output_dim=int(batch.target_y.shape[-1]),
+            d_model=8,
+            memory_tokens=2,
+            candidate_names=("TANSOBase",),
+            use_evidence_router=False,
+            composition_mode="tanso_base",
+            lrio_pairs=(("text", "audio"), ("text", "vision")),
+            candidate_options={
+                "TANSOBase": {
+                    "source_gate_mode": "uniform_nonverbal",
+                    "use_operator_memory": False,
+                    "use_hyper_adapter": False,
+                }
+            },
+        )
+
+        output = model(batch)
+        diagnostics = output.diagnostics["candidate_diagnostics"]["TANSOBase"]
+
+        self.assertEqual(diagnostics["source_gate_mode"], "uniform_nonverbal")
+        self.assertFalse(diagnostics["operator_memory_enabled"])
+        self.assertFalse(diagnostics["hyper_adapter_enabled"])
+        self.assertGreater(float(diagnostics["fixed_source_gate_applied"].detach().cpu().item()), 0.0)
+
     @unittest.skipUnless(TORCH_AVAILABLE, "torch not installed")
     def test_cmu_tanso_primary_baselines_do_not_inherit_tanso_base_composition(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
@@ -116,6 +176,41 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
             _ovha_composition_kwargs(config, ("LRIO",)),
             {"composition_mode": "convex_mixture"},
         )
+
+    def test_cmu_tanso_mechanism_variants_are_registered_for_public_main_runner(self):
+        from moat_ovha_torch.models.multimodal.baselines import baseline_protocol_for_name
+        from scripts.multimodal.run_public_main import _config_for_ovha_ablation, _ovha_variant_kwargs
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+
+        active = ("SPO", "LRIO", "TANSO", "TANSOBase", "TANSOShift")
+
+        self.assertEqual(baseline_protocol_for_name("sentiment_emotion", "raw_tanso_mlp"), "same_feature_mechanism_baseline")
+        self.assertEqual(
+            _ovha_variant_kwargs("ovha_tanso_no_source_gate", active)["candidate_options"]["TANSOBase"]["source_gate_mode"],
+            "uniform_nonverbal",
+        )
+        self.assertFalse(
+            _ovha_variant_kwargs("ovha_tanso_no_hyper_adapter", active)["candidate_options"]["TANSOBase"]["use_hyper_adapter"]
+        )
+        self.assertFalse(
+            _ovha_variant_kwargs("ovha_tanso_no_operator_memory", active)["candidate_options"]["TANSOBase"]["use_operator_memory"]
+        )
+
+        config = MultimodalExperimentConfig.from_file(
+            ROOT / "configs" / "multimodal_cmu_mosei_tanso_mechanism_selfmm_official.json"
+        )
+        no_aux = _config_for_ovha_ablation(config, "ovha_tanso_no_gate_aux")
+        self.assertEqual(no_aux.loss_metadata["tanso_source_oracle_gate_loss"]["weight"], 0.0)
+
+    def test_ubuntu_cmu_mechanism_runner_chains_training_validation_and_summary(self):
+        path = ROOT / "scripts" / "multimodal" / "run_cmu_mosei_tanso_mechanism_selfmm_official.sh"
+        source = path.read_text()
+
+        self.assertIn("multimodal_cmu_mosei_tanso_mechanism_selfmm_official.json", source)
+        self.assertIn("scripts/multimodal/run_public_main.py", source)
+        self.assertIn("scripts/multimodal/validate_public_main_artifacts.py", source)
+        self.assertIn("scripts/multimodal/summarize_public_results.py", source)
+        self.assertIn("raw_tanso_mlp", source)
 
     def test_operator_admission_eval_reports_residual_utility_and_rejects_interference(self):
         rows = [
