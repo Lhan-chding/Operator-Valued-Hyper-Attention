@@ -396,7 +396,7 @@ def _extract_region_features(args: argparse.Namespace, samples, image_processor,
                         images.append(_blank_image(image_module))
                         missing[int(sample["index"])] = True
                     else:
-                        images.append(crop)
+                        images.append(_as_rgb_image(crop, image_module))
             encoded = image_processor(images=images, return_tensors="pt")
             encoded = {key: value.to(device) for key, value in encoded.items()}
             features = model.get_image_features(**encoded)
@@ -445,13 +445,28 @@ def _crop_region(sample: dict[str, Any], region_box: tuple[float, float, float, 
             )
             if pixel_box[2] <= pixel_box[0] or pixel_box[3] <= pixel_box[1]:
                 return None
-            return rgb.crop(pixel_box)
+            return _as_rgb_image(rgb.crop(pixel_box), image_module)
     except OSError:
         return None
 
 
 def _blank_image(image_module):
     return image_module.new("RGB", (224, 224), color=(0, 0, 0))
+
+
+def _as_rgb_image(image: Any, image_module):
+    if hasattr(image, "convert"):
+        image = image.convert("RGB")
+    array = np.asarray(image, dtype=np.uint8)
+    if array.ndim == 2:
+        array = np.stack([array, array, array], axis=-1)
+    elif array.ndim == 3 and array.shape[-1] >= 3:
+        array = array[..., :3]
+    else:
+        return _blank_image(image_module)
+    if array.size == 0 or array.shape[0] <= 0 or array.shape[1] <= 0:
+        return _blank_image(image_module)
+    return image_module.fromarray(np.ascontiguousarray(array), mode="RGB")
 
 
 def _chunks(values: list[Any], size: int):
