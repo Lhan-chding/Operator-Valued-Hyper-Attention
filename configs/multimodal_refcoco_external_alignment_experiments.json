@@ -1,0 +1,234 @@
+{
+  "schema_version": "refcoco-external-alignment-experiments-v0.1",
+  "dataset": "refcoco",
+  "task_type": "phrase_region_grounding",
+  "objective": "Upgrade the current fixed-candidate RefCOCO evidence into a reviewable external-alignment experiment suite without mixing fixed-candidate and open-box claims.",
+  "fixed_candidate_protocol": {
+    "candidate_count": 32,
+    "candidate_source": "balanced_refcoco_coco_gt_box_candidates",
+    "feature_policy": "frozen_clip_same_candidate",
+    "splits": ["val", "testA", "testB"],
+    "claim_boundary": "OVHA is evaluated as a detector-agnostic operator-valued reranking layer, not as an end-to-end open-box detector."
+  },
+  "seed_policy": {
+    "pilot": [201, 202, 203],
+    "main": [201, 202, 203, 204, 205],
+    "reporting": "mean_plus_std_for_every_model_split_and_metric"
+  },
+  "required_metrics": [
+    "recall_at_1",
+    "recall_at_5",
+    "mrr",
+    "acc_at_0_5",
+    "acc_at_0_7",
+    "mean_iou",
+    "nll",
+    "cross_entropy"
+  ],
+  "statistical_tests": [
+    {
+      "id": "paired_bootstrap_ci",
+      "comparisons": [
+        "ovha_admitted_bank_vs_candidate_mlp_reranker",
+        "ovha_admitted_bank_vs_box_aware_cross_attention_reranker",
+        "ovha_admitted_bank_vs_groundingdino_same_candidate_scorer",
+        "groundingdino_proposals_ovha_vs_groundingdino_proposals_box_aware_cross_attention"
+      ],
+      "outputs": ["mean_delta", "ci_95_low", "ci_95_high"]
+    },
+    {
+      "id": "paired_permutation_test",
+      "comparisons": [
+        "ovha_admitted_bank_vs_candidate_mlp_reranker",
+        "ovha_admitted_bank_vs_box_aware_cross_attention_reranker",
+        "ovha_admitted_bank_vs_groundingdino_same_candidate_scorer",
+        "groundingdino_proposals_ovha_vs_groundingdino_proposals_box_aware_cross_attention"
+      ],
+      "outputs": ["p_value", "effect_direction"]
+    }
+  ],
+  "strong_same_candidate_baselines": [
+    {
+      "id": "box_aware_cross_attention_reranker",
+      "input": "text tokens, frozen CLIP region features, normalized bbox geometry, candidate mask",
+      "architecture": "2-4 layer lightweight transformer with bbox embeddings and per-region logits",
+      "purpose": "Controls for the possibility that the previous cross-attention reranker was too weak or geometry-blind."
+    },
+    {
+      "id": "clip_geometry_mlp",
+      "input": "CLIP similarity, region feature, bbox geometry, expression length, pooled text feature",
+      "architecture": "candidate-level MLP logit scorer",
+      "purpose": "Tests whether OVHA gains are only explained by adding bbox geometry."
+    },
+    {
+      "id": "lightweight_transvg_style_reranker",
+      "input": "text tokens, region tokens, candidate mask",
+      "architecture": "parameter-matched transformer encoder with region classification head",
+      "purpose": "Provides a stronger same-candidate grounding-transformer-style reranker without claiming a TransVG reproduction."
+    },
+    {
+      "id": "groundingdino_same_candidate_scorer",
+      "input": "raw image, referring expression, fixed OVHA candidate boxes",
+      "architecture": "external detector boxes mapped to fixed candidates by IoU-weighted detector score",
+      "purpose": "Aligns GroundingDINO with the fixed-candidate evaluator while marking the feature source difference."
+    }
+  ],
+  "comparison_tracks": [
+    {
+      "id": "A_external_open_box_reference",
+      "input": "raw image plus referring expression",
+      "output": "free predicted box",
+      "comparison_scope": "separate_external_reference_table",
+      "models": ["GroundingDINO_zero_shot", "GroundingDINO_finetuned_optional", "MDETR", "GLIP", "TransVG_or_LAVT_or_MAttNet"],
+      "metrics": ["acc_at_0_5", "acc_at_0_7", "mean_iou"],
+      "forbid_fixed_candidate_win_loss_claims": true
+    },
+    {
+      "id": "B_groundingdino_same_candidate_scorer",
+      "input": "raw image plus expression, then exact OVHA fixed candidates",
+      "output": "selected fixed candidate",
+      "candidate_score_formula": "max_j IoU(candidate_i, predicted_box_j) * score_j",
+      "comparison_scope": "same_candidate_table_with_feature_source_note",
+      "models": [
+        "prso_clip_similarity",
+        "candidate_mlp_reranker",
+        "box_aware_cross_attention_reranker",
+        "groundingdino_same_candidate_scorer",
+        "ovha_prso_sro_tleo_cato_admitted_bank"
+      ],
+      "metrics": ["recall_at_1", "recall_at_5", "mrr", "acc_at_0_5", "acc_at_0_7", "mean_iou"]
+    },
+    {
+      "id": "C_groundingdino_proposals_plus_reranker",
+      "input": "shared GroundingDINO top-K proposal boxes, proposal CLIP region features, referring expression",
+      "output": "selected proposal box",
+      "comparison_scope": "proposal_conditioned_reranker_table",
+      "proposal_top_k": [16, 32, 64],
+      "upper_bound_metrics": [
+        "proposal_oracle_recall_at_k",
+        "oracle_best_iou",
+        "empty_proposal_rate",
+        "positive_candidate_rate"
+      ],
+      "models": [
+        "groundingdino_direct",
+        "groundingdino_proposals_clip_similarity",
+        "groundingdino_proposals_candidate_mlp",
+        "groundingdino_proposals_box_aware_cross_attention",
+        "groundingdino_proposals_ovha_admitted_bank"
+      ],
+      "metrics": ["recall_at_1", "recall_at_5", "mrr", "acc_at_0_5", "acc_at_0_7", "mean_iou"]
+    }
+  ],
+  "operator_subset_diagnostics": [
+    {
+      "id": "spatial_subset",
+      "target_operator": "SRO",
+      "selection_rule": "expression contains spatial terms such as left, right, top, bottom, above, below, near, next to, behind, in front of, between",
+      "comparisons": ["PRSO", "PRSO_SRO", "PRSO_SRO_TLEO_CATO"],
+      "expected_evidence": "SRO gain is largest on spatial expressions."
+    },
+    {
+      "id": "attribute_subset",
+      "target_operator": "AMO",
+      "decision": "evaluate_error_profile_before_AMO",
+      "selection_rule": "expression contains color, size, or appearance words such as red, blue, small, large, striped, wearing, hat, shirt",
+      "comparisons": ["PRSO", "PRSO_SRO_TLEO_CATO"],
+      "expected_evidence": "Report whether the admitted bank leaves a systematic attribute error profile that justifies AMO."
+    },
+    {
+      "id": "dense_distractor_subset",
+      "target_operator": "TLEO",
+      "selection_rule": "same-category candidates >= 2, high candidate overlap or close center distance, or close CLIP top-k scores",
+      "comparisons": ["PRSO", "PRSO_TLEO", "PRSO_SRO_TLEO_CATO"],
+      "expected_evidence": "TLEO gain is largest when dense local distractors exist."
+    },
+    {
+      "id": "long_relational_subset",
+      "target_operator": "CATO",
+      "selection_rule": "token count above threshold or expression contains multiple noun phrases or relation words",
+      "comparisons": ["PRSO", "PRSO_CATO", "PRSO_SRO_TLEO_CATO"],
+      "expected_evidence": "CATO gain is largest on long, relational, or hard-alignment expressions."
+    }
+  ],
+  "artifact_contract": {
+    "per_sample_prediction_fields": [
+      "source_id",
+      "split",
+      "expression",
+      "candidate_boxes",
+      "candidate_mask",
+      "target_index",
+      "selected_index",
+      "selected_iou",
+      "operator_contributions",
+      "baseline_scores",
+      "model_name",
+      "seed",
+      "checkpoint",
+      "metric_source"
+    ],
+    "qualitative_case_fields": [
+      "source_id",
+      "expression",
+      "gt_box",
+      "baseline_selected_box",
+      "ovha_selected_box",
+      "operator_scores",
+      "cato_alignment",
+      "sro_spatial_score"
+    ]
+  },
+  "execution_phases": [
+    {
+      "id": "P0_fixed_candidate_table",
+      "deliverables": ["5_seed_mean_std", "val_testA_testB_tables", "per_sample_predictions", "paired_statistics"]
+    },
+    {
+      "id": "P1_strong_same_candidate_baselines",
+      "deliverables": ["box_aware_cross_attention_reranker", "clip_geometry_mlp", "lightweight_transvg_style_reranker", "groundingdino_same_candidate_scorer"]
+    },
+    {
+      "id": "P2_operator_subset_diagnostics",
+      "deliverables": ["spatial_subset", "attribute_subset", "dense_distractor_subset", "long_relational_subset", "qualitative_visualizations"]
+    },
+    {
+      "id": "P3_groundingdino_proposal_pipeline",
+      "deliverables": ["generate_groundingdino_proposals.py", "extract_clip_features_for_gdino_proposals.py", "build_refcoco_gdino_proposal_cache.py", "proposal_oracle_recall_at_k", "proposal_reranking_table"]
+    },
+    {
+      "id": "P4_external_reference_table",
+      "deliverables": ["GroundingDINO_zero_shot", "GroundingDINO_finetuned_optional", "MDETR", "GLIP", "TransVG_or_LAVT_or_MAttNet"]
+    },
+    {
+      "id": "P5_cross_task_admission",
+      "deliverables": ["CMU_MOSEI_TANSOBase", "RefCOCO_PRSO_SRO_TLEO_CATO", "GroundingDINO_proposal_admitted_bank"]
+    }
+  ],
+  "final_tables": [
+    {
+      "id": "table_1_cmu_mosei_main",
+      "scope": "existing sentiment main table"
+    },
+    {
+      "id": "table_2_refcoco_fixed_candidate_mechanism",
+      "scope": "same fixed candidates and frozen CLIP features, plus explicitly marked GroundingDINO same-candidate scorer"
+    },
+    {
+      "id": "table_3_refcoco_operator_subset_diagnostics",
+      "scope": "operator responsibility subsets for SRO, TLEO, CATO, and attribute error profile"
+    },
+    {
+      "id": "table_4_groundingdino_proposal_reranking",
+      "scope": "shared GroundingDINO proposal pool with oracle upper bound reported first"
+    },
+    {
+      "id": "table_5_external_open_box_reference",
+      "scope": "reported or separately reproduced open-box grounding references; no fixed-candidate win/loss claims"
+    },
+    {
+      "id": "table_6_cross_task_operator_admission",
+      "scope": "CMU-MOSEI, RefCOCO fixed-candidate, and GroundingDINO proposal admitted banks"
+    }
+  ]
+}

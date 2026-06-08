@@ -52,12 +52,14 @@ Do not put Track A rows in `baseline_names`. Only Track B/C outputs may be impor
 ## External SOTA References
 
 The external list lives in `configs/multimodal_external_sota_references.json`.
+The RefCOCO external-alignment experiment design lives in `configs/multimodal_refcoco_external_alignment_experiments.json`.
 
 Generate a reviewable runbook with:
 
 ```bash
 python scripts/multimodal/build_external_sota_runbook.py \
   --references configs/multimodal_external_sota_references.json \
+  --refcoco-experiment-plan configs/multimodal_refcoco_external_alignment_experiments.json \
   --output-dir outputs/multimodal/external_sota_runbook
 ```
 
@@ -67,6 +69,19 @@ This creates:
 - `outputs/multimodal/external_sota_runbook/external_sota_runbook.md`
 
 The command intentionally does not download weights or run external repositories. Before importing an external result, record the source URL, official repo, checkpoint, data split, metric definition, software commit, and hardware.
+
+## RefCOCO Experiment Execution Order
+
+Use the structured experiment plan to run the remaining RefCOCO/COCO grounding work in this order:
+
+1. `P0_fixed_candidate_table`: rerun fixed 32-candidate RefCOCO rows with 5 seeds, val/testA/testB split tables, R@1/R@5/MRR/Acc@0.5/Acc@0.7/mIoU/NLL, per-sample predictions, and paired statistics.
+2. `P1_strong_same_candidate_baselines`: add `box_aware_cross_attention_reranker`, `clip_geometry_mlp`, `lightweight_transvg_style_reranker`, and `groundingdino_same_candidate_scorer`.
+3. `P2_operator_subset_diagnostics`: report spatial/SRO, dense-distractor/TLEO, long-relational/CATO, and attribute error-profile subsets, plus qualitative hard cases.
+4. `P3_groundingdino_proposal_pipeline`: generate GroundingDINO top-K proposals, extract proposal CLIP features, compute proposal upper bounds, then rerank the shared proposal pool.
+5. `P4_external_reference_table`: keep GroundingDINO, MDETR, GLIP, TransVG/LAVT/MAttNet as external open-box references or separately documented reproductions.
+6. `P5_cross_task_admission`: summarize the admitted operator bank across CMU-MOSEI, RefCOCO fixed-candidate, and GroundingDINO-proposal settings.
+
+The final writeup should keep six tables separate: CMU-MOSEI main, RefCOCO fixed-candidate mechanism, RefCOCO operator diagnostics, GroundingDINO proposal reranking, external open-box reference, and cross-task operator admission. Track A open-box rows must never be used for fixed-candidate win/loss claims.
 
 ## Source Links
 

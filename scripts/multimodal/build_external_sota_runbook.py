@@ -8,6 +8,8 @@ from typing import Any
 
 
 ALLOWED_EVIDENCE_TYPES = {"external_reference", "external_reproduction"}
+DEFAULT_REFCOCO_EXPERIMENT_PLAN = Path("configs/multimodal_refcoco_external_alignment_experiments.json")
+REFCOCO_EXPERIMENT_SCHEMA_VERSION = "refcoco-external-alignment-experiments-v0.1"
 REQUIRED_FIELDS = (
     "name",
     "dataset",
@@ -33,11 +35,21 @@ def main() -> int:
         type=Path,
         default=Path("configs/multimodal_external_sota_references.json"),
     )
+    parser.add_argument(
+        "--refcoco-experiment-plan",
+        type=Path,
+        default=DEFAULT_REFCOCO_EXPERIMENT_PLAN,
+        help="Structured RefCOCO external-alignment experiment plan to embed in the runbook.",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
 
     try:
-        payload, exit_code = build_external_sota_runbook(args.references, args.output_dir)
+        payload, exit_code = build_external_sota_runbook(
+            args.references,
+            args.output_dir,
+            args.refcoco_experiment_plan,
+        )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         payload = {
             "ok": False,
@@ -51,9 +63,14 @@ def main() -> int:
     return exit_code
 
 
-def build_external_sota_runbook(references_path: Path, output_dir: Path) -> tuple[dict[str, Any], int]:
+def build_external_sota_runbook(
+    references_path: Path,
+    output_dir: Path,
+    refcoco_experiment_plan_path: Path | None = DEFAULT_REFCOCO_EXPERIMENT_PLAN,
+) -> tuple[dict[str, Any], int]:
     payload = json.loads(references_path.read_text())
     references = _validate_reference_payload(payload)
+    refcoco_plan = _load_refcoco_experiment_plan(refcoco_experiment_plan_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     runbook_path = output_dir / "external_sota_runbook.json"
     markdown_path = output_dir / "external_sota_runbook.md"
@@ -71,6 +88,7 @@ def build_external_sota_runbook(references_path: Path, output_dir: Path) -> tupl
         "references_by_dataset": grouped,
         "manual_actions": _manual_actions(references),
         "refcoco_comparison_tracks": _refcoco_comparison_tracks(),
+        "refcoco_external_alignment_plan": refcoco_plan,
     }
     runbook_path.write_text(json.dumps(runbook, indent=2, sort_keys=True) + "\n")
     markdown_path.write_text(_markdown(runbook) + "\n")
@@ -117,6 +135,132 @@ def _validate_reference_payload(payload: dict[str, Any]) -> list[dict[str, str]]
         seen.add(key)
         validated.append({field: str(row[field]) for field in REQUIRED_FIELDS})
     return validated
+
+
+def _load_refcoco_experiment_plan(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    if not path.exists():
+        return None
+    payload = json.loads(path.read_text())
+    _validate_refcoco_experiment_plan(payload)
+    return payload
+
+
+def _validate_refcoco_experiment_plan(payload: dict[str, Any]) -> None:
+    if payload.get("schema_version") != REFCOCO_EXPERIMENT_SCHEMA_VERSION:
+        raise ValueError(f"refcoco experiment plan schema_version must be {REFCOCO_EXPERIMENT_SCHEMA_VERSION}")
+    if payload.get("dataset") != "refcoco":
+        raise ValueError("refcoco experiment plan dataset must be refcoco")
+    fixed_protocol = _required_mapping(payload, "fixed_candidate_protocol")
+    if fixed_protocol.get("candidate_count") != 32:
+        raise ValueError("refcoco fixed_candidate_protocol.candidate_count must be 32")
+    if fixed_protocol.get("feature_policy") != "frozen_clip_same_candidate":
+        raise ValueError("refcoco fixed_candidate_protocol.feature_policy must be frozen_clip_same_candidate")
+    seed_policy = _required_mapping(payload, "seed_policy")
+    if len(seed_policy.get("main", [])) < 5:
+        raise ValueError("refcoco seed_policy.main must include at least 5 seeds")
+    _require_items(
+        payload,
+        "required_metrics",
+        {"recall_at_1", "recall_at_5", "mrr", "acc_at_0_5", "acc_at_0_7", "mean_iou", "nll"},
+    )
+    _validate_refcoco_tracks(payload)
+    _require_items(
+        payload,
+        "strong_same_candidate_baselines",
+        {
+            "box_aware_cross_attention_reranker",
+            "clip_geometry_mlp",
+            "lightweight_transvg_style_reranker",
+            "groundingdino_same_candidate_scorer",
+        },
+        id_key="id",
+    )
+    _require_items(
+        payload,
+        "operator_subset_diagnostics",
+        {"spatial_subset", "attribute_subset", "dense_distractor_subset", "long_relational_subset"},
+        id_key="id",
+    )
+    artifact_contract = _required_mapping(payload, "artifact_contract")
+    prediction_fields = set(_required_list(artifact_contract, "per_sample_prediction_fields"))
+    missing_fields = {
+        "source_id",
+        "split",
+        "candidate_boxes",
+        "candidate_mask",
+        "target_index",
+        "selected_index",
+        "selected_iou",
+        "operator_contributions",
+        "baseline_scores",
+    } - prediction_fields
+    if missing_fields:
+        raise ValueError("refcoco per-sample artifact contract missing: " + ", ".join(sorted(missing_fields)))
+    _require_items(
+        payload,
+        "final_tables",
+        {
+            "table_1_cmu_mosei_main",
+            "table_2_refcoco_fixed_candidate_mechanism",
+            "table_3_refcoco_operator_subset_diagnostics",
+            "table_4_groundingdino_proposal_reranking",
+            "table_5_external_open_box_reference",
+            "table_6_cross_task_operator_admission",
+        },
+        id_key="id",
+    )
+
+
+def _validate_refcoco_tracks(payload: dict[str, Any]) -> None:
+    tracks = {str(row.get("id")): row for row in _required_list(payload, "comparison_tracks") if isinstance(row, dict)}
+    expected = {
+        "A_external_open_box_reference",
+        "B_groundingdino_same_candidate_scorer",
+        "C_groundingdino_proposals_plus_reranker",
+    }
+    missing = expected - set(tracks)
+    if missing:
+        raise ValueError("refcoco comparison_tracks missing: " + ", ".join(sorted(missing)))
+    track_a = tracks["A_external_open_box_reference"]
+    if track_a.get("comparison_scope") != "separate_external_reference_table":
+        raise ValueError("Track A must use separate_external_reference_table scope")
+    if track_a.get("forbid_fixed_candidate_win_loss_claims") is not True:
+        raise ValueError("Track A must forbid fixed-candidate win/loss claims")
+    track_b = tracks["B_groundingdino_same_candidate_scorer"]
+    if track_b.get("candidate_score_formula") != "max_j IoU(candidate_i, predicted_box_j) * score_j":
+        raise ValueError("Track B must define the GroundingDINO same-candidate score formula")
+    track_c = tracks["C_groundingdino_proposals_plus_reranker"]
+    upper_bound_metrics = set(track_c.get("upper_bound_metrics", []))
+    missing_upper = {"proposal_oracle_recall_at_k", "oracle_best_iou", "empty_proposal_rate", "positive_candidate_rate"} - upper_bound_metrics
+    if missing_upper:
+        raise ValueError("Track C upper_bound_metrics missing: " + ", ".join(sorted(missing_upper)))
+
+
+def _required_mapping(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        raise ValueError(f"{key} must be an object")
+    return value
+
+
+def _required_list(payload: dict[str, Any], key: str) -> list[Any]:
+    value = payload.get(key)
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{key} must be a non-empty list")
+    return value
+
+
+def _require_items(payload: dict[str, Any], key: str, expected: set[str], *, id_key: str | None = None) -> None:
+    values = _required_list(payload, key)
+    if id_key is None:
+        observed = {str(value) for value in values}
+    else:
+        observed = {str(value.get(id_key)) for value in values if isinstance(value, dict)}
+    missing = expected - observed
+    if missing:
+        raise ValueError(f"{key} missing: " + ", ".join(sorted(missing)))
 
 
 def _group_references(references: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
@@ -200,6 +344,9 @@ def _markdown(runbook: dict[str, Any]) -> str:
                 "",
             ]
         )
+    refcoco_plan = runbook.get("refcoco_external_alignment_plan")
+    if refcoco_plan:
+        lines.extend(_refcoco_alignment_markdown(refcoco_plan))
     lines.extend(
         [
             "## Rules",
@@ -211,6 +358,58 @@ def _markdown(runbook: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _refcoco_alignment_markdown(plan: dict[str, Any]) -> list[str]:
+    lines = [
+        "## RefCOCO External Alignment Experiment Design",
+        "",
+        f"- Schema: {plan['schema_version']}",
+        f"- Objective: {plan['objective']}",
+        f"- Fixed-candidate feature policy: {plan['fixed_candidate_protocol']['feature_policy']}",
+        f"- Main seeds: {', '.join(str(seed) for seed in plan['seed_policy']['main'])}",
+        "",
+        "### Comparison Tracks",
+        "",
+        "| Track | Scope | Key constraint |",
+        "|---|---|---|",
+    ]
+    for track in plan["comparison_tracks"]:
+        constraint = track.get("candidate_score_formula") or ", ".join(track.get("upper_bound_metrics", [])) or "no fixed-candidate win/loss claims"
+        lines.append(f"| {track['id']} | {track['comparison_scope']} | {constraint} |")
+    lines.extend(
+        [
+            "",
+            "### Strong Same-Candidate Baselines",
+            "",
+        ]
+    )
+    for baseline in plan["strong_same_candidate_baselines"]:
+        lines.append(f"- {baseline['id']}: {baseline['purpose']}")
+    lines.extend(
+        [
+            "",
+            "### Operator Subset Diagnostics",
+            "",
+        ]
+    )
+    for diagnostic in plan["operator_subset_diagnostics"]:
+        lines.append(f"- {diagnostic['id']}: target {diagnostic['target_operator']}; {diagnostic['selection_rule']}")
+    lines.extend(
+        [
+            "",
+            "### Required Artifacts",
+            "",
+            "- Per-sample fields: " + ", ".join(plan["artifact_contract"]["per_sample_prediction_fields"]),
+            "",
+            "### Final Tables",
+            "",
+        ]
+    )
+    for table in plan["final_tables"]:
+        lines.append(f"- {table['id']}: {table['scope']}")
+    lines.append("")
+    return lines
 
 
 if __name__ == "__main__":

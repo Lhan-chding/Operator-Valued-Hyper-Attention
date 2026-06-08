@@ -1,0 +1,619 @@
+{
+  "datasets": [
+    "cmu_mosei",
+    "refcoco"
+  ],
+  "manual_actions": [
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "refcoco",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "MDETR",
+      "official_repo": "https://github.com/ashkamath/mdetr",
+      "source_url": "https://arxiv.org/abs/2104.12763"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "refcoco",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "GLIP",
+      "official_repo": "https://github.com/microsoft/GLIP",
+      "source_url": "https://arxiv.org/abs/2112.03857"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "refcoco",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "GroundingDINO",
+      "official_repo": "https://github.com/IDEA-Research/GroundingDINO",
+      "source_url": "https://arxiv.org/abs/2303.05499"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "refcoco",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "GroundingDINO-1.5",
+      "official_repo": "https://github.com/IDEA-Research/Grounding-DINO-1.5-API",
+      "source_url": "https://arxiv.org/abs/2405.10300"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "refcoco",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "TransVG",
+      "official_repo": "https://github.com/djiajunustc/TransVG",
+      "source_url": "https://arxiv.org/abs/2104.08541"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "refcoco",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "LAVT",
+      "official_repo": "https://github.com/yz93/LAVT-RIS",
+      "source_url": "https://arxiv.org/abs/2112.02244"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "refcoco",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "SeqTR",
+      "official_repo": "https://github.com/sean-zhuh/SeqTR",
+      "source_url": "https://arxiv.org/abs/2203.16265"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "cmu_mosei",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "TFN",
+      "official_repo": "https://github.com/Justin1904/TensorFusionNetworks",
+      "source_url": "https://arxiv.org/abs/1707.07250"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "cmu_mosei",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "LMF",
+      "official_repo": "https://github.com/Justin1904/Low-rank-Multimodal-Fusion",
+      "source_url": "https://arxiv.org/abs/1806.00064"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "cmu_mosei",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "MulT",
+      "official_repo": "https://github.com/yaohungt/Multimodal-Transformer",
+      "source_url": "https://arxiv.org/abs/1906.00295"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "cmu_mosei",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "MISA",
+      "official_repo": "https://github.com/declare-lab/MISA",
+      "source_url": "https://arxiv.org/abs/2005.03545"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "cmu_mosei",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "MAG-BERT",
+      "official_repo": "https://github.com/WasifurRahman/BERT_multimodal_transformer",
+      "source_url": "https://arxiv.org/abs/1908.05787"
+    },
+    {
+      "action": "record published metric table or run official repo in an isolated environment",
+      "dataset": "cmu_mosei",
+      "do_not_do": "do not import this as a same-feature linear probe baseline",
+      "name": "Self-MM",
+      "official_repo": "https://github.com/thuiar/Self-MM",
+      "source_url": "https://arxiv.org/abs/2102.04830"
+    }
+  ],
+  "mode": "external_sota_runbook",
+  "ok": true,
+  "policy": "external SOTA entries are separate reference/reproduction evidence; they must not be mixed into same-feature public-main baseline coverage",
+  "refcoco_comparison_tracks": [
+    {
+      "comparison_scope": "external detector/reference table only",
+      "input": "raw image plus referring expression",
+      "output": "free-form predicted boxes",
+      "required_metrics": "Acc@0.5, mean IoU, split-specific val/testA/testB where available",
+      "track": "A_external_open_box_reference"
+    },
+    {
+      "comparison_scope": "same-candidate table",
+      "input": "OVHA candidate boxes plus external detector predictions",
+      "output": "candidate score_i=max_j IoU(candidate_i, box_j) * score_j",
+      "required_metrics": "R@1, R@5, Acc@0.5, mean IoU, MRR",
+      "track": "B_same_candidate_scorer"
+    },
+    {
+      "comparison_scope": "proposal-conditioned reranker table",
+      "input": "shared GroundingDINO top-K proposals for every reranker",
+      "output": "proposal upper bound plus reranker metrics",
+      "required_metrics": "proposal_recall@K first, then reranker R@1/R@5/Acc@0.5/mean IoU/MRR",
+      "track": "C_proposal_generator_plus_reranker"
+    }
+  ],
+  "refcoco_external_alignment_plan": {
+    "artifact_contract": {
+      "per_sample_prediction_fields": [
+        "source_id",
+        "split",
+        "expression",
+        "candidate_boxes",
+        "candidate_mask",
+        "target_index",
+        "selected_index",
+        "selected_iou",
+        "operator_contributions",
+        "baseline_scores",
+        "model_name",
+        "seed",
+        "checkpoint",
+        "metric_source"
+      ],
+      "qualitative_case_fields": [
+        "source_id",
+        "expression",
+        "gt_box",
+        "baseline_selected_box",
+        "ovha_selected_box",
+        "operator_scores",
+        "cato_alignment",
+        "sro_spatial_score"
+      ]
+    },
+    "comparison_tracks": [
+      {
+        "comparison_scope": "separate_external_reference_table",
+        "forbid_fixed_candidate_win_loss_claims": true,
+        "id": "A_external_open_box_reference",
+        "input": "raw image plus referring expression",
+        "metrics": [
+          "acc_at_0_5",
+          "acc_at_0_7",
+          "mean_iou"
+        ],
+        "models": [
+          "GroundingDINO_zero_shot",
+          "GroundingDINO_finetuned_optional",
+          "MDETR",
+          "GLIP",
+          "TransVG_or_LAVT_or_MAttNet"
+        ],
+        "output": "free predicted box"
+      },
+      {
+        "candidate_score_formula": "max_j IoU(candidate_i, predicted_box_j) * score_j",
+        "comparison_scope": "same_candidate_table_with_feature_source_note",
+        "id": "B_groundingdino_same_candidate_scorer",
+        "input": "raw image plus expression, then exact OVHA fixed candidates",
+        "metrics": [
+          "recall_at_1",
+          "recall_at_5",
+          "mrr",
+          "acc_at_0_5",
+          "acc_at_0_7",
+          "mean_iou"
+        ],
+        "models": [
+          "prso_clip_similarity",
+          "candidate_mlp_reranker",
+          "box_aware_cross_attention_reranker",
+          "groundingdino_same_candidate_scorer",
+          "ovha_prso_sro_tleo_cato_admitted_bank"
+        ],
+        "output": "selected fixed candidate"
+      },
+      {
+        "comparison_scope": "proposal_conditioned_reranker_table",
+        "id": "C_groundingdino_proposals_plus_reranker",
+        "input": "shared GroundingDINO top-K proposal boxes, proposal CLIP region features, referring expression",
+        "metrics": [
+          "recall_at_1",
+          "recall_at_5",
+          "mrr",
+          "acc_at_0_5",
+          "acc_at_0_7",
+          "mean_iou"
+        ],
+        "models": [
+          "groundingdino_direct",
+          "groundingdino_proposals_clip_similarity",
+          "groundingdino_proposals_candidate_mlp",
+          "groundingdino_proposals_box_aware_cross_attention",
+          "groundingdino_proposals_ovha_admitted_bank"
+        ],
+        "output": "selected proposal box",
+        "proposal_top_k": [
+          16,
+          32,
+          64
+        ],
+        "upper_bound_metrics": [
+          "proposal_oracle_recall_at_k",
+          "oracle_best_iou",
+          "empty_proposal_rate",
+          "positive_candidate_rate"
+        ]
+      }
+    ],
+    "dataset": "refcoco",
+    "execution_phases": [
+      {
+        "deliverables": [
+          "5_seed_mean_std",
+          "val_testA_testB_tables",
+          "per_sample_predictions",
+          "paired_statistics"
+        ],
+        "id": "P0_fixed_candidate_table"
+      },
+      {
+        "deliverables": [
+          "box_aware_cross_attention_reranker",
+          "clip_geometry_mlp",
+          "lightweight_transvg_style_reranker",
+          "groundingdino_same_candidate_scorer"
+        ],
+        "id": "P1_strong_same_candidate_baselines"
+      },
+      {
+        "deliverables": [
+          "spatial_subset",
+          "attribute_subset",
+          "dense_distractor_subset",
+          "long_relational_subset",
+          "qualitative_visualizations"
+        ],
+        "id": "P2_operator_subset_diagnostics"
+      },
+      {
+        "deliverables": [
+          "generate_groundingdino_proposals.py",
+          "extract_clip_features_for_gdino_proposals.py",
+          "build_refcoco_gdino_proposal_cache.py",
+          "proposal_oracle_recall_at_k",
+          "proposal_reranking_table"
+        ],
+        "id": "P3_groundingdino_proposal_pipeline"
+      },
+      {
+        "deliverables": [
+          "GroundingDINO_zero_shot",
+          "GroundingDINO_finetuned_optional",
+          "MDETR",
+          "GLIP",
+          "TransVG_or_LAVT_or_MAttNet"
+        ],
+        "id": "P4_external_reference_table"
+      },
+      {
+        "deliverables": [
+          "CMU_MOSEI_TANSOBase",
+          "RefCOCO_PRSO_SRO_TLEO_CATO",
+          "GroundingDINO_proposal_admitted_bank"
+        ],
+        "id": "P5_cross_task_admission"
+      }
+    ],
+    "final_tables": [
+      {
+        "id": "table_1_cmu_mosei_main",
+        "scope": "existing sentiment main table"
+      },
+      {
+        "id": "table_2_refcoco_fixed_candidate_mechanism",
+        "scope": "same fixed candidates and frozen CLIP features, plus explicitly marked GroundingDINO same-candidate scorer"
+      },
+      {
+        "id": "table_3_refcoco_operator_subset_diagnostics",
+        "scope": "operator responsibility subsets for SRO, TLEO, CATO, and attribute error profile"
+      },
+      {
+        "id": "table_4_groundingdino_proposal_reranking",
+        "scope": "shared GroundingDINO proposal pool with oracle upper bound reported first"
+      },
+      {
+        "id": "table_5_external_open_box_reference",
+        "scope": "reported or separately reproduced open-box grounding references; no fixed-candidate win/loss claims"
+      },
+      {
+        "id": "table_6_cross_task_operator_admission",
+        "scope": "CMU-MOSEI, RefCOCO fixed-candidate, and GroundingDINO proposal admitted banks"
+      }
+    ],
+    "fixed_candidate_protocol": {
+      "candidate_count": 32,
+      "candidate_source": "balanced_refcoco_coco_gt_box_candidates",
+      "claim_boundary": "OVHA is evaluated as a detector-agnostic operator-valued reranking layer, not as an end-to-end open-box detector.",
+      "feature_policy": "frozen_clip_same_candidate",
+      "splits": [
+        "val",
+        "testA",
+        "testB"
+      ]
+    },
+    "objective": "Upgrade the current fixed-candidate RefCOCO evidence into a reviewable external-alignment experiment suite without mixing fixed-candidate and open-box claims.",
+    "operator_subset_diagnostics": [
+      {
+        "comparisons": [
+          "PRSO",
+          "PRSO_SRO",
+          "PRSO_SRO_TLEO_CATO"
+        ],
+        "expected_evidence": "SRO gain is largest on spatial expressions.",
+        "id": "spatial_subset",
+        "selection_rule": "expression contains spatial terms such as left, right, top, bottom, above, below, near, next to, behind, in front of, between",
+        "target_operator": "SRO"
+      },
+      {
+        "comparisons": [
+          "PRSO",
+          "PRSO_SRO_TLEO_CATO"
+        ],
+        "decision": "evaluate_error_profile_before_AMO",
+        "expected_evidence": "Report whether the admitted bank leaves a systematic attribute error profile that justifies AMO.",
+        "id": "attribute_subset",
+        "selection_rule": "expression contains color, size, or appearance words such as red, blue, small, large, striped, wearing, hat, shirt",
+        "target_operator": "AMO"
+      },
+      {
+        "comparisons": [
+          "PRSO",
+          "PRSO_TLEO",
+          "PRSO_SRO_TLEO_CATO"
+        ],
+        "expected_evidence": "TLEO gain is largest when dense local distractors exist.",
+        "id": "dense_distractor_subset",
+        "selection_rule": "same-category candidates >= 2, high candidate overlap or close center distance, or close CLIP top-k scores",
+        "target_operator": "TLEO"
+      },
+      {
+        "comparisons": [
+          "PRSO",
+          "PRSO_CATO",
+          "PRSO_SRO_TLEO_CATO"
+        ],
+        "expected_evidence": "CATO gain is largest on long, relational, or hard-alignment expressions.",
+        "id": "long_relational_subset",
+        "selection_rule": "token count above threshold or expression contains multiple noun phrases or relation words",
+        "target_operator": "CATO"
+      }
+    ],
+    "required_metrics": [
+      "recall_at_1",
+      "recall_at_5",
+      "mrr",
+      "acc_at_0_5",
+      "acc_at_0_7",
+      "mean_iou",
+      "nll",
+      "cross_entropy"
+    ],
+    "schema_version": "refcoco-external-alignment-experiments-v0.1",
+    "seed_policy": {
+      "main": [
+        201,
+        202,
+        203,
+        204,
+        205
+      ],
+      "pilot": [
+        201,
+        202,
+        203
+      ],
+      "reporting": "mean_plus_std_for_every_model_split_and_metric"
+    },
+    "statistical_tests": [
+      {
+        "comparisons": [
+          "ovha_admitted_bank_vs_candidate_mlp_reranker",
+          "ovha_admitted_bank_vs_box_aware_cross_attention_reranker",
+          "ovha_admitted_bank_vs_groundingdino_same_candidate_scorer",
+          "groundingdino_proposals_ovha_vs_groundingdino_proposals_box_aware_cross_attention"
+        ],
+        "id": "paired_bootstrap_ci",
+        "outputs": [
+          "mean_delta",
+          "ci_95_low",
+          "ci_95_high"
+        ]
+      },
+      {
+        "comparisons": [
+          "ovha_admitted_bank_vs_candidate_mlp_reranker",
+          "ovha_admitted_bank_vs_box_aware_cross_attention_reranker",
+          "ovha_admitted_bank_vs_groundingdino_same_candidate_scorer",
+          "groundingdino_proposals_ovha_vs_groundingdino_proposals_box_aware_cross_attention"
+        ],
+        "id": "paired_permutation_test",
+        "outputs": [
+          "p_value",
+          "effect_direction"
+        ]
+      }
+    ],
+    "strong_same_candidate_baselines": [
+      {
+        "architecture": "2-4 layer lightweight transformer with bbox embeddings and per-region logits",
+        "id": "box_aware_cross_attention_reranker",
+        "input": "text tokens, frozen CLIP region features, normalized bbox geometry, candidate mask",
+        "purpose": "Controls for the possibility that the previous cross-attention reranker was too weak or geometry-blind."
+      },
+      {
+        "architecture": "candidate-level MLP logit scorer",
+        "id": "clip_geometry_mlp",
+        "input": "CLIP similarity, region feature, bbox geometry, expression length, pooled text feature",
+        "purpose": "Tests whether OVHA gains are only explained by adding bbox geometry."
+      },
+      {
+        "architecture": "parameter-matched transformer encoder with region classification head",
+        "id": "lightweight_transvg_style_reranker",
+        "input": "text tokens, region tokens, candidate mask",
+        "purpose": "Provides a stronger same-candidate grounding-transformer-style reranker without claiming a TransVG reproduction."
+      },
+      {
+        "architecture": "external detector boxes mapped to fixed candidates by IoU-weighted detector score",
+        "id": "groundingdino_same_candidate_scorer",
+        "input": "raw image, referring expression, fixed OVHA candidate boxes",
+        "purpose": "Aligns GroundingDINO with the fixed-candidate evaluator while marking the feature source difference."
+      }
+    ],
+    "task_type": "phrase_region_grounding"
+  },
+  "reference_count": 13,
+  "references_by_dataset": {
+    "cmu_mosei": [
+      {
+        "dataset": "cmu_mosei",
+        "evidence_type": "external_reference",
+        "integration_role": "published_reference_or_optional_reproduction",
+        "name": "LMF",
+        "notes": "Low-rank tensor fusion reference; keep separate from OVHA same-feature probes.",
+        "official_repo": "https://github.com/Justin1904/Low-rank-Multimodal-Fusion",
+        "reproduction_status": "legacy_repo_available",
+        "source_url": "https://arxiv.org/abs/1806.00064",
+        "task_type": "sentiment_emotion"
+      },
+      {
+        "dataset": "cmu_mosei",
+        "evidence_type": "external_reference",
+        "integration_role": "published_reference_or_optional_reproduction",
+        "name": "MAG-BERT",
+        "notes": "BERT/MAG reference; record text backbone, feature alignment, and split compatibility before reproduction claims.",
+        "official_repo": "https://github.com/WasifurRahman/BERT_multimodal_transformer",
+        "reproduction_status": "manual_dependency_audit_required",
+        "source_url": "https://arxiv.org/abs/1908.05787",
+        "task_type": "sentiment_emotion"
+      },
+      {
+        "dataset": "cmu_mosei",
+        "evidence_type": "external_reproduction",
+        "integration_role": "priority_external_reproduction",
+        "name": "MISA",
+        "notes": "Priority CMU-MOSEI reproduction candidate for shared/private representation comparison.",
+        "official_repo": "https://github.com/declare-lab/MISA",
+        "reproduction_status": "official_repo_available",
+        "source_url": "https://arxiv.org/abs/2005.03545",
+        "task_type": "sentiment_emotion"
+      },
+      {
+        "dataset": "cmu_mosei",
+        "evidence_type": "external_reproduction",
+        "integration_role": "priority_external_reproduction",
+        "name": "MulT",
+        "notes": "Priority CMU-MOSEI reproduction candidate for cross-modal transformer comparison.",
+        "official_repo": "https://github.com/yaohungt/Multimodal-Transformer",
+        "reproduction_status": "official_repo_available",
+        "source_url": "https://arxiv.org/abs/1906.00295",
+        "task_type": "sentiment_emotion"
+      },
+      {
+        "dataset": "cmu_mosei",
+        "evidence_type": "external_reproduction",
+        "integration_role": "priority_external_reproduction",
+        "name": "Self-MM",
+        "notes": "Self-supervised multitask sentiment reference; good candidate for a separate external reproduction table.",
+        "official_repo": "https://github.com/thuiar/Self-MM",
+        "reproduction_status": "official_repo_available",
+        "source_url": "https://arxiv.org/abs/2102.04830",
+        "task_type": "sentiment_emotion"
+      },
+      {
+        "dataset": "cmu_mosei",
+        "evidence_type": "external_reference",
+        "integration_role": "published_reference_or_optional_reproduction",
+        "name": "TFN",
+        "notes": "Classical tensor fusion reference; use published numbers or rerun with documented SDK feature compatibility.",
+        "official_repo": "https://github.com/Justin1904/TensorFusionNetworks",
+        "reproduction_status": "legacy_repo_available",
+        "source_url": "https://arxiv.org/abs/1707.07250",
+        "task_type": "sentiment_emotion"
+      }
+    ],
+    "refcoco": [
+      {
+        "dataset": "refcoco",
+        "evidence_type": "external_reproduction",
+        "integration_role": "optional_external_reproduction",
+        "name": "GLIP",
+        "notes": "Grounded detection method; keep separate from same-feature OVHA probes and record exact checkpoint/eval adapter if reproduced.",
+        "official_repo": "https://github.com/microsoft/GLIP",
+        "reproduction_status": "official_repo_available_manual_weights",
+        "source_url": "https://arxiv.org/abs/2112.03857",
+        "task_type": "phrase_region_grounding"
+      },
+      {
+        "dataset": "refcoco",
+        "evidence_type": "external_reproduction",
+        "integration_role": "optional_external_reproduction",
+        "name": "GroundingDINO",
+        "notes": "Strong open-set grounding detector; reproduce in its own environment and import metrics as external_reproduction rows.",
+        "official_repo": "https://github.com/IDEA-Research/GroundingDINO",
+        "reproduction_status": "official_repo_available_manual_weights",
+        "source_url": "https://arxiv.org/abs/2303.05499",
+        "task_type": "phrase_region_grounding"
+      },
+      {
+        "dataset": "refcoco",
+        "evidence_type": "external_reproduction",
+        "integration_role": "optional_external_reproduction",
+        "name": "GroundingDINO-1.5",
+        "notes": "Use only if licensing/API/checkpoint access is documented in the final artifact.",
+        "official_repo": "https://github.com/IDEA-Research/Grounding-DINO-1.5-API",
+        "reproduction_status": "api_or_official_checkpoint_required",
+        "source_url": "https://arxiv.org/abs/2405.10300",
+        "task_type": "phrase_region_grounding"
+      },
+      {
+        "dataset": "refcoco",
+        "evidence_type": "external_reference",
+        "integration_role": "related_referring_segmentation_reference",
+        "name": "LAVT",
+        "notes": "Segmentation-oriented RefCOCO-family result; do not compare as exact same metric unless converted and documented.",
+        "official_repo": "https://github.com/yz93/LAVT-RIS",
+        "reproduction_status": "related_task_reference",
+        "source_url": "https://arxiv.org/abs/2112.02244",
+        "task_type": "phrase_region_grounding"
+      },
+      {
+        "dataset": "refcoco",
+        "evidence_type": "external_reference",
+        "integration_role": "published_reference_or_optional_reproduction",
+        "name": "MDETR",
+        "notes": "Use the paper/repo RefCOCO-family numbers as external reference unless the full official training/eval stack is rerun.",
+        "official_repo": "https://github.com/ashkamath/mdetr",
+        "reproduction_status": "official_repo_available",
+        "source_url": "https://arxiv.org/abs/2104.12763",
+        "task_type": "phrase_region_grounding"
+      },
+      {
+        "dataset": "refcoco",
+        "evidence_type": "external_reference",
+        "integration_role": "published_reference_or_optional_reproduction",
+        "name": "SeqTR",
+        "notes": "Task-native sequence-to-sequence referring expression baseline.",
+        "official_repo": "https://github.com/sean-zhuh/SeqTR",
+        "reproduction_status": "official_repo_available",
+        "source_url": "https://arxiv.org/abs/2203.16265",
+        "task_type": "phrase_region_grounding"
+      },
+      {
+        "dataset": "refcoco",
+        "evidence_type": "external_reference",
+        "integration_role": "published_reference_or_optional_reproduction",
+        "name": "TransVG",
+        "notes": "Task-native referring expression comprehension baseline.",
+        "official_repo": "https://github.com/djiajunustc/TransVG",
+        "reproduction_status": "official_repo_available",
+        "source_url": "https://arxiv.org/abs/2104.08541",
+        "task_type": "phrase_region_grounding"
+      }
+    ]
+  },
+  "source_config": "configs/multimodal_external_sota_references.json"
+}
