@@ -771,6 +771,31 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
         self.assertEqual(mask.tolist(), [[True, True]])
         self.assertEqual(missing.tolist(), [False])
 
+    def test_refcoco_prso_clip_similarity_rule_baseline_uses_masked_text_mean(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch is required for RefCOCO public-main baseline")
+
+        import torch
+
+        module = importlib.import_module("scripts.multimodal.run_public_main")
+        batch = _batch(torch)
+        batch = replace(
+            batch,
+            target_y=torch.zeros(2, 5, 6),
+            target_mask=torch.ones(2, 5, dtype=torch.bool),
+        )
+
+        logits, summary = module._region_rule_baseline_prediction(
+            "prso_clip_similarity",
+            train_batch=batch,
+            eval_batch=batch,
+            seed=201,
+        )
+
+        self.assertEqual(tuple(logits.shape), (2, 5, 6))
+        self.assertTrue(torch.isfinite(logits).all())
+        self.assertEqual(summary["baseline_rule_protocol"], "candidatewise_cosine_text_region_similarity")
+
     def test_align_refcoco_stage_features_cli_reorders_feature_banks_by_stage_splits(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout
         import numpy as np
