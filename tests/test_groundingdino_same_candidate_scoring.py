@@ -122,6 +122,40 @@ class GroundingDINOSameCandidateScoringTest(unittest.TestCase):
         self.assertEqual(_normalize_caption("  The left person  "), "the left person .")
         self.assertEqual(_normalize_caption("cat . dog ."), "cat . dog .")
 
+    def test_builds_expression_map_from_unc_refcoco_refs(self) -> None:
+        from scripts.multimodal.build_refcoco_expression_map import build_refcoco_expression_map
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            refs = root / "refs.json"
+            output = root / "expressions.jsonl"
+            refs.write_text(
+                json.dumps(
+                    [
+                        {
+                            "image_id": 42,
+                            "ann_id": 7,
+                            "sentences": [
+                                {"sent_id": 100, "tokens": ["left", "person"]},
+                                {"sent_id": 101, "raw": "person in blue"},
+                            ],
+                        }
+                    ],
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+
+            payload = build_refcoco_expression_map(
+                Namespace(dataset_name="refcoco", refs=refs, output=output)
+            )
+            rows = [json.loads(line) for line in output.read_text().splitlines() if line.strip()]
+
+        self.assertEqual(payload["expression_count"], 2)
+        self.assertEqual(rows[0]["source_id"], "refcoco::image42::ann7::sent100")
+        self.assertEqual(rows[0]["expression"], "left person")
+        self.assertEqual(rows[1]["expression"], "person in blue")
+
 
 def _write_refcoco_cache(cache_root: Path) -> None:
     root = cache_root / "refcoco" / "v0.1"
