@@ -46,6 +46,7 @@ from scripts.multimodal.run_public_smoke import (
     _linear_parameter_count,
     _linear_parameter_vector,
     _load_public_batch,
+    _masked_field_mean,
     _operator_load_by_candidate,
     _operator_load_source,
     _ovha_composition_kwargs,
