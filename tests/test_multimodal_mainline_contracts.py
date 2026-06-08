@@ -652,17 +652,124 @@ class MultimodalMainlineStaticContractTests(unittest.TestCase):
 
     def test_refcoco_clip_region_images_are_forced_to_rgb(self):
         import numpy as np
+
+        module = importlib.import_module("scripts.multimodal.extract_refcoco_clip_features")
+        array = module._as_rgb_array(np.zeros((1, 1, 8), dtype=np.uint8))
+
+        self.assertEqual(array.shape, (1, 1, 3))
+        self.assertTrue(array.flags["C_CONTIGUOUS"])
+
+    def test_refcoco_clip_region_images_are_resized_to_fixed_rgb_pil(self):
+        if importlib.util.find_spec("PIL") is None:
+            self.skipTest("Pillow is required for RefCOCO image conversion")
+
+        import numpy as np
         from PIL import Image
 
         module = importlib.import_module("scripts.multimodal.extract_refcoco_clip_features")
         image = module._as_rgb_image(np.zeros((1, 1, 8), dtype=np.uint8), Image)
-        array = module._as_rgb_array(np.zeros((1, 1, 8), dtype=np.uint8))
+        clip_image = module._as_clip_image(np.zeros((3, 2, 8), dtype=np.uint8), Image)
 
         self.assertEqual(image.mode, "RGB")
         self.assertEqual(image.size, (1, 1))
         self.assertEqual(np.asarray(image).shape, (1, 1, 3))
-        self.assertEqual(array.shape, (1, 1, 3))
-        self.assertTrue(array.flags["C_CONTIGUOUS"])
+        self.assertEqual(clip_image.mode, "RGB")
+        self.assertEqual(clip_image.size, (224, 224))
+        self.assertEqual(np.asarray(clip_image).shape, (224, 224, 3))
+
+    def test_refcoco_region_extraction_passes_fixed_rgb_pil_images_to_processor(self):
+        if importlib.util.find_spec("PIL") is None:
+            self.skipTest("Pillow is required for RefCOCO image conversion")
+
+        import argparse
+        import numpy as np
+        from PIL import Image
+
+        module = importlib.import_module("scripts.multimodal.extract_refcoco_clip_features")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "COCO_train2014_000000000010.jpg"
+            Image.fromarray(np.zeros((5, 4, 3), dtype=np.uint8), mode="RGB").save(image_path)
+            samples = [
+                {
+                    "index": 0,
+                    "image_path": image_path,
+                    "candidate_region_boxes": [
+                        (0.0, 0.0, 0.5, 0.6),
+                        (0.25, 0.2, 1.0, 1.0),
+                    ],
+                }
+            ]
+
+            class FakeImageProcessor:
+                def __call__(self, *, images, return_tensors):
+                    self.images = images
+                    self.return_tensors = return_tensors
+                    for image in images:
+                        self.assert_image(image)
+                    return {"pixel_values": FakePixelValues(len(images))}
+
+                @staticmethod
+                def assert_image(image):
+                    if image.mode != "RGB" or image.size != (224, 224):
+                        raise AssertionError(f"unexpected processor image: mode={image.mode} size={image.size}")
+
+            class FakePixelValues:
+                def __init__(self, count):
+                    self.shape = (count, 3, 224, 224)
+
+                def to(self, device):
+                    del device
+                    return self
+
+            class FakeFeatureTensor:
+                def __init__(self, count):
+                    self._values = np.ones((count, 4), dtype=np.float32)
+
+                def detach(self):
+                    return self
+
+                def cpu(self):
+                    return self
+
+                def float(self):
+                    return self
+
+                def numpy(self):
+                    return self._values
+
+            class FakeNoGrad:
+                def __enter__(self):
+                    return None
+
+                def __exit__(self, exc_type, exc, traceback):
+                    del exc_type, exc, traceback
+                    return False
+
+            class FakeTorch:
+                @staticmethod
+                def no_grad():
+                    return FakeNoGrad()
+
+            class FakeModel:
+                @staticmethod
+                def get_image_features(**encoded):
+                    return FakeFeatureTensor(encoded["pixel_values"].shape[0])
+
+            processor = FakeImageProcessor()
+            features, mask, missing = module._extract_region_features(
+                argparse.Namespace(region_batch_size=1, normalize=False),
+                samples,
+                processor,
+                FakeModel(),
+                FakeTorch(),
+                Image,
+                object(),
+            )
+
+        self.assertEqual(features.shape, (1, 2, 4))
+        self.assertEqual(mask.tolist(), [[True, True]])
+        self.assertEqual(missing.tolist(), [False])
 
     def test_align_refcoco_stage_features_cli_reorders_feature_banks_by_stage_splits(self):
         from moat_ovha_torch.data.multimodal.cache_schema import MultimodalCacheLayout, validate_cache_layout

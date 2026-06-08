@@ -397,7 +397,7 @@ def _extract_region_features(args: argparse.Namespace, samples, image_processor,
                         missing[int(sample["index"])] = True
                     else:
                         images.append(_as_rgb_image(crop, image_module))
-            encoded = image_processor(images=[_as_rgb_array(image) for image in images], return_tensors="pt")
+            encoded = image_processor(images=[_as_clip_image(image, image_module) for image in images], return_tensors="pt")
             encoded = {key: value.to(device) for key, value in encoded.items()}
             features = model.get_image_features(**encoded)
             if args.normalize:
@@ -457,6 +457,14 @@ def _blank_image(image_module):
 def _as_rgb_image(image: Any, image_module):
     array = _as_rgb_array(image)
     return image_module.fromarray(array, mode="RGB")
+
+
+def _as_clip_image(image: Any, image_module):
+    rgb = _as_rgb_image(image, image_module)
+    if rgb.size == (224, 224):
+        return rgb
+    resampling = getattr(image_module, "Resampling", image_module)
+    return rgb.resize((224, 224), resample=resampling.BICUBIC)
 
 
 def _as_rgb_array(image: Any) -> np.ndarray:
