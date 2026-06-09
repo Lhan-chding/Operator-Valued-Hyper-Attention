@@ -156,6 +156,124 @@ class GroundingDINOSameCandidateScoringTest(unittest.TestCase):
         self.assertEqual(rows[0]["expression"], "left person")
         self.assertEqual(rows[1]["expression"], "person in blue")
 
+    def test_scores_groundingdino_openbox_predictions(self) -> None:
+        from scripts.multimodal.score_groundingdino_openbox import score_groundingdino_openbox
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache_root = root / "cache"
+            _write_refcoco_cache(cache_root)
+            predictions = root / "predictions.jsonl"
+            predictions.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "source_id": "sample-a",
+                                "boxes": [[0.31, 0.01, 0.49, 0.19], [0.0, 0.0, 0.2, 0.2]],
+                                "scores": [0.9, 0.4],
+                            },
+                            sort_keys=True,
+                        ),
+                        json.dumps({"source_id": "sample-b", "boxes": [], "scores": []}, sort_keys=True),
+                    ]
+                )
+                + "\n"
+            )
+
+            payload = score_groundingdino_openbox(
+                Namespace(
+                    predictions=predictions,
+                    cache_root=cache_root,
+                    dataset_name="refcoco",
+                    version="v0.1",
+                    split="testA",
+                    output_dir=root / "openbox",
+                    prediction_box_format="xyxy_normalized",
+                    max_predictions_per_sample=None,
+                )
+            )
+            rows = [
+                json.loads(line)
+                for line in (Path(payload["output_dir"]) / "per_sample_openbox_scores.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(payload["sample_count"], 2)
+        self.assertEqual(payload["prediction_count"], 2)
+        self.assertEqual(payload["empty_prediction_count"], 1)
+        self.assertAlmostEqual(payload["acc_at_0_5"], 0.5)
+        self.assertGreater(payload["mean_iou"], 0.4)
+        self.assertEqual(rows[0]["selected_prediction_index"], 0)
+        self.assertTrue(rows[0]["acc_at_0_5"])
+        self.assertEqual(rows[1]["selected_prediction_index"], -1)
+
+    def test_summarizes_refcoco_subset_diagnostics(self) -> None:
+        from scripts.multimodal.summarize_refcoco_subset_diagnostics import summarize_refcoco_subset_diagnostics
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache_root = root / "cache"
+            _write_refcoco_cache(cache_root)
+            scores = root / "per_sample_scores.jsonl"
+            scores.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "source_id": "sample-a",
+                                "selected_iou": 1.0,
+                                "hit_at_1": True,
+                                "hit_at_5": True,
+                                "prediction_count": 1,
+                            },
+                            sort_keys=True,
+                        ),
+                        json.dumps(
+                            {
+                                "source_id": "sample-b",
+                                "selected_iou": 0.0,
+                                "hit_at_1": False,
+                                "hit_at_5": False,
+                                "prediction_count": 0,
+                            },
+                            sort_keys=True,
+                        ),
+                    ]
+                )
+                + "\n"
+            )
+            expressions = root / "expressions.jsonl"
+            expressions.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"source_id": "sample-a", "expression": "left red person"}, sort_keys=True),
+                        json.dumps({"source_id": "sample-b", "expression": "person near dog"}, sort_keys=True),
+                    ]
+                )
+                + "\n"
+            )
+
+            payload = summarize_refcoco_subset_diagnostics(
+                Namespace(
+                    per_sample_scores=scores,
+                    expressions_jsonl=expressions,
+                    cache_root=cache_root,
+                    dataset_name="refcoco",
+                    version="v0.1",
+                    split="testA",
+                    output_dir=root / "diagnostics",
+                    min_count=1,
+                )
+            )
+
+        by_group = {row["group"]: row for row in payload["groups"]}
+        self.assertAlmostEqual(by_group["all"]["acc_at_0_5"], 0.5)
+        self.assertAlmostEqual(by_group["spatial_expression"]["acc_at_0_5"], 0.5)
+        self.assertAlmostEqual(by_group["attribute_expression"]["acc_at_0_5"], 1.0)
+        self.assertAlmostEqual(by_group["relational_expression"]["acc_at_0_5"], 0.0)
+        self.assertEqual(by_group["empty_prediction"]["sample_count"], 1)
+
 
 def _write_refcoco_cache(cache_root: Path) -> None:
     root = cache_root / "refcoco" / "v0.1"
