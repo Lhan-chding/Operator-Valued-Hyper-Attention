@@ -110,7 +110,9 @@ This checks that the CLIP crop baseline is not failing because of invalid crops 
 
 | Test | samples | target valid | mean valid K | crop failures | hit@1 | hit@5 | target rank <=2 | target rank <=3 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
+| val | 10834 | 10834/10834 | 10.60 | 0 | 0.3473 | 0.8341 | 0.5711 | 0.6989 |
 | test A | 5657 | 5657/5657 | 12.22 | 0 | 0.3435 | 0.8045 | 0.5300 | 0.6597 |
+| testB | 5095 | 5095/5095 | 7.92 | 0 | 0.3662 | 0.8836 | 0.6202 | 0.7590 |
 
 ## RefCOCO Candidate-Slot Leakage Audit
 
