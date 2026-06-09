@@ -26,6 +26,12 @@ RELATIONAL_TERMS = frozenset(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Summarize RefCOCO per-sample scores by diagnostic subsets.")
     parser.add_argument("--per-sample-scores", type=Path, required=True)
+    parser.add_argument(
+        "--input-format",
+        choices=("auto", "score_rows", "public_main_predictions"),
+        default="auto",
+        help="score_rows use selected_iou/hit fields; public_main_predictions use run_public_main per-sample logits.",
+    )
     parser.add_argument("--expressions-jsonl", type=Path, required=True)
     parser.add_argument("--cache-root", type=Path, default=Path("data/multimodal_cache"))
     parser.add_argument("--dataset-name", default="refcoco")
@@ -44,8 +50,19 @@ def summarize_refcoco_subset_diagnostics(args: argparse.Namespace) -> dict[str, 
     source_ids = _load_source_ids(root, args.split)
     source_index = {source_id: index for index, source_id in enumerate(source_ids)}
     region_mask = np.load(root / "masks" / f"region_mask_{args.split}.npy").astype(bool, copy=False)
+    candidate_boxes = np.load(root / "supervision" / f"candidate_region_boxes_{args.split}.npy").astype(np.float32, copy=False)
+    bbox_targets = np.load(root / "supervision" / f"bbox_targets_{args.split}.npy").astype(np.float32, copy=False)
+    region_targets = np.load(root / "supervision" / f"region_targets_{args.split}.npy").reshape(-1).astype(np.int64, copy=False)
     expressions = _load_expressions(args.expressions_jsonl)
-    score_rows = _load_score_rows(args.per_sample_scores)
+    score_rows = _load_score_rows(
+        args.per_sample_scores,
+        input_format=getattr(args, "input_format", "auto"),
+        source_index=source_index,
+        candidate_boxes=candidate_boxes,
+        bbox_targets=bbox_targets,
+        region_targets=region_targets,
+        region_mask=region_mask,
+    )
     groups: dict[str, list[dict[str, Any]]] = {"all": []}
     for row in score_rows:
         source_id = row["source_id"]
@@ -89,14 +106,83 @@ def summarize_refcoco_subset_diagnostics(args: argparse.Namespace) -> dict[str, 
     return payload
 
 
-def _load_score_rows(path: Path) -> list[dict[str, Any]]:
+def _load_score_rows(
+    path: Path,
+    *,
+    input_format: str = "auto",
+    source_index: dict[str, int] | None = None,
+    candidate_boxes: np.ndarray | None = None,
+    bbox_targets: np.ndarray | None = None,
+    region_targets: np.ndarray | None = None,
+    region_mask: np.ndarray | None = None,
+) -> list[dict[str, Any]]:
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     if not rows:
         raise ValueError(f"{path} contains no score rows")
-    for index, row in enumerate(rows, start=1):
-        if "source_id" not in row:
-            raise ValueError(f"{path} line {index} missing source_id")
-    return rows
+    detected = input_format
+    if detected == "auto":
+        detected = "public_main_predictions" if "prediction_full" in rows[0] else "score_rows"
+    if detected == "score_rows":
+        for index, row in enumerate(rows, start=1):
+            if "source_id" not in row:
+                raise ValueError(f"{path} line {index} missing source_id")
+        return rows
+    if detected != "public_main_predictions":
+        raise ValueError(f"unknown input format: {input_format}")
+    if source_index is None or candidate_boxes is None or bbox_targets is None or region_targets is None or region_mask is None:
+        raise ValueError("public_main_predictions format requires cache supervision arrays")
+    converted = []
+    for line_number, row in enumerate(rows, start=1):
+        source_id = row.get("source_id", row.get("sample_id"))
+        if not isinstance(source_id, str) or source_id not in source_index:
+            raise ValueError(f"{path} line {line_number} missing known source_id/sample_id")
+        logits = _flatten_logits(row.get("prediction_full"))
+        row_index = source_index[source_id]
+        valid_mask = region_mask[row_index].reshape(-1).astype(bool)
+        if logits.shape[0] < valid_mask.shape[0]:
+            logits = np.pad(logits, (0, valid_mask.shape[0] - logits.shape[0]), constant_values=-1.0e9)
+        logits = logits[: valid_mask.shape[0]]
+        logits = np.where(valid_mask, logits, -1.0e9)
+        selected_index = int(np.argmax(logits)) if bool(valid_mask.any()) else -1
+        target_index = int(region_targets[row_index])
+        selected_iou = 0.0 if selected_index < 0 else float(_box_iou(candidate_boxes[row_index, selected_index], bbox_targets[row_index]))
+        ranked = [int(index) for index in np.argsort(-logits, kind="stable").tolist() if bool(valid_mask[index])]
+        target_rank = ranked.index(target_index) + 1 if target_index in ranked else None
+        converted.append(
+            {
+                "source_id": source_id,
+                "split": row.get("split"),
+                "seed": row.get("seed"),
+                "model": row.get("model"),
+                "selected_index": selected_index,
+                "target_index": target_index,
+                "selected_iou": selected_iou,
+                "hit_at_1": selected_index == target_index,
+                "hit_at_5": target_rank is not None and target_rank <= 5,
+                "target_rank": target_rank,
+                "prediction_count": int(valid_mask.sum()),
+            }
+        )
+    return converted
+
+
+def _flatten_logits(payload: Any) -> np.ndarray:
+    array = np.asarray(payload, dtype=np.float32)
+    if array.ndim == 0:
+        raise ValueError("prediction_full must contain candidate logits")
+    return array.reshape(-1)
+
+
+def _box_iou(box: np.ndarray, target: np.ndarray) -> float:
+    x1 = max(float(box[0]), float(target[0]))
+    y1 = max(float(box[1]), float(target[1]))
+    x2 = min(float(box[2]), float(target[2]))
+    y2 = min(float(box[3]), float(target[3]))
+    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    box_area = max(0.0, float(box[2]) - float(box[0])) * max(0.0, float(box[3]) - float(box[1]))
+    target_area = max(0.0, float(target[2]) - float(target[0])) * max(0.0, float(target[3]) - float(target[1]))
+    union = box_area + target_area - inter
+    return 0.0 if union <= 0.0 else inter / union
 
 
 def _load_expressions(path: Path) -> dict[str, str]:

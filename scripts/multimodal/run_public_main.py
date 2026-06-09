@@ -121,6 +121,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--skip-baselines",
+        action="store_true",
+        help=(
+            "Skip all baseline training and run only the configured main model. This is for "
+            "targeted continuation runs when same-feature baselines have already been trained."
+        ),
+    )
+    parser.add_argument(
         "--only-baseline",
         action="append",
         default=[],
@@ -200,7 +208,9 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     seed_reports: list[dict[str, Any]] = []
     selected_seeds = _selected_seeds(config, args.pilot_seed)
     pilot_seed_subset = len(selected_seeds) != len(config.seeds)
-    selected_baselines = _selected_baselines(config, tuple(args.only_baseline))
+    if args.skip_main_model and args.skip_baselines:
+        raise ValueError("--skip-main-model and --skip-baselines cannot both be set")
+    selected_baselines = () if args.skip_baselines else _selected_baselines(config, tuple(args.only_baseline))
     selected_models = ([] if args.skip_main_model else [config.main_model_name]) + list(selected_baselines)
     if not selected_models:
         raise ValueError("targeted public-main run selected no models")
@@ -263,6 +273,7 @@ def run_public_main(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "configured_models": [config.main_model_name, *config.baseline_names],
         "selected_baselines": list(selected_baselines),
         "skip_main_model": bool(args.skip_main_model),
+        "skip_baselines": bool(args.skip_baselines),
         "row_counts": {
             "raw_metrics": len(raw_rows),
             "diagnostics": len(diagnostics_rows),
@@ -495,6 +506,7 @@ def _run_seed(
             "seed": seed,
             **main_summary,
             "selected_baselines": list(baseline_names),
+            "baselines_skipped": bool(args.skip_baselines),
             "baseline_count": len(baseline_rows),
             "baseline_summaries": baseline_summaries,
         },
@@ -1945,7 +1957,7 @@ def _baseline_rows(
     robustness_rows: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
     per_sample_prediction_rows: list[dict[str, Any]] = []
-    for baseline_name in (baseline_names or config.baseline_names):
+    for baseline_name in (config.baseline_names if baseline_names is None else baseline_names):
         baseline_protocol = baseline_protocol_for_name(config.task_type, str(baseline_name))
         if _is_tanso_raw_mlp_baseline(config.task_type, str(baseline_name)):
             model, summary = _train_raw_tanso_mlp_baseline(

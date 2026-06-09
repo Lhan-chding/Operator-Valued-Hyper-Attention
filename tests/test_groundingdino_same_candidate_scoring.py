@@ -489,6 +489,7 @@ class GroundingDINOSameCandidateScoringTest(unittest.TestCase):
             payload = summarize_refcoco_subset_diagnostics(
                 Namespace(
                     per_sample_scores=scores,
+                    input_format="score_rows",
                     expressions_jsonl=expressions,
                     cache_root=cache_root,
                     dataset_name="refcoco",
@@ -505,6 +506,125 @@ class GroundingDINOSameCandidateScoringTest(unittest.TestCase):
         self.assertAlmostEqual(by_group["attribute_expression"]["acc_at_0_5"], 1.0)
         self.assertAlmostEqual(by_group["relational_expression"]["acc_at_0_5"], 0.0)
         self.assertEqual(by_group["empty_prediction"]["sample_count"], 1)
+
+    def test_summarizes_public_main_prediction_subset_diagnostics(self) -> None:
+        from scripts.multimodal.summarize_refcoco_subset_diagnostics import summarize_refcoco_subset_diagnostics
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache_root = root / "cache"
+            _write_refcoco_cache(cache_root)
+            predictions = root / "per_sample_predictions.jsonl"
+            predictions.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "sample_id": "sample-a",
+                                "split": "testA",
+                                "model": "test_reranker",
+                                "seed": 1,
+                                "prediction_full": [[0.1, 0.9, 0.2]],
+                            },
+                            sort_keys=True,
+                        ),
+                        json.dumps(
+                            {
+                                "sample_id": "sample-b",
+                                "split": "testA",
+                                "model": "test_reranker",
+                                "seed": 1,
+                                "prediction_full": [[0.1, 0.7, -1.0]],
+                            },
+                            sort_keys=True,
+                        ),
+                    ]
+                )
+                + "\n"
+            )
+            expressions = root / "expressions.jsonl"
+            expressions.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"source_id": "sample-a", "expression": "left red person"}, sort_keys=True),
+                        json.dumps({"source_id": "sample-b", "expression": "person near dog"}, sort_keys=True),
+                    ]
+                )
+                + "\n"
+            )
+
+            payload = summarize_refcoco_subset_diagnostics(
+                Namespace(
+                    per_sample_scores=predictions,
+                    input_format="public_main_predictions",
+                    expressions_jsonl=expressions,
+                    cache_root=cache_root,
+                    dataset_name="refcoco",
+                    version="v0.1",
+                    split="testA",
+                    output_dir=root / "diagnostics",
+                    min_count=1,
+                )
+            )
+
+        by_group = {row["group"]: row for row in payload["groups"]}
+        self.assertAlmostEqual(by_group["all"]["acc_at_0_5"], 0.5)
+        self.assertAlmostEqual(by_group["all"]["recall_at_1"], 0.5)
+        self.assertAlmostEqual(by_group["all"]["mean_iou"], 0.5)
+        self.assertAlmostEqual(by_group["attribute_expression"]["acc_at_0_5"], 1.0)
+        self.assertAlmostEqual(by_group["relational_expression"]["acc_at_0_5"], 0.0)
+
+    def test_summarizes_refcoco_paired_significance_from_public_predictions(self) -> None:
+        from scripts.multimodal.summarize_refcoco_paired_significance import summarize_refcoco_paired_significance
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache_root = root / "cache"
+            _write_refcoco_cache(cache_root)
+            full = root / "full_predictions.jsonl"
+            baseline = root / "baseline_predictions.jsonl"
+            full.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"sample_id": "sample-a", "seed": 1, "prediction_full": [[0.1, 0.9, 0.2]]}, sort_keys=True),
+                        json.dumps({"sample_id": "sample-b", "seed": 1, "prediction_full": [[0.9, 0.2, -1.0]]}, sort_keys=True),
+                    ]
+                )
+                + "\n"
+            )
+            baseline.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"sample_id": "sample-a", "seed": 1, "prediction_full": [[0.9, 0.1, 0.2]]}, sort_keys=True),
+                        json.dumps({"sample_id": "sample-b", "seed": 1, "prediction_full": [[0.1, 0.9, -1.0]]}, sort_keys=True),
+                    ]
+                )
+                + "\n"
+            )
+
+            payload = summarize_refcoco_paired_significance(
+                Namespace(
+                    full=full,
+                    baseline=[f"strong={baseline}"],
+                    full_name="ovha",
+                    input_format="public_main_predictions",
+                    cache_root=cache_root,
+                    dataset_name="refcoco",
+                    version="v0.1",
+                    split="testA",
+                    metric="acc_at_0_5",
+                    bootstrap_samples=200,
+                    permutation_samples=200,
+                    seed=7,
+                    output_dir=root / "paired",
+                )
+            )
+
+        comparison = payload["comparisons"][0]
+        self.assertEqual(comparison["paired_observation_count"], 2)
+        self.assertAlmostEqual(comparison["full_mean"], 1.0)
+        self.assertAlmostEqual(comparison["baseline_mean"], 0.0)
+        self.assertGreater(comparison["mean_delta"], 0.0)
 
     def test_scores_clip_crop_similarity_against_same_candidates(self) -> None:
         from scripts.multimodal.score_clip_crop_same_candidates import score_precomputed_clip_crop_same_candidates
