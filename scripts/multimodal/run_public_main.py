@@ -2526,7 +2526,14 @@ def _is_region_rule_baseline(name: str) -> bool:
 
 
 def _is_region_trainable_reranker(name: str) -> bool:
-    return name in {"box_prior", "candidate_mlp_reranker", "cross_attention_reranker"}
+    return name in {
+        "box_prior",
+        "candidate_mlp_reranker",
+        "cross_attention_reranker",
+        "clip_geometry_mlp",
+        "box_aware_cross_attention_reranker",
+        "lightweight_transvg_style_reranker",
+    }
 
 
 def _region_rule_baseline_prediction(
@@ -2638,6 +2645,13 @@ def _prso_clip_similarity_logits(batch: MultimodalEpisodeBatch) -> torch.Tensor:
     return logits.unsqueeze(1).expand(-1, int(batch.target_y.shape[1]), -1).contiguous()
 
 
+def _attention_head_count(d_model: int) -> int:
+    for head_count in (8, 4, 2):
+        if d_model % head_count == 0:
+            return head_count
+    return 1
+
+
 class _BoxPriorReranker(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -2673,6 +2687,37 @@ class _CandidateMLPReranker(torch.nn.Module):
         return _masked_region_logits(logits, batch)
 
 
+class _CLIPGeometryMLP(torch.nn.Module):
+    def __init__(self, text_dim: int, region_dim: int, d_model: int):
+        super().__init__()
+        self.score = torch.nn.Sequential(
+            torch.nn.Linear(text_dim + region_dim + 14, d_model),
+            torch.nn.LayerNorm(d_model),
+            torch.nn.GELU(),
+            torch.nn.Dropout(0.1),
+            torch.nn.Linear(d_model, d_model),
+            torch.nn.GELU(),
+            torch.nn.Linear(d_model, 1),
+        )
+
+    def forward(self, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+        text = _masked_field_mean(batch.fields["text"])
+        region = batch.fields["region"].x
+        dim = min(int(text.shape[-1]), int(region.shape[-1]))
+        text_norm = torch.nn.functional.normalize(text[..., :dim], dim=-1)
+        region_norm = torch.nn.functional.normalize(region[..., :dim], dim=-1)
+        clip_similarity = (region_norm * text_norm.unsqueeze(1)).sum(dim=-1, keepdim=True)
+        geometry = _region_geometry_features(batch)
+        rank = _geometry_ranks(geometry)
+        text_length = batch.fields["text"].mask.to(dtype=region.dtype).sum(dim=1, keepdim=True)
+        text_length = text_length / max(float(batch.fields["text"].mask.shape[1]), 1.0)
+        text_length = text_length.unsqueeze(1).expand(-1, int(region.shape[1]), -1)
+        text_by_region = text.unsqueeze(1).expand(-1, int(region.shape[1]), -1)
+        features = torch.cat([clip_similarity, text_by_region, region, geometry, rank, text_length], dim=-1)
+        logits = self.score(features).squeeze(-1)
+        return _masked_region_logits(logits, batch)
+
+
 class _CrossAttentionReranker(torch.nn.Module):
     def __init__(self, text_dim: int, region_dim: int, d_model: int):
         super().__init__()
@@ -2692,6 +2737,94 @@ class _CrossAttentionReranker(torch.nn.Module):
         attended_text = torch.matmul(weights, text_tokens)
         box = self.box_proj(_region_geometry_features(batch))
         logits = self.score(torch.cat([region_tokens, attended_text, box], dim=-1)).squeeze(-1)
+        logits = logits.masked_fill(~region_mask, -1e9)
+        return logits.unsqueeze(1).expand(-1, int(batch.target_y.shape[1]), -1).contiguous()
+
+
+class _BoxAwareCrossAttentionReranker(torch.nn.Module):
+    def __init__(self, text_dim: int, region_dim: int, d_model: int):
+        super().__init__()
+        self.text_proj = torch.nn.Linear(text_dim, d_model)
+        self.region_proj = torch.nn.Linear(region_dim, d_model)
+        self.box_proj = torch.nn.Linear(9, d_model)
+        self.type_embedding = torch.nn.Embedding(2, d_model)
+        layer = torch.nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=_attention_head_count(d_model),
+            dim_feedforward=d_model * 4,
+            dropout=0.1,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = torch.nn.TransformerEncoder(layer, num_layers=2)
+        self.score = torch.nn.Sequential(
+            torch.nn.LayerNorm(d_model),
+            torch.nn.Linear(d_model, d_model),
+            torch.nn.GELU(),
+            torch.nn.Linear(d_model, 1),
+        )
+
+    def forward(self, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+        text_tokens = self.text_proj(batch.fields["text"].x)
+        region_tokens = self.region_proj(batch.fields["region"].x) + self.box_proj(_region_geometry_features(batch))
+        text_tokens = text_tokens + self.type_embedding.weight[0].view(1, 1, -1)
+        region_tokens = region_tokens + self.type_embedding.weight[1].view(1, 1, -1)
+        tokens = torch.cat([text_tokens, region_tokens], dim=1)
+        text_mask = batch.fields["text"].mask.to(dtype=torch.bool, device=tokens.device)
+        region_mask = batch.fields["region"].mask.to(dtype=torch.bool, device=tokens.device)
+        token_mask = torch.cat([text_mask, region_mask], dim=1)
+        encoded = self.encoder(tokens, src_key_padding_mask=~token_mask)
+        encoded_regions = encoded[:, int(text_tokens.shape[1]) :, :]
+        logits = self.score(encoded_regions).squeeze(-1)
+        logits = logits.masked_fill(~region_mask, -1e9)
+        return logits.unsqueeze(1).expand(-1, int(batch.target_y.shape[1]), -1).contiguous()
+
+
+class _LightweightTransVGReranker(torch.nn.Module):
+    def __init__(self, text_dim: int, region_dim: int, d_model: int):
+        super().__init__()
+        self.query_token = torch.nn.Parameter(torch.zeros(1, 1, d_model))
+        torch.nn.init.normal_(self.query_token, std=0.02)
+        self.text_proj = torch.nn.Linear(text_dim, d_model)
+        self.region_proj = torch.nn.Linear(region_dim, d_model)
+        self.box_proj = torch.nn.Linear(9, d_model)
+        self.type_embedding = torch.nn.Embedding(3, d_model)
+        layer = torch.nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=_attention_head_count(d_model),
+            dim_feedforward=d_model * 4,
+            dropout=0.1,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = torch.nn.TransformerEncoder(layer, num_layers=4)
+        self.score = torch.nn.Sequential(
+            torch.nn.LayerNorm(d_model * 3),
+            torch.nn.Linear(d_model * 3, d_model),
+            torch.nn.GELU(),
+            torch.nn.Linear(d_model, 1),
+        )
+
+    def forward(self, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+        batch_size = int(batch.target_y.shape[0])
+        query = self.query_token.expand(batch_size, -1, -1) + self.type_embedding.weight[0].view(1, 1, -1)
+        text_tokens = self.text_proj(batch.fields["text"].x) + self.type_embedding.weight[1].view(1, 1, -1)
+        region_tokens = (
+            self.region_proj(batch.fields["region"].x)
+            + self.box_proj(_region_geometry_features(batch))
+            + self.type_embedding.weight[2].view(1, 1, -1)
+        )
+        tokens = torch.cat([query, text_tokens, region_tokens], dim=1)
+        query_mask = torch.ones(batch_size, 1, dtype=torch.bool, device=tokens.device)
+        text_mask = batch.fields["text"].mask.to(dtype=torch.bool, device=tokens.device)
+        region_mask = batch.fields["region"].mask.to(dtype=torch.bool, device=tokens.device)
+        token_mask = torch.cat([query_mask, text_mask, region_mask], dim=1)
+        encoded = self.encoder(tokens, src_key_padding_mask=~token_mask)
+        query_encoded = encoded[:, :1, :].expand(-1, int(region_tokens.shape[1]), -1)
+        region_encoded = encoded[:, 1 + int(text_tokens.shape[1]) :, :]
+        logits = self.score(torch.cat([region_encoded, query_encoded, region_encoded * query_encoded], dim=-1)).squeeze(-1)
         logits = logits.masked_fill(~region_mask, -1e9)
         return logits.unsqueeze(1).expand(-1, int(batch.target_y.shape[1]), -1).contiguous()
 
@@ -2789,6 +2922,12 @@ def _make_region_reranker(baseline_name: str, batch: MultimodalEpisodeBatch, *, 
         return _CandidateMLPReranker(text_dim, region_dim, d_model)
     if baseline_name == "cross_attention_reranker":
         return _CrossAttentionReranker(text_dim, region_dim, d_model)
+    if baseline_name == "clip_geometry_mlp":
+        return _CLIPGeometryMLP(text_dim, region_dim, d_model)
+    if baseline_name == "box_aware_cross_attention_reranker":
+        return _BoxAwareCrossAttentionReranker(text_dim, region_dim, d_model)
+    if baseline_name == "lightweight_transvg_style_reranker":
+        return _LightweightTransVGReranker(text_dim, region_dim, d_model)
     raise ValueError(f"unknown region reranker baseline: {baseline_name}")
 
 

@@ -302,6 +302,15 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "concat_fusion"), "same_feature_sanity_probe")
         self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "prso_clip_similarity"), "same_candidate_strong_reranker")
         self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "cross_attention_reranker"), "same_candidate_strong_reranker")
+        self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "clip_geometry_mlp"), "same_candidate_strong_reranker")
+        self.assertEqual(
+            baseline_protocol_for_name("phrase_region_grounding", "box_aware_cross_attention_reranker"),
+            "same_candidate_strong_reranker",
+        )
+        self.assertEqual(
+            baseline_protocol_for_name("phrase_region_grounding", "lightweight_transvg_style_reranker"),
+            "same_candidate_strong_reranker",
+        )
         self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "ovha_no_cato"), "internal_ovha_ablation")
         self.assertEqual(baseline_protocol_for_name("sentiment_emotion", "Self-MM"), "external_sota_reference_or_reproduction")
         self.assertEqual(

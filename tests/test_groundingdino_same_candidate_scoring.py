@@ -208,6 +208,238 @@ class GroundingDINOSameCandidateScoringTest(unittest.TestCase):
         self.assertTrue(rows[0]["acc_at_0_5"])
         self.assertEqual(rows[1]["selected_prediction_index"], -1)
 
+    def test_scores_groundingdino_proposal_oracle(self) -> None:
+        from scripts.multimodal.score_groundingdino_proposal_oracle import score_groundingdino_proposal_oracle
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache_root = root / "cache"
+            _write_refcoco_cache(cache_root)
+            predictions = root / "predictions.jsonl"
+            predictions.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "source_id": "sample-a",
+                                "boxes": [
+                                    [0.0, 0.0, 0.2, 0.2],
+                                    [0.3, 0.0, 0.5, 0.2],
+                                    [0.28, 0.0, 0.52, 0.22],
+                                ],
+                                "scores": [0.7, 0.6, 0.9],
+                            },
+                            sort_keys=True,
+                        ),
+                        json.dumps({"source_id": "sample-b", "boxes": [], "scores": []}, sort_keys=True),
+                    ]
+                )
+                + "\n"
+            )
+
+            payload = score_groundingdino_proposal_oracle(
+                Namespace(
+                    predictions=predictions,
+                    cache_root=cache_root,
+                    dataset_name="refcoco",
+                    version="v0.1",
+                    split="testA",
+                    output_dir=root / "proposal_oracle",
+                    prediction_box_format="xyxy_normalized",
+                    max_predictions_per_sample=None,
+                    top_k=[1, 2, 3],
+                    iou_threshold=0.5,
+                )
+            )
+            rows = [
+                json.loads(line)
+                for line in (Path(payload["output_dir"]) / "per_sample_proposal_oracle.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(payload["artifact_type"], "groundingdino_proposal_oracle_summary")
+        self.assertEqual(payload["sample_count"], 2)
+        self.assertEqual(payload["empty_proposal_count"], 1)
+        self.assertAlmostEqual(payload["proposal_oracle_recall_at_k"]["1"], 0.5)
+        self.assertAlmostEqual(payload["proposal_oracle_recall_at_k"]["2"], 0.5)
+        self.assertAlmostEqual(payload["proposal_oracle_recall_at_k"]["3"], 0.5)
+        self.assertAlmostEqual(payload["positive_candidate_rate"], 0.5)
+        self.assertEqual(payload["bucket_counts"]["easy"], 1)
+        self.assertEqual(payload["bucket_counts"]["hard"], 1)
+        self.assertEqual(rows[0]["best_proposal_rank"], 3)
+        self.assertEqual(rows[0]["difficulty_bucket"], "easy")
+        self.assertEqual(rows[1]["best_proposal_rank"], None)
+        self.assertEqual(rows[1]["difficulty_bucket"], "hard")
+
+    def test_scores_groundingdino_proposals_with_precomputed_clip_similarity(self) -> None:
+        from scripts.multimodal.score_groundingdino_proposal_clip_similarity import (
+            score_precomputed_groundingdino_proposal_scores,
+        )
+        from scripts.multimodal.score_groundingdino_same_candidates import _load_predictions
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache_root = root / "cache"
+            _write_refcoco_cache(cache_root)
+            predictions_path = root / "predictions.jsonl"
+            predictions_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "source_id": "sample-a",
+                                "boxes": [[0.0, 0.0, 0.2, 0.2], [0.3, 0.0, 0.5, 0.2]],
+                                "scores": [0.9, 0.8],
+                            },
+                            sort_keys=True,
+                        ),
+                        json.dumps(
+                            {
+                                "source_id": "sample-b",
+                                "boxes": [[0.5, 0.5, 0.8, 0.8], [0.1, 0.1, 0.4, 0.4]],
+                                "scores": [0.9, 0.8],
+                            },
+                            sort_keys=True,
+                        ),
+                    ]
+                )
+                + "\n"
+            )
+            predictions = _load_predictions(
+                predictions_path,
+                box_format="xyxy_normalized",
+                max_predictions_per_sample=None,
+            )
+            payload = score_precomputed_groundingdino_proposal_scores(
+                Namespace(
+                    predictions=predictions_path,
+                    cache_root=cache_root,
+                    dataset_name="refcoco",
+                    version="v0.1",
+                    split="testA",
+                    output_dir=root / "proposal_clip",
+                    prediction_box_format="xyxy_normalized",
+                    max_predictions_per_sample=None,
+                    iou_threshold=0.5,
+                    model_name="proposal_clip_test",
+                    clip_model="test-clip",
+                ),
+                source_ids=["sample-a", "sample-b"],
+                bbox_targets=np.asarray([[0.3, 0.0, 0.5, 0.2], [0.1, 0.1, 0.4, 0.4]], dtype=np.float32),
+                predictions=predictions,
+                proposal_similarity_scores={"sample-a": [0.1, 0.9], "sample-b": [0.9, 0.1]},
+                crop_failure_count=0,
+            )
+            rows = [
+                json.loads(line)
+                for line in (Path(payload["output_dir"]) / "per_sample_scores.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(payload["artifact_type"], "groundingdino_proposal_reranker_summary")
+        self.assertEqual(payload["model"], "proposal_clip_test")
+        self.assertAlmostEqual(payload["recall_at_1"], 0.5)
+        self.assertAlmostEqual(payload["recall_at_5"], 1.0)
+        self.assertAlmostEqual(payload["acc_at_0_5"], 0.5)
+        self.assertAlmostEqual(payload["mrr"], 0.75)
+        self.assertEqual(rows[0]["selected_proposal_index"], 1)
+        self.assertEqual(rows[0]["first_positive_rank"], 1)
+        self.assertEqual(rows[1]["selected_proposal_index"], 0)
+        self.assertEqual(rows[1]["first_positive_rank"], 2)
+
+    def test_external_alignment_strong_rerankers_forward_on_region_batch(self) -> None:
+        import torch
+        from moat_ovha_torch.data.multimodal.typed_batch import (
+            MultimodalEpisodeBatch,
+            ProvenanceBank,
+            QueryField,
+            SupervisionBank,
+            TokenField,
+        )
+        from scripts.multimodal.run_public_main import _make_region_reranker
+
+        candidate_boxes = torch.tensor(
+            [
+                [[0.0, 0.0, 0.2, 0.2], [0.3, 0.0, 0.5, 0.2], [0.0, 0.0, 0.0, 0.0]],
+                [[0.1, 0.1, 0.4, 0.4], [0.5, 0.5, 0.8, 0.8], [0.2, 0.2, 0.3, 0.3]],
+            ],
+            dtype=torch.float32,
+        )
+        width_height = (candidate_boxes[..., 2:] - candidate_boxes[..., :2]).clamp_min(0.0)
+        region_pos = torch.cat(
+            [
+                candidate_boxes,
+                0.5 * (candidate_boxes[..., :2] + candidate_boxes[..., 2:]),
+                width_height,
+                (width_height[..., 0] * width_height[..., 1]).unsqueeze(-1),
+            ],
+            dim=-1,
+        )
+        target_y = torch.zeros(2, 1, 3)
+        batch = MultimodalEpisodeBatch(
+            fields={
+                "text": TokenField(
+                    "text",
+                    torch.randn(2, 4, 5),
+                    torch.zeros(2, 4, 1),
+                    torch.tensor([[True, True, True, False], [True, True, False, False]]),
+                ),
+                "region": TokenField(
+                    "region",
+                    torch.randn(2, 3, 6),
+                    region_pos,
+                    torch.tensor([[True, True, False], [True, True, True]]),
+                    attrs={"position_semantics": "xyxy_cxcywh_area"},
+                ),
+            },
+            query=QueryField(
+                x=torch.randn(2, 1, 5),
+                pos=torch.zeros(2, 1, 1),
+                query_type=torch.zeros(2, 1, dtype=torch.long),
+                mask=torch.ones(2, 1, dtype=torch.bool),
+            ),
+            target_y=target_y,
+            target_mask=torch.ones(2, 1, dtype=torch.bool),
+            task_type="phrase_region_grounding",
+            split="testA",
+            source_dataset="refcoco",
+            supervision=SupervisionBank(
+                task_label=target_y,
+                alignment_pairs=None,
+                alignment_weights=None,
+                bbox_targets=candidate_boxes[:, 0],
+                region_targets=torch.tensor([[1], [0]], dtype=torch.long),
+                timestamp_targets=None,
+                modality_missing_mask=None,
+                corruption_metadata=None,
+                weak_labels=None,
+                weak_label_confidence=None,
+                pseudo_label_source=None,
+                candidate_region_boxes=candidate_boxes,
+            ),
+            provenance=ProvenanceBank(
+                source_id=["sample-a", "sample-b"],
+                original_split=["testA", "testA"],
+                raw_ref=["a", "b"],
+                license_tag=["test", "test"],
+                preprocessing_version="test",
+                feature_extractor_version={"text": "test", "region": "test"},
+                pseudo_label_version={},
+            ),
+        )
+
+        for baseline_name in (
+            "clip_geometry_mlp",
+            "box_aware_cross_attention_reranker",
+            "lightweight_transvg_style_reranker",
+        ):
+            with self.subTest(baseline_name=baseline_name):
+                model = _make_region_reranker(baseline_name, batch, d_model=8)
+                logits = model(batch)
+
+                self.assertEqual(tuple(logits.shape), (2, 1, 3))
+                self.assertLess(float(logits.detach()[0, 0, 2]), -1e8)
+
     def test_summarizes_refcoco_subset_diagnostics(self) -> None:
         from scripts.multimodal.summarize_refcoco_subset_diagnostics import summarize_refcoco_subset_diagnostics
 
