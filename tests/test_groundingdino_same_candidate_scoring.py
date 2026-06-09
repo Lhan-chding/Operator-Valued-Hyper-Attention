@@ -274,6 +274,57 @@ class GroundingDINOSameCandidateScoringTest(unittest.TestCase):
         self.assertAlmostEqual(by_group["relational_expression"]["acc_at_0_5"], 0.0)
         self.assertEqual(by_group["empty_prediction"]["sample_count"], 1)
 
+    def test_scores_clip_crop_similarity_against_same_candidates(self) -> None:
+        from scripts.multimodal.score_clip_crop_same_candidates import score_precomputed_clip_crop_same_candidates
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache_root = root / "cache"
+            _write_refcoco_cache(cache_root)
+            payload = score_precomputed_clip_crop_same_candidates(
+                Namespace(
+                    cache_root=cache_root,
+                    dataset_name="refcoco",
+                    version="v0.1",
+                    split="testA",
+                    output_dir=root / "clip_crop",
+                    model_name="clip_crop_similarity_test",
+                    clip_model="openai/clip-vit-base-patch32",
+                ),
+                similarity_scores=np.asarray(
+                    [
+                        [0.1, 0.9, 0.2],
+                        [0.2, 0.8, -1.0],
+                    ],
+                    dtype=np.float32,
+                ),
+                crop_failure_count=0,
+            )
+            rows = [
+                json.loads(line)
+                for line in (Path(payload["output_dir"]) / "per_sample_scores.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+            raw_metrics = [
+                json.loads(line)
+                for line in (Path(payload["output_dir"]) / "raw_metrics.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(payload["artifact_type"], "clip_crop_same_candidate_summary")
+        self.assertEqual(payload["sample_count"], 2)
+        self.assertEqual(payload["crop_failure_count"], 0)
+        self.assertAlmostEqual(payload["recall_at_1"], 0.5)
+        self.assertAlmostEqual(payload["acc_at_0_5"], 0.5)
+        self.assertAlmostEqual(payload["mean_iou"], 0.5)
+        self.assertEqual(rows[0]["selected_index"], 1)
+        self.assertTrue(rows[0]["hit_at_1"])
+        self.assertEqual(rows[1]["selected_index"], 1)
+        self.assertFalse(rows[1]["hit_at_1"])
+        self.assertTrue(all(row["model"] == "clip_crop_similarity_test" for row in raw_metrics))
+        self.assertTrue(all(row["same_candidate_source"] for row in raw_metrics))
+        self.assertFalse(any(row["same_feature_source"] for row in raw_metrics))
+
 
 def _write_refcoco_cache(cache_root: Path) -> None:
     root = cache_root / "refcoco" / "v0.1"
