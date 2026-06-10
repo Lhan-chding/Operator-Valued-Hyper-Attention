@@ -14,11 +14,11 @@ from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
 from scripts.multimodal.run_groundingdino_refcoco_predictions import _image_path_from_record
 from scripts.multimodal.score_clip_crop_same_candidates import (
     _crop_normalized_box,
-    _encode_text_features,
     _load_clip_dependencies,
     _load_expressions,
     _resolve_device,
 )
+from scripts.multimodal.extract_refcoco_clip_features import _project_text_tokens
 from scripts.multimodal.score_groundingdino_proposal_clip_similarity import _sort_predictions_by_score
 from scripts.multimodal.score_groundingdino_same_candidates import (
     _load_predictions,
@@ -49,10 +49,18 @@ def main() -> int:
     parser.add_argument("--dtype", default="float32", choices=("float32", "float16"))
     parser.add_argument("--text-batch-size", type=int, default=512)
     parser.add_argument("--crop-batch-size", type=int, default=192)
+    parser.add_argument("--max-text-length", type=int, default=77)
+    parser.add_argument("--no-normalize", dest="normalize", action="store_false")
     parser.add_argument("--max-proposals-per-sample", type=int, default=32)
     parser.add_argument("--prediction-box-format", choices=("xyxy_normalized", "cxcywh_normalized"), default="xyxy_normalized")
     parser.add_argument("--allow-missing-predictions", action="store_true")
+    parser.add_argument(
+        "--text-only",
+        action="store_true",
+        help="Update only text token fields in an existing proposal cache; use this to repair token-axis validation.",
+    )
     parser.add_argument("--overwrite", action="store_true")
+    parser.set_defaults(normalize=True)
     payload = build_groundingdino_proposal_cache(parser.parse_args())
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
@@ -63,7 +71,7 @@ def build_groundingdino_proposal_cache(args: argparse.Namespace) -> dict[str, An
         raise ValueError("--max-proposals-per-sample must be positive")
     source_root = Path(args.source_cache_root) / args.source_dataset_name / args.source_version
     output_root = Path(args.output_cache_root) / args.output_dataset_name / args.output_version
-    if output_root.exists():
+    if output_root.exists() and not args.text_only:
         if not args.overwrite:
             raise ValueError(f"output cache already exists; pass --overwrite to replace: {output_root}")
         shutil.rmtree(output_root)
@@ -108,7 +116,8 @@ def build_groundingdino_proposal_cache(args: argparse.Namespace) -> dict[str, An
                 dtype=dtype,
             )
         )
-    _write_common_files(args, output_root, split_source_ids)
+    if not args.text_only:
+        _write_common_files(args, output_root, split_source_ids)
     _write_checksums(output_root)
     return {
         "ok": True,
@@ -154,7 +163,18 @@ def _write_split(
         )
 
     texts = [expressions[source_id] for source_id in source_ids]
-    text_features = _encode_text_features(args, texts, tokenizer, model, torch, device).detach().cpu().numpy().astype(np.float32)
+    text_features, text_mask = _encode_text_token_features(args, texts, tokenizer, model, torch, device)
+    if args.text_only:
+        _write_array(output_root / "token_fields" / f"text_{split}.npy", text_features)
+        _write_array(output_root / "positions" / f"text_pos_{split}.npy", _text_positions(text_features.shape[0], text_features.shape[1]))
+        _write_array(output_root / "masks" / f"text_mask_{split}.npy", text_mask)
+        _patch_text_manifest(output_root / "token_fields" / f"manifest_{split}.json", split)
+        return {
+            "split": split,
+            "sample_count": len(source_ids),
+            "text_token_count": int(text_features.shape[1]),
+            "mode": "text_only",
+        }
     proposal_boxes, proposal_detector_scores, region_mask, proposal_counts = _proposal_arrays(
         source_ids,
         predictions,
@@ -179,9 +199,9 @@ def _write_split(
     target_labels = np.zeros((len(source_ids), int(args.max_proposals_per_sample)), dtype=np.float32)
     target_labels[np.arange(len(source_ids)), target_indices] = 1.0
 
-    _write_array(output_root / "token_fields" / f"text_{split}.npy", text_features.reshape(len(source_ids), 1, -1))
-    _write_array(output_root / "positions" / f"text_pos_{split}.npy", np.zeros((len(source_ids), 1, 1), dtype=np.float32))
-    _write_array(output_root / "masks" / f"text_mask_{split}.npy", np.ones((len(source_ids), 1), dtype=bool))
+    _write_array(output_root / "token_fields" / f"text_{split}.npy", text_features)
+    _write_array(output_root / "positions" / f"text_pos_{split}.npy", _text_positions(text_features.shape[0], text_features.shape[1]))
+    _write_array(output_root / "masks" / f"text_mask_{split}.npy", text_mask)
     _write_array(output_root / "token_fields" / f"region_{split}.npy", region_features)
     _write_array(output_root / "positions" / f"region_pos_{split}.npy", _region_positions(proposal_boxes))
     _write_array(output_root / "masks" / f"region_mask_{split}.npy", region_mask)
@@ -252,6 +272,66 @@ def _proposal_arrays(source_ids: list[str], predictions: dict[str, Any], *, max_
         else:
             mask_out[row_index, 0] = True
     return boxes_out, scores_out, mask_out, counts
+
+
+def _encode_text_token_features(
+    args: argparse.Namespace,
+    texts: list[str],
+    tokenizer: Any,
+    model: Any,
+    torch: Any,
+    device: Any,
+) -> tuple[np.ndarray, np.ndarray]:
+    outputs = []
+    masks = []
+    with torch.no_grad():
+        for start in range(0, len(texts), int(args.text_batch_size)):
+            batch = texts[start : start + int(args.text_batch_size)]
+            encoded = tokenizer(
+                batch,
+                padding="max_length",
+                truncation=True,
+                max_length=int(args.max_text_length),
+                return_tensors="pt",
+            )
+            encoded = {key: value.to(device) for key, value in encoded.items()}
+            features = model.text_model(
+                input_ids=encoded["input_ids"],
+                attention_mask=encoded.get("attention_mask"),
+            ).last_hidden_state
+            features = _project_text_tokens(model, features)
+            if bool(args.normalize):
+                features = torch.nn.functional.normalize(features.float(), p=2, dim=-1)
+            attention_mask = encoded.get("attention_mask")
+            if attention_mask is None:
+                attention_mask = torch.ones(features.shape[:2], dtype=torch.bool, device=device)
+            features = features * attention_mask.unsqueeze(-1).to(dtype=features.dtype)
+            outputs.append(features.detach().cpu().float().numpy())
+            masks.append(attention_mask.detach().cpu().bool().numpy())
+    return (
+        np.concatenate(outputs, axis=0).astype(np.float32, copy=False),
+        np.concatenate(masks, axis=0).astype(bool, copy=False),
+    )
+
+
+def _text_positions(sample_count: int, token_count: int) -> np.ndarray:
+    return np.broadcast_to(
+        np.arange(token_count, dtype=np.float32).reshape(1, token_count, 1),
+        (sample_count, token_count, 1),
+    ).copy()
+
+
+def _patch_text_manifest(path: Path, split: str) -> None:
+    if path.exists():
+        manifest = json.loads(path.read_text())
+    else:
+        manifest = {}
+    manifest["text"] = {
+        "x": f"token_fields/text_{split}.npy",
+        "pos": f"positions/text_pos_{split}.npy",
+        "mask": f"masks/text_mask_{split}.npy",
+    }
+    path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
 
 
 def _encode_proposal_crops(
