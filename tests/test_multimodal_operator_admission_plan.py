@@ -203,6 +203,14 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
 
         self.assertEqual(baseline_protocol_for_name("sentiment_emotion", "raw_tanso_mlp"), "same_feature_mechanism_baseline")
         self.assertEqual(
+            baseline_protocol_for_name("sentiment_emotion", "generic_mlp_matched"),
+            "same_feature_mechanism_baseline",
+        )
+        self.assertEqual(
+            baseline_protocol_for_name("sentiment_emotion", "generic_mlp_hyper_matched"),
+            "same_feature_mechanism_baseline",
+        )
+        self.assertEqual(
             _ovha_variant_kwargs("ovha_tanso_no_source_gate", active)["candidate_options"]["TANSOBase"]["source_gate_mode"],
             "uniform_nonverbal",
         )
@@ -218,6 +226,14 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
         )
         no_aux = _config_for_ovha_ablation(config, "ovha_tanso_no_gate_aux")
         self.assertEqual(no_aux.loss_metadata["tanso_source_oracle_gate_loss"]["weight"], 0.0)
+
+    def test_generic_matched_controls_are_not_required_default_baselines(self):
+        from moat_ovha_torch.models.multimodal.baselines import baseline_names_for_task
+
+        required = set(baseline_names_for_task("sentiment_emotion"))
+
+        self.assertNotIn("generic_mlp_matched", required)
+        self.assertNotIn("generic_mlp_hyper_matched", required)
 
     def test_public_main_runner_selects_only_requested_configured_baselines(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
@@ -235,6 +251,42 @@ class MultimodalOperatorAdmissionPlanTests(unittest.TestCase):
         self.assertEqual(selected, ("raw_tanso_mlp", "ovha_tanso_no_source_gate"))
         with self.assertRaises(ValueError):
             _selected_baselines(config, ("not_a_configured_baseline",))
+
+        extended = replace(
+            config,
+            baseline_names=tuple(
+                dict.fromkeys(
+                    (
+                        *config.baseline_names,
+                        "generic_mlp_matched",
+                        "generic_mlp_hyper_matched",
+                    )
+                )
+            ),
+        )
+        selected = _selected_baselines(
+            extended,
+            ("generic_mlp_matched", "generic_mlp_hyper_matched"),
+        )
+        self.assertEqual(selected, ("generic_mlp_matched", "generic_mlp_hyper_matched"))
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "torch not installed")
+    def test_generic_mlp_parameter_matcher_recovers_reachable_hidden_dim(self):
+        from scripts.multimodal.run_public_main import _GenericMatchedMLPBaseline, _linear_parameter_count, _match_generic_mlp_hidden_dim
+
+        reference = _GenericMatchedMLPBaseline(11, 7, 1, use_hyper_adapter=True)
+        target = _linear_parameter_count(reference)
+
+        hidden_dim, matched_count, relative_diff = _match_generic_mlp_hidden_dim(
+            input_dim=11,
+            output_dim=1,
+            target_parameter_count=target,
+            use_hyper_adapter=True,
+        )
+
+        self.assertEqual(hidden_dim, 7)
+        self.assertEqual(matched_count, target)
+        self.assertEqual(relative_diff, 0.0)
 
     def test_ubuntu_cmu_mechanism_runner_defaults_to_missing_only_continuation(self):
         path = ROOT / "scripts" / "multimodal" / "run_cmu_mosei_tanso_mechanism_selfmm_official.sh"

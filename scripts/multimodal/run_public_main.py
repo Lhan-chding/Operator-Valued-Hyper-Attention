@@ -56,6 +56,7 @@ from scripts.multimodal.run_public_smoke import (
     _public_loss_components,
     _public_training_diagnostics_row,
     _replace_cache_root,
+    _residual_oracle_alpha,
     _same_feature_probe_inputs,
     _stable_baseline_seed_offset,
     _task_loss,
@@ -2051,6 +2052,86 @@ def _baseline_rows(
             )
             summaries.append({**summary, "model": str(baseline_name)})
             continue
+        if _is_generic_matched_mlp_baseline(config.task_type, str(baseline_name)):
+            model, summary = _train_generic_matched_mlp_baseline(
+                config,
+                str(baseline_name),
+                train_batch=train_batch,
+                selection_batch=selection_batch,
+                seed=seed,
+                train_steps=baseline_train_steps,
+                learning_rate=learning_rate,
+                progress_interval=progress_interval,
+                batch_size=batch_size,
+                eval_interval=eval_interval,
+                early_stopping_patience=early_stopping_patience,
+                weight_decay=weight_decay,
+                device=device,
+                d_model=d_model,
+                memory_tokens=memory_tokens,
+            )
+            target_mean = summary.pop("_target_mean")
+            target_std = summary.pop("_target_std")
+            with torch.no_grad():
+                selection_batch_std = _standardize_batch_targets(selection_batch, target_mean, target_std)
+                selection_prediction = _destandardize_prediction(
+                    _generic_mlp_prediction(model, _move_batch_to_device(selection_batch_std, device)),
+                    target_mean.to(device=device) if target_mean is not None else None,
+                    target_std.to(device=device) if target_std is not None else None,
+                )
+                calibrator = _fit_task_calibrator(config, selection_prediction.detach().cpu(), selection_batch)
+                eval_batch_std = _standardize_batch_targets(eval_batch, target_mean, target_std)
+                pre_calibration_prediction = _destandardize_prediction(
+                    _generic_mlp_prediction(model, _move_batch_to_device(eval_batch_std, device)),
+                    target_mean.to(device=device) if target_mean is not None else None,
+                    target_std.to(device=device) if target_std is not None else None,
+                )
+                eval_prediction = _apply_task_calibration(pre_calibration_prediction, calibrator)
+                loss = _task_loss(eval_prediction, _move_batch_to_device(eval_batch, device))
+                eval_prediction = eval_prediction.detach().cpu()
+                calibration_diagnostics = _task_calibration_diagnostics(
+                    config,
+                    eval_batch,
+                    pre_prediction=pre_calibration_prediction.detach().cpu(),
+                    post_prediction=eval_prediction,
+                    calibrator=calibrator,
+                )
+            router_load = _uniform_candidate_load(config.candidate_names)
+            rows.append(
+                _raw_metric_row(
+                    config,
+                    eval_batch,
+                    model_name=str(baseline_name),
+                    seed=seed,
+                    prediction=eval_prediction,
+                    score=_as_float(loss),
+                    training_steps=baseline_train_steps,
+                    parameter_count=_linear_parameter_count(model),
+                    raw_metrics_path=raw_metrics_path,
+                    hardware=hardware,
+                    router_load_by_candidate=router_load,
+                    router_entropy=torch.zeros((), dtype=eval_batch.target_y.dtype, device=eval_batch.target_y.device),
+                    candidate_loss={candidate: loss for candidate in config.candidate_names},
+                    diagnostics={
+                        **calibration_diagnostics,
+                        "baseline": summary,
+                        "mechanism_baseline": "parameter_matched_generic_mlp_no_tanso_scaffold",
+                    },
+                    model_protocol=f"{baseline_protocol}_public_main_v1",
+                )
+            )
+            per_sample_prediction_rows.extend(
+                _per_sample_prediction_rows(
+                    config,
+                    eval_batch,
+                    None,
+                    model_name=str(baseline_name),
+                    seed=seed,
+                    prediction=eval_prediction,
+                )
+            )
+            summaries.append({**summary, "model": str(baseline_name)})
+            continue
         if _is_region_task(config.task_type) and _is_region_rule_baseline(str(baseline_name)):
             eval_prediction, summary = _region_rule_baseline_prediction(
                 str(baseline_name),
@@ -3391,6 +3472,419 @@ def _raw_tanso_mlp_robustness_rows(
             )
         )
     return rows
+
+
+_GENERIC_MATCHED_BASELINES = ("generic_mlp_matched", "generic_mlp_hyper_matched")
+_GENERIC_SOURCE_AUX_SOURCES = ("audio", "vision")
+
+
+class _GenericMatchedMLPBaseline(torch.nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        *,
+        use_hyper_adapter: bool,
+        source_count: int = len(_GENERIC_SOURCE_AUX_SOURCES),
+    ):
+        super().__init__()
+        self.use_hyper_adapter = bool(use_hyper_adapter)
+        self.input = torch.nn.Linear(input_dim, hidden_dim)
+        self.hidden = torch.nn.Linear(hidden_dim, hidden_dim)
+        self.norm = torch.nn.LayerNorm(hidden_dim)
+        self.head = torch.nn.Linear(hidden_dim, output_dim)
+        self.source_gate_head = torch.nn.Linear(hidden_dim, int(source_count))
+        if self.use_hyper_adapter:
+            self.hyper = torch.nn.Sequential(
+                torch.nn.Linear(input_dim, hidden_dim),
+                torch.nn.GELU(),
+                torch.nn.Linear(hidden_dim, hidden_dim * 2 + 1),
+            )
+        else:
+            self.hyper = None
+
+    def forward(self, inputs: torch.Tensor, *, return_aux: bool = False):
+        hidden = torch.nn.functional.gelu(self.input(inputs))
+        hidden = self.norm(self.hidden(hidden))
+        if self.hyper is not None:
+            raw = self.hyper(inputs)
+            width = int(hidden.shape[-1])
+            scale = 1.0 + 0.5 * torch.tanh(raw[..., :width])
+            shift = 0.25 * torch.tanh(raw[..., width : 2 * width])
+            temperature = torch.nn.functional.softplus(raw[..., 2 * width : 2 * width + 1]) + 0.1
+            hidden = (scale * hidden + shift) / temperature
+        prediction = self.head(hidden)
+        if not return_aux:
+            return prediction
+        gates = torch.sigmoid(self.source_gate_head(hidden))
+        return prediction, gates
+
+
+def _train_generic_matched_mlp_baseline(
+    config: MultimodalExperimentConfig,
+    baseline_name: str,
+    *,
+    train_batch: MultimodalEpisodeBatch,
+    selection_batch: MultimodalEpisodeBatch,
+    seed: int,
+    train_steps: int,
+    learning_rate: float,
+    progress_interval: int,
+    batch_size: int,
+    eval_interval: int,
+    early_stopping_patience: int,
+    weight_decay: float,
+    device: torch.device,
+    d_model: int,
+    memory_tokens: int,
+) -> tuple[_GenericMatchedMLPBaseline, dict[str, Any]]:
+    target_mean, target_std = _target_standardizer(train_batch)
+    fit_batch_std = _standardize_batch_targets(train_batch, target_mean, target_std)
+    val_batch_std = _standardize_batch_targets(selection_batch, target_mean, target_std)
+    input_probe = _move_batch_to_device(
+        _slice_batch(fit_batch_std, torch.arange(0, 1, device=fit_batch_std.target_y.device)),
+        device,
+    )
+    train_inputs, _ = _generic_mlp_inputs_and_source_slices(input_probe)
+    target_dim = int(train_batch.target_y.shape[-1])
+    use_hyper_adapter = baseline_name == "generic_mlp_hyper_matched"
+    target_parameter_count = _reference_tanso_parameter_count(
+        config,
+        train_batch,
+        d_model=int(d_model),
+        memory_tokens=int(memory_tokens),
+    )
+    hidden_dim, matched_parameter_count, relative_diff = _match_generic_mlp_hidden_dim(
+        input_dim=int(train_inputs.shape[-1]),
+        output_dim=target_dim,
+        target_parameter_count=target_parameter_count,
+        use_hyper_adapter=use_hyper_adapter,
+    )
+    if relative_diff > 0.02:
+        raise ValueError(
+            f"{baseline_name} parameter match failed: target={target_parameter_count} "
+            f"matched={matched_parameter_count} relative_diff={relative_diff:.6f}"
+        )
+    torch.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name))
+    model = _GenericMatchedMLPBaseline(
+        int(train_inputs.shape[-1]),
+        int(hidden_dim),
+        target_dim,
+        use_hyper_adapter=use_hyper_adapter,
+    ).to(device)
+    initial = _linear_parameter_vector(model)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    aux_weight = _generic_source_gate_aux_weight(config)
+    max_grad_norm = 0.0
+    final_loss = 0.0
+    final_task_loss = 0.0
+    final_aux_loss = 0.0
+    best_val_loss = float("inf")
+    best_step = 0
+    best_state = _clone_state_dict(model)
+    stale_evals = 0
+    model.train()
+    started_at = time.perf_counter()
+    _print_progress(
+        "model:start",
+        seed=seed,
+        model=baseline_name,
+        steps=train_steps,
+        learning_rate=learning_rate,
+        protocol="parameter_matched_generic_mlp_no_tanso_scaffold",
+        hidden_dim=hidden_dim,
+        target_parameters=target_parameter_count,
+        matched_parameters=matched_parameter_count,
+        parameter_relative_diff=f"{relative_diff:.6f}",
+    )
+    batch_generator = torch.Generator(device=fit_batch_std.target_y.device)
+    batch_generator.manual_seed(int(seed) + _stable_baseline_seed_offset(baseline_name) + 43)
+    for step in range(1, train_steps + 1):
+        current_lr = (
+            _lr_for_step(
+                step,
+                learning_rate,
+                config.warmup_steps,
+                train_steps,
+                config.min_lr_ratio,
+            )
+            if config.lr_schedule == "warmup_cosine"
+            else learning_rate
+        )
+        _set_optimizer_lr(optimizer, current_lr)
+        train_step_batch = _move_batch_to_device(_sample_batch(fit_batch_std, batch_size, batch_generator), device)
+        optimizer.zero_grad(set_to_none=True)
+        prediction, source_gates = _generic_mlp_prediction(model, train_step_batch, return_aux=True)
+        task_loss = _task_loss(prediction, train_step_batch)
+        aux_loss = _generic_source_gate_aux_loss(model, train_step_batch, prediction, source_gates)
+        loss = task_loss + float(aux_weight) * aux_loss
+        loss.backward()
+        max_grad_norm = max(max_grad_norm, _linear_grad_l2_norm(model))
+        optimizer.step()
+        final_loss = _as_float(loss)
+        final_task_loss = _as_float(task_loss)
+        final_aux_loss = _as_float(aux_loss)
+        if _should_validate(step, train_steps, eval_interval):
+            val_loss = _evaluate_generic_mlp_loss_on_device(
+                model,
+                val_batch_std,
+                device,
+                batch_size=_eval_batch_size(batch_size),
+            )
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_step = step
+                best_state = _clone_state_dict(model)
+                stale_evals = 0
+            else:
+                stale_evals += 1
+            if early_stopping_patience > 0 and stale_evals >= early_stopping_patience:
+                _print_progress(
+                    "model:early_stop",
+                    seed=seed,
+                    model=baseline_name,
+                    step=step,
+                    best_step=best_step,
+                    best_val_loss=f"{best_val_loss:.6g}",
+                )
+                break
+        if _should_log_progress(step, train_steps, progress_interval):
+            _print_step_progress(
+                seed=seed,
+                model=baseline_name,
+                step=step,
+                total_steps=train_steps,
+                loss=final_loss,
+                started_at=started_at,
+            )
+    _print_progress(
+        "model:done",
+        seed=seed,
+        model=baseline_name,
+        steps=train_steps,
+        loss=f"{final_loss:.6g}",
+        elapsed=f"{time.perf_counter() - started_at:.1f}s",
+    )
+    model.load_state_dict(best_state)
+    model.eval()
+    return model, {
+        "baseline_optimizer_steps": train_steps,
+        "baseline_parameter_count": _linear_parameter_count(model),
+        "baseline_parameter_l2_delta": float(torch.linalg.vector_norm(_linear_parameter_vector(model) - initial).item()),
+        "baseline_grad_l2_norm": max_grad_norm,
+        "baseline_train_loss_final": final_loss,
+        "baseline_train_task_loss_final": final_task_loss,
+        "baseline_train_source_gate_aux_loss_final": final_aux_loss,
+        "baseline_best_val_task_loss": best_val_loss,
+        "baseline_best_checkpoint_step": best_step,
+        "baseline_training_protocol": "generic_parameter_matched_mlp_validation_best_checkpoint",
+        "baseline_checkpoint_selection_protocol": "official_val_selection_best_checkpoint",
+        "baseline_architecture": (
+            "generic_mlp_plus_sample_hyper_adapter"
+            if use_hyper_adapter
+            else "generic_mlp_linear_gelu_linear_layernorm"
+        ),
+        "baseline_hidden_dim": int(hidden_dim),
+        "baseline_parameter_match": {
+            "target_model": str(config.main_model_name),
+            "target_trainable_parameters": int(target_parameter_count),
+            "matched_trainable_parameters": int(matched_parameter_count),
+            "relative_diff": float(relative_diff),
+            "tolerance": 0.02,
+        },
+        "baseline_no_tanso_text_anchor": True,
+        "baseline_no_tanso_residual_shift": True,
+        "baseline_no_source_gate_in_prediction": True,
+        "baseline_no_null_source": True,
+        "baseline_no_lag_attention": True,
+        "baseline_no_operator_memory": True,
+        "baseline_no_ovha_router": True,
+        "baseline_hyper_adapter_enabled": bool(use_hyper_adapter),
+        "baseline_training_only_source_gate_auxiliary": {
+            "enabled": float(aux_weight) > 0.0,
+            "weight": float(aux_weight),
+            "sources": _GENERIC_SOURCE_AUX_SOURCES,
+            "prediction_path": False,
+        },
+        "baseline_batch_size": batch_size,
+        "baseline_selection_split": selection_batch.split,
+        "baseline_target_standardized": target_mean is not None and target_std is not None,
+        "baseline_weight_decay": weight_decay,
+        "baseline_lr_schedule": config.lr_schedule,
+        "baseline_warmup_steps": int(config.warmup_steps),
+        "baseline_min_lr_ratio": float(config.min_lr_ratio),
+        "_target_mean": target_mean,
+        "_target_std": target_std,
+    }
+
+
+def _reference_tanso_parameter_count(
+    config: MultimodalExperimentConfig,
+    train_batch: MultimodalEpisodeBatch,
+    *,
+    d_model: int,
+    memory_tokens: int,
+) -> int:
+    rng_state = torch.random.get_rng_state()
+    try:
+        model = MultimodalOVHA(
+            field_dims={name: int(field.x.shape[-1]) for name, field in train_batch.fields.items()},
+            query_dim=int(train_batch.query.x.shape[-1]),
+            output_dim=int(train_batch.target_y.shape[-1]),
+            d_model=int(d_model),
+            memory_tokens=int(memory_tokens),
+            candidate_names=config.candidate_names,
+            use_evidence_router=config.use_evidence_router,
+            use_reliability_prior=config.use_reliability_prior,
+            lrio_pairs=config.lrio_pairs or None,
+            **_ovha_composition_kwargs(config, config.candidate_names),
+        )
+        return _parameter_count(model)
+    finally:
+        torch.random.set_rng_state(rng_state)
+
+
+def _match_generic_mlp_hidden_dim(
+    *,
+    input_dim: int,
+    output_dim: int,
+    target_parameter_count: int,
+    use_hyper_adapter: bool,
+) -> tuple[int, int, float]:
+    def count_for(hidden_dim: int) -> int:
+        model = _GenericMatchedMLPBaseline(
+            int(input_dim),
+            int(hidden_dim),
+            int(output_dim),
+            use_hyper_adapter=use_hyper_adapter,
+        )
+        return _linear_parameter_count(model)
+
+    target = int(target_parameter_count)
+    best_hidden = 1
+    best_count = count_for(best_hidden)
+    best_diff = abs(best_count - target)
+    high = 1
+    while count_for(high) < target and high < 16384:
+        high *= 2
+        current_count = count_for(high)
+        current_diff = abs(current_count - target)
+        if current_diff < best_diff:
+            best_hidden, best_count, best_diff = high, current_count, current_diff
+    low = 1
+    for _ in range(32):
+        mid = (low + high) // 2
+        current_count = count_for(mid)
+        current_diff = abs(current_count - target)
+        if current_diff < best_diff:
+            best_hidden, best_count, best_diff = mid, current_count, current_diff
+        if current_count < target:
+            low = mid + 1
+        else:
+            high = max(low, mid - 1)
+        if low > high:
+            break
+    relative_diff = float(best_diff) / float(max(1, target))
+    return int(best_hidden), int(best_count), relative_diff
+
+
+def _generic_mlp_inputs_and_source_slices(batch: MultimodalEpisodeBatch) -> tuple[torch.Tensor, dict[str, slice]]:
+    vectors: list[torch.Tensor] = []
+    source_slices: dict[str, slice] = {}
+    offset = 0
+    for name, field in batch.fields.items():
+        vector = _masked_field_mean(field)
+        vectors.append(vector)
+        stop = offset + int(vector.shape[-1])
+        if name in _GENERIC_SOURCE_AUX_SOURCES:
+            source_slices[str(name)] = slice(offset, stop)
+        offset = stop
+    if not vectors:
+        batch_size = int(batch.target_y.shape[0])
+        return torch.zeros(batch_size, 1, dtype=batch.target_y.dtype, device=batch.target_y.device), {}
+    return torch.cat(vectors, dim=-1).to(dtype=batch.target_y.dtype, device=batch.target_y.device), source_slices
+
+
+def _generic_mlp_prediction(
+    model: _GenericMatchedMLPBaseline,
+    batch: MultimodalEpisodeBatch,
+    *,
+    return_aux: bool = False,
+):
+    inputs, _ = _generic_mlp_inputs_and_source_slices(batch)
+    result = model(inputs, return_aux=return_aux)
+    query_count = int(batch.target_y.shape[1])
+    if not return_aux:
+        return result.unsqueeze(1).expand(-1, query_count, -1).contiguous()
+    prediction, source_gates = result
+    return prediction.unsqueeze(1).expand(-1, query_count, -1).contiguous(), source_gates
+
+
+def _generic_source_gate_aux_weight(config: MultimodalExperimentConfig) -> float:
+    metadata = (config.loss_metadata or {}).get("tanso_source_oracle_gate_loss", {})
+    if isinstance(metadata, dict) and bool(metadata.get("diagnostic_only", False)):
+        return 0.0
+    if isinstance(metadata, dict) and "weight" in metadata:
+        return float(metadata.get("weight", 0.01))
+    return 0.01
+
+
+def _generic_source_gate_aux_loss(
+    model: _GenericMatchedMLPBaseline,
+    batch: MultimodalEpisodeBatch,
+    prediction: torch.Tensor,
+    source_gates: torch.Tensor,
+) -> torch.Tensor:
+    inputs, source_slices = _generic_mlp_inputs_and_source_slices(batch)
+    losses = []
+    for source_index, source in enumerate(_GENERIC_SOURCE_AUX_SOURCES):
+        source_slice = source_slices.get(source)
+        if source_slice is None or source_index >= int(source_gates.shape[-1]):
+            continue
+        ablated_inputs = inputs.clone()
+        ablated_inputs[:, source_slice] = 0.0
+        with torch.no_grad():
+            ablated_prediction = model(ablated_inputs).unsqueeze(1).expand_as(prediction)
+            delta = prediction.detach() - ablated_prediction
+            target_alpha = _residual_oracle_alpha(prediction.detach(), delta, batch).squeeze(-1)
+        source_gate = source_gates[:, source_index].unsqueeze(1).expand_as(target_alpha)
+        losses.append(torch.nn.functional.smooth_l1_loss(source_gate, target_alpha.detach()))
+    if not losses:
+        return prediction.sum() * 0.0
+    return torch.stack(losses).mean()
+
+
+def _evaluate_generic_mlp_loss_on_device(
+    model: _GenericMatchedMLPBaseline,
+    batch: MultimodalEpisodeBatch,
+    device: torch.device,
+    *,
+    batch_size: int,
+) -> float:
+    total = int(batch.target_y.shape[0])
+    if total <= 0:
+        return 0.0
+    was_training = model.training
+    model.eval()
+    weighted_loss = 0.0
+    total_weight = 0.0
+    with torch.no_grad():
+        for start in range(0, total, max(1, int(batch_size))):
+            stop = min(total, start + max(1, int(batch_size)))
+            indices = torch.arange(start, stop, device=batch.target_y.device)
+            chunk = _move_batch_to_device(_slice_batch(batch, indices), device)
+            loss = _task_loss(_generic_mlp_prediction(model, chunk), chunk)
+            weight = float(chunk.target_mask.to(dtype=torch.float32).sum().detach().cpu())
+            weighted_loss += _as_float(loss) * weight
+            total_weight += weight
+    if was_training:
+        model.train()
+    return weighted_loss / max(1.0, total_weight)
+
+
+def _is_generic_matched_mlp_baseline(task_type: str, baseline_name: str) -> bool:
+    return _is_sentiment_task(task_type) and baseline_name in _GENERIC_MATCHED_BASELINES
 
 
 def _is_tanso_raw_mlp_baseline(task_type: str, baseline_name: str) -> bool:

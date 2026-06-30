@@ -82,6 +82,8 @@ SENTIMENT_EMOTION_OVHA_ABLATIONS = (
 )
 SENTIMENT_EMOTION_MECHANISM_BASELINES = (
     "raw_tanso_mlp",
+    "generic_mlp_matched",
+    "generic_mlp_hyper_matched",
     "ovha_tanso_no_source_gate",
     "ovha_tanso_no_hyper_adapter",
     "ovha_tanso_no_operator_memory",
@@ -151,7 +153,7 @@ def ovha_ablation_names_for_task(task_type: str) -> tuple[str, ...]:
 def baseline_protocol_for_name(task_type: str, baseline_name: str) -> str:
     if task_type in {"sentiment_emotion", "sentiment_regression", "emotion_classification", "cmu_mosei", "cmu_mosi", "meld", "iemocap"}:
         if baseline_name in SENTIMENT_EMOTION_MECHANISM_BASELINES:
-            if baseline_name == "raw_tanso_mlp":
+            if baseline_name in {"raw_tanso_mlp", "generic_mlp_matched", "generic_mlp_hyper_matched"}:
                 return "same_feature_mechanism_baseline"
             return "internal_ovha_mechanism_ablation"
     if baseline_name in same_feature_probe_names_for_task(task_type):
