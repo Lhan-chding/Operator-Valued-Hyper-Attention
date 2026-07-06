@@ -416,6 +416,10 @@ class GroundingDINOSameCandidateScoringTest(unittest.TestCase):
                 weak_label_confidence=None,
                 pseudo_label_source=None,
                 candidate_region_boxes=candidate_boxes,
+                candidate_region_detector_scores=torch.tensor(
+                    [[0.20, 0.95, 0.00], [0.80, 0.30, 0.10]],
+                    dtype=torch.float32,
+                ),
             ),
             provenance=ProvenanceBank(
                 source_id=["sample-a", "sample-b"],
@@ -432,6 +436,8 @@ class GroundingDINOSameCandidateScoringTest(unittest.TestCase):
             "clip_geometry_mlp",
             "box_aware_cross_attention_reranker",
             "lightweight_transvg_style_reranker",
+            "gdino_score_clip_geometry_mlp",
+            "gdino_score_box_aware_cross_attention_reranker",
         ):
             with self.subTest(baseline_name=baseline_name):
                 model = _make_region_reranker(baseline_name, batch, d_model=8)
@@ -439,6 +445,125 @@ class GroundingDINOSameCandidateScoringTest(unittest.TestCase):
 
                 self.assertEqual(tuple(logits.shape), (2, 1, 3))
                 self.assertLess(float(logits.detach()[0, 0, 2]), -1e8)
+
+    def test_detector_scores_survive_public_main_batch_slicing_and_device_move(self) -> None:
+        import torch
+        from moat_ovha_torch.data.multimodal.typed_batch import (
+            MultimodalEpisodeBatch,
+            ProvenanceBank,
+            QueryField,
+            SupervisionBank,
+            TokenField,
+        )
+        from scripts.multimodal.run_public_main import _move_batch_to_device, _slice_batch
+
+        target_y = torch.zeros(3, 1, 2)
+        batch = MultimodalEpisodeBatch(
+            fields={
+                "text": TokenField(
+                    "text",
+                    torch.randn(3, 2, 4),
+                    torch.zeros(3, 2, 1),
+                    torch.ones(3, 2, dtype=torch.bool),
+                ),
+                "region": TokenField(
+                    "region",
+                    torch.randn(3, 2, 4),
+                    torch.zeros(3, 2, 9),
+                    torch.ones(3, 2, dtype=torch.bool),
+                    attrs={"position_semantics": "xyxy_cxcywh_area"},
+                ),
+            },
+            query=QueryField(
+                x=torch.randn(3, 1, 4),
+                pos=torch.zeros(3, 1, 1),
+                query_type=torch.zeros(3, 1, dtype=torch.long),
+                mask=torch.ones(3, 1, dtype=torch.bool),
+            ),
+            target_y=target_y,
+            target_mask=torch.ones(3, 1, dtype=torch.bool),
+            task_type="phrase_region_grounding",
+            split="testA",
+            source_dataset="refcoco",
+            supervision=SupervisionBank(
+                task_label=target_y,
+                alignment_pairs=None,
+                alignment_weights=None,
+                bbox_targets=torch.zeros(3, 4),
+                region_targets=torch.zeros(3, 1, dtype=torch.long),
+                timestamp_targets=None,
+                modality_missing_mask=None,
+                corruption_metadata=None,
+                weak_labels=None,
+                weak_label_confidence=None,
+                pseudo_label_source=None,
+                candidate_region_boxes=torch.zeros(3, 2, 4),
+                candidate_region_detector_scores=torch.tensor(
+                    [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]],
+                    dtype=torch.float32,
+                ),
+            ),
+            provenance=ProvenanceBank(
+                source_id=["a", "b", "c"],
+                original_split=["testA", "testA", "testA"],
+                raw_ref=["a", "b", "c"],
+                license_tag=["test", "test", "test"],
+                preprocessing_version="test",
+                feature_extractor_version={"text": "test", "region": "test"},
+                pseudo_label_version={},
+            ),
+        )
+
+        sliced = _slice_batch(batch, torch.tensor([2, 0], dtype=torch.long))
+        moved = _move_batch_to_device(sliced, torch.device("cpu"))
+
+        self.assertTrue(
+            torch.allclose(
+                moved.supervision.candidate_region_detector_scores,
+                torch.tensor([[0.5, 0.6], [0.1, 0.2]], dtype=torch.float32),
+            )
+        )
+
+    def test_builds_truncated_groundingdino_k_sensitivity_cache(self) -> None:
+        from scripts.multimodal.build_groundingdino_proposal_k_cache import build_groundingdino_proposal_k_cache
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "cache" / "refcoco_gdino_proposals" / "v0.1"
+            _write_minimal_gdino_proposal_cache(source)
+
+            payload = build_groundingdino_proposal_k_cache(
+                Namespace(
+                    source_cache_root=root / "cache",
+                    source_dataset_name="refcoco_gdino_proposals",
+                    source_version="v0.1",
+                    output_cache_root=root / "cache",
+                    output_dataset_name="refcoco_gdino_proposals_k2",
+                    output_version="v0.1",
+                    splits=["testA"],
+                    max_proposals_per_sample=2,
+                    overwrite=False,
+                )
+            )
+
+            output = root / "cache" / "refcoco_gdino_proposals_k2" / "v0.1"
+            boxes = np.load(output / "supervision" / "candidate_region_boxes_testA.npy")
+            detector_scores = np.load(output / "supervision" / "candidate_region_detector_scores_testA.npy")
+            targets = np.load(output / "supervision" / "region_targets_testA.npy")
+            labels = np.load(output / "supervision" / "task_labels_testA.npy")
+            records = [
+                json.loads(line)
+                for line in (output / "provenance" / "sample_records_testA.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(payload["splits"][0]["max_proposals_per_sample"], 2)
+        self.assertEqual(tuple(boxes.shape), (2, 2, 4))
+        self.assertEqual(tuple(detector_scores.shape), (2, 2))
+        self.assertEqual(targets.tolist(), [[1], [0]])
+        self.assertEqual(labels[0].tolist(), [0.0, 1.0])
+        self.assertEqual(len(records[0]["candidate_region_boxes"]), 2)
+        self.assertEqual(len(records[0]["candidate_region_detector_scores"]), 2)
 
     def test_summarizes_refcoco_subset_diagnostics(self) -> None:
         from scripts.multimodal.summarize_refcoco_subset_diagnostics import summarize_refcoco_subset_diagnostics
@@ -711,3 +836,105 @@ def _write_refcoco_cache(cache_root: Path) -> None:
     np.save(root / "supervision" / "bbox_targets_testA.npy", np.asarray([[0.3, 0.0, 0.5, 0.2], [0.1, 0.1, 0.4, 0.4]], dtype=np.float32))
     np.save(root / "supervision" / "region_targets_testA.npy", np.asarray([[1], [0]], dtype=np.int64))
     np.save(root / "masks" / "region_mask_testA.npy", np.asarray([[True, True, True], [True, True, False]]))
+
+
+def _write_minimal_gdino_proposal_cache(root: Path) -> None:
+    for folder in ("masks", "positions", "provenance", "supervision", "token_fields"):
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    source_ids = ["sample-a", "sample-b"]
+    (root / "splits.json").write_text(json.dumps({"testA": source_ids}, sort_keys=True) + "\n")
+    (root / "data_card.json").write_text(
+        json.dumps(
+            {
+                "dataset_name": "refcoco_gdino_proposals",
+                "version": "v0.1",
+                "modalities": ["text", "region"],
+                "tasks": ["phrase_region_grounding"],
+                "candidate_protocol": {"fixed_k": 3},
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    (root / "provenance" / "source_ids_testA.txt").write_text("\n".join(source_ids) + "\n")
+    (root / "provenance" / "feature_versions.json").write_text(
+        json.dumps({"text": "test", "region": "test"}, sort_keys=True) + "\n"
+    )
+    (root / "provenance" / "pseudo_label_versions.json").write_text(
+        json.dumps({"version": "none"}, sort_keys=True) + "\n"
+    )
+    (root / "provenance" / "sample_records_testA.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "source_id": "sample-a",
+                        "split": "testA",
+                        "raw_ref": "a",
+                        "license_tag": "test",
+                        "candidate_region_boxes": [
+                            [0.0, 0.0, 0.2, 0.2],
+                            [0.3, 0.0, 0.5, 0.2],
+                            [0.8, 0.8, 1.0, 1.0],
+                        ],
+                        "candidate_region_detector_scores": [0.7, 0.6, 0.9],
+                        "target_region_index": 1,
+                    },
+                    sort_keys=True,
+                ),
+                json.dumps(
+                    {
+                        "source_id": "sample-b",
+                        "split": "testA",
+                        "raw_ref": "b",
+                        "license_tag": "test",
+                        "candidate_region_boxes": [
+                            [0.1, 0.1, 0.4, 0.4],
+                            [0.5, 0.5, 0.8, 0.8],
+                            [0.0, 0.0, 0.0, 0.0],
+                        ],
+                        "candidate_region_detector_scores": [0.8, 0.3, 0.0],
+                        "target_region_index": 0,
+                    },
+                    sort_keys=True,
+                ),
+            ]
+        )
+        + "\n"
+    )
+    boxes = np.asarray(
+        [
+            [[0.0, 0.0, 0.2, 0.2], [0.3, 0.0, 0.5, 0.2], [0.8, 0.8, 1.0, 1.0]],
+            [[0.1, 0.1, 0.4, 0.4], [0.5, 0.5, 0.8, 0.8], [0.0, 0.0, 0.0, 0.0]],
+        ],
+        dtype=np.float32,
+    )
+    np.save(root / "token_fields" / "text_testA.npy", np.zeros((2, 2, 4), dtype=np.float32))
+    np.save(root / "positions" / "text_pos_testA.npy", np.zeros((2, 2, 1), dtype=np.float32))
+    np.save(root / "masks" / "text_mask_testA.npy", np.ones((2, 2), dtype=bool))
+    np.save(root / "token_fields" / "region_testA.npy", np.zeros((2, 3, 4), dtype=np.float32))
+    np.save(root / "positions" / "region_pos_testA.npy", np.zeros((2, 3, 9), dtype=np.float32))
+    np.save(root / "masks" / "region_mask_testA.npy", np.asarray([[True, True, True], [True, True, False]]))
+    np.save(root / "supervision" / "bbox_targets_testA.npy", np.asarray([[0.3, 0.0, 0.5, 0.2], [0.1, 0.1, 0.4, 0.4]], dtype=np.float32))
+    np.save(root / "supervision" / "candidate_region_boxes_testA.npy", boxes)
+    np.save(root / "supervision" / "candidate_region_detector_scores_testA.npy", np.asarray([[0.7, 0.6, 0.9], [0.8, 0.3, 0.0]], dtype=np.float32))
+    np.save(root / "supervision" / "region_targets_testA.npy", np.asarray([[1], [0]], dtype=np.int64))
+    np.save(root / "supervision" / "task_labels_testA.npy", np.asarray([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float32))
+    (root / "token_fields" / "manifest_testA.json").write_text(
+        json.dumps(
+            {
+                "text": {
+                    "x": "token_fields/text_testA.npy",
+                    "pos": "positions/text_pos_testA.npy",
+                    "mask": "masks/text_mask_testA.npy",
+                },
+                "region": {
+                    "x": "token_fields/region_testA.npy",
+                    "pos": "positions/region_pos_testA.npy",
+                    "mask": "masks/region_mask_testA.npy",
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )

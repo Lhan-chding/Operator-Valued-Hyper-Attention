@@ -311,6 +311,14 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             baseline_protocol_for_name("phrase_region_grounding", "lightweight_transvg_style_reranker"),
             "same_candidate_strong_reranker",
         )
+        self.assertEqual(
+            baseline_protocol_for_name("phrase_region_grounding", "gdino_score_clip_geometry_mlp"),
+            "same_candidate_strong_reranker",
+        )
+        self.assertEqual(
+            baseline_protocol_for_name("phrase_region_grounding", "gdino_score_box_aware_cross_attention_reranker"),
+            "same_candidate_strong_reranker",
+        )
         self.assertEqual(baseline_protocol_for_name("phrase_region_grounding", "ovha_no_cato"), "internal_ovha_ablation")
         self.assertEqual(baseline_protocol_for_name("sentiment_emotion", "Self-MM"), "external_sota_reference_or_reproduction")
         self.assertEqual(
@@ -743,10 +751,12 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
         self.assertEqual(public_smoke["seeds"], [201, 202, 203])
         self.assertEqual(public_smoke["optimizer_steps"], 3)
         self.assertEqual(public_smoke["eval_smoke_rows"], 3)
-        self.assertEqual(public_smoke["eval_smoke_baseline_rows"], 24)
+        smoke_config = json.loads((ROOT / "configs" / "multimodal_refcoco_public_smoke.json").read_text())
+        expected_baseline_rows = public_smoke["seed_count"] * len(smoke_config["baseline_names"])
+        self.assertEqual(public_smoke["eval_smoke_baseline_rows"], expected_baseline_rows)
         self.assertEqual(public_smoke["baseline_training_status"], "trained_smoke")
         self.assertEqual(public_smoke["baseline_smoke_training_steps"], 1)
-        self.assertEqual(public_smoke["baseline_optimizer_steps"], 24)
+        self.assertEqual(public_smoke["baseline_optimizer_steps"], expected_baseline_rows)
         self.assertIn("smoke_raw_metrics", public_smoke["artifacts"])
         self.assertIn("smoke_baseline_raw_metrics", public_smoke["artifacts"])
         self.assertIn("smoke_statistics_preview", public_smoke["artifacts"])
@@ -1211,7 +1221,8 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             "[public-main:train] seed=201 model=ovha_refcoco_prso_sro_tleo_cato_primary step=1/1",
             result.stderr,
         )
-        self.assertEqual(len(raw_rows), 9)
+        config_payload = json.loads((ROOT / "configs" / "multimodal_refcoco_public_main.json").read_text())
+        self.assertEqual(len(raw_rows), 1 + len(config_payload["baseline_names"]))
         self.assertEqual({row["seed"] for row in raw_rows}, {203})
 
     def test_public_main_internal_ovha_ablation_variant_mapping_is_structural(self):

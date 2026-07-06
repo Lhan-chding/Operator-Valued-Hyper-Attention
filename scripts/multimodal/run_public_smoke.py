@@ -417,6 +417,10 @@ def _load_public_batch(
             weak_label_confidence=None,
             pseudo_label_source={"version": str(pseudo_versions.get("version", "unknown"))},
             candidate_region_boxes=_optional_tensor(root / "supervision" / f"candidate_region_boxes_{split}.npy", device),
+            candidate_region_detector_scores=_optional_tensor(
+                root / "supervision" / f"candidate_region_detector_scores_{split}.npy",
+                device,
+            ),
         ),
         provenance=ProvenanceBank(
             source_id=[str(row["source_id"]) for row in sample_records],

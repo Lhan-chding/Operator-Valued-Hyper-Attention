@@ -53,6 +53,7 @@ class SupervisionBank:
     weak_label_confidence: dict[str, Any] | None
     pseudo_label_source: dict[str, str] | None
     candidate_region_boxes: Any | None = None
+    candidate_region_detector_scores: Any | None = None
 
 
 @dataclass(frozen=True)

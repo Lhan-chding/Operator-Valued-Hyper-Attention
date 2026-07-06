@@ -888,6 +888,11 @@ def _slice_batch(batch: MultimodalEpisodeBatch, indices: torch.Tensor) -> Multim
         corruption_metadata=_slice_optional_tensor_dict(batch.supervision.corruption_metadata, indices),
         weak_labels=_slice_optional_tensor_dict(batch.supervision.weak_labels, indices),
         weak_label_confidence=_slice_optional_tensor_dict(batch.supervision.weak_label_confidence, indices),
+        candidate_region_boxes=_slice_optional_tensor(batch.supervision.candidate_region_boxes, indices),
+        candidate_region_detector_scores=_slice_optional_tensor(
+            batch.supervision.candidate_region_detector_scores,
+            indices,
+        ),
     )
     provenance_indices = [int(index) for index in indices.detach().cpu().tolist()]
     provenance = replace(
@@ -940,6 +945,11 @@ def _move_batch_to_device(batch: MultimodalEpisodeBatch, device: torch.device) -
         corruption_metadata=_move_nested_to_device(batch.supervision.corruption_metadata, device),
         weak_labels=_move_nested_to_device(batch.supervision.weak_labels, device),
         weak_label_confidence=_move_nested_to_device(batch.supervision.weak_label_confidence, device),
+        candidate_region_boxes=_move_nested_to_device(batch.supervision.candidate_region_boxes, device),
+        candidate_region_detector_scores=_move_nested_to_device(
+            batch.supervision.candidate_region_detector_scores,
+            device,
+        ),
     )
     return replace(
         batch,
@@ -2624,7 +2634,9 @@ def _is_region_trainable_reranker(name: str) -> bool:
         "candidate_mlp_reranker",
         "cross_attention_reranker",
         "clip_geometry_mlp",
+        "gdino_score_clip_geometry_mlp",
         "box_aware_cross_attention_reranker",
+        "gdino_score_box_aware_cross_attention_reranker",
         "lightweight_transvg_style_reranker",
     }
 
@@ -2811,6 +2823,34 @@ class _CLIPGeometryMLP(torch.nn.Module):
         return _masked_region_logits(logits, batch)
 
 
+class _GDINOScoreCLIPGeometryMLP(torch.nn.Module):
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.score = torch.nn.Sequential(
+            torch.nn.Linear(17, d_model),
+            torch.nn.LayerNorm(d_model),
+            torch.nn.GELU(),
+            torch.nn.Dropout(0.1),
+            torch.nn.Linear(d_model, d_model),
+            torch.nn.GELU(),
+            torch.nn.Linear(d_model, 1),
+        )
+
+    def forward(self, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+        features = torch.cat(
+            [
+                _clip_similarity_feature(batch),
+                _region_detector_score_features(batch, require=True),
+                _region_geometry_features(batch),
+                _geometry_ranks(_region_geometry_features(batch)),
+                _text_length_feature(batch),
+            ],
+            dim=-1,
+        )
+        logits = self.score(features).squeeze(-1)
+        return _masked_region_logits(logits, batch)
+
+
 class _CrossAttentionReranker(torch.nn.Module):
     def __init__(self, text_dim: int, region_dim: int, d_model: int):
         super().__init__()
@@ -2861,6 +2901,58 @@ class _BoxAwareCrossAttentionReranker(torch.nn.Module):
     def forward(self, batch: MultimodalEpisodeBatch) -> torch.Tensor:
         text_tokens = self.text_proj(batch.fields["text"].x)
         region_tokens = self.region_proj(batch.fields["region"].x) + self.box_proj(_region_geometry_features(batch))
+        text_tokens = text_tokens + self.type_embedding.weight[0].view(1, 1, -1)
+        region_tokens = region_tokens + self.type_embedding.weight[1].view(1, 1, -1)
+        tokens = torch.cat([text_tokens, region_tokens], dim=1)
+        text_mask = batch.fields["text"].mask.to(dtype=torch.bool, device=tokens.device)
+        region_mask = batch.fields["region"].mask.to(dtype=torch.bool, device=tokens.device)
+        token_mask = torch.cat([text_mask, region_mask], dim=1)
+        encoded = self.encoder(tokens, src_key_padding_mask=~token_mask)
+        encoded_regions = encoded[:, int(text_tokens.shape[1]) :, :]
+        logits = self.score(encoded_regions).squeeze(-1)
+        logits = logits.masked_fill(~region_mask, -1e9)
+        return logits.unsqueeze(1).expand(-1, int(batch.target_y.shape[1]), -1).contiguous()
+
+
+class _GDINOScoreBoxAwareCrossAttentionReranker(torch.nn.Module):
+    def __init__(self, text_dim: int, region_dim: int, d_model: int):
+        super().__init__()
+        self.text_proj = torch.nn.Linear(text_dim, d_model)
+        self.region_proj = torch.nn.Linear(region_dim, d_model)
+        self.box_proj = torch.nn.Linear(9, d_model)
+        self.detector_clip_proj = torch.nn.Linear(4, d_model)
+        self.type_embedding = torch.nn.Embedding(2, d_model)
+        layer = torch.nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=_attention_head_count(d_model),
+            dim_feedforward=d_model * 4,
+            dropout=0.1,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = torch.nn.TransformerEncoder(layer, num_layers=2)
+        self.score = torch.nn.Sequential(
+            torch.nn.LayerNorm(d_model),
+            torch.nn.Linear(d_model, d_model),
+            torch.nn.GELU(),
+            torch.nn.Linear(d_model, 1),
+        )
+
+    def forward(self, batch: MultimodalEpisodeBatch) -> torch.Tensor:
+        text_tokens = self.text_proj(batch.fields["text"].x)
+        detector_clip = torch.cat(
+            [
+                _region_detector_score_features(batch, require=True),
+                _clip_similarity_feature(batch),
+            ],
+            dim=-1,
+        )
+        region_tokens = (
+            self.region_proj(batch.fields["region"].x)
+            + self.box_proj(_region_geometry_features(batch))
+            + self.detector_clip_proj(detector_clip)
+        )
         text_tokens = text_tokens + self.type_embedding.weight[0].view(1, 1, -1)
         region_tokens = region_tokens + self.type_embedding.weight[1].view(1, 1, -1)
         tokens = torch.cat([text_tokens, region_tokens], dim=1)
@@ -3017,8 +3109,12 @@ def _make_region_reranker(baseline_name: str, batch: MultimodalEpisodeBatch, *, 
         return _CrossAttentionReranker(text_dim, region_dim, d_model)
     if baseline_name == "clip_geometry_mlp":
         return _CLIPGeometryMLP(text_dim, region_dim, d_model)
+    if baseline_name == "gdino_score_clip_geometry_mlp":
+        return _GDINOScoreCLIPGeometryMLP(d_model)
     if baseline_name == "box_aware_cross_attention_reranker":
         return _BoxAwareCrossAttentionReranker(text_dim, region_dim, d_model)
+    if baseline_name == "gdino_score_box_aware_cross_attention_reranker":
+        return _GDINOScoreBoxAwareCrossAttentionReranker(text_dim, region_dim, d_model)
     if baseline_name == "lightweight_transvg_style_reranker":
         return _LightweightTransVGReranker(text_dim, region_dim, d_model)
     raise ValueError(f"unknown region reranker baseline: {baseline_name}")
@@ -3092,6 +3188,57 @@ def _geometry_ranks(geometry: torch.Tensor) -> torch.Tensor:
     order = rank_inputs.argsort(dim=1).argsort(dim=1).to(dtype=geometry.dtype)
     denom = max(1, int(geometry.shape[1]) - 1)
     return order / float(denom)
+
+
+def _clip_similarity_feature(batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    text = _masked_field_mean(batch.fields["text"])
+    region = batch.fields["region"].x
+    dim = min(int(text.shape[-1]), int(region.shape[-1]))
+    text_norm = torch.nn.functional.normalize(text[..., :dim], dim=-1)
+    region_norm = torch.nn.functional.normalize(region[..., :dim], dim=-1)
+    return (region_norm * text_norm.unsqueeze(1)).sum(dim=-1, keepdim=True)
+
+
+def _text_length_feature(batch: MultimodalEpisodeBatch) -> torch.Tensor:
+    region = batch.fields["region"].x
+    text_mask = batch.fields["text"].mask.to(dtype=region.dtype, device=region.device)
+    text_length = text_mask.sum(dim=1, keepdim=True)
+    text_length = text_length / max(float(batch.fields["text"].mask.shape[1]), 1.0)
+    return text_length.unsqueeze(1).expand(-1, int(region.shape[1]), -1)
+
+
+def _region_detector_score_features(
+    batch: MultimodalEpisodeBatch,
+    *,
+    require: bool,
+) -> torch.Tensor:
+    raw_scores = batch.supervision.candidate_region_detector_scores
+    region = batch.fields["region"].x
+    region_mask = _region_candidate_mask(batch).to(device=region.device)
+    if raw_scores is None:
+        if require:
+            raise ValueError("candidate_region_detector_scores are required for detector-confidence-aware rerankers")
+        return region.new_zeros(*region_mask.shape, 3)
+    scores = raw_scores.to(device=region.device, dtype=region.dtype)
+    if scores.ndim == 3 and int(scores.shape[-1]) == 1:
+        scores = scores.squeeze(-1)
+    if scores.shape[:2] != region_mask.shape:
+        raise ValueError(
+            "candidate_region_detector_scores must match region candidate axes: "
+            f"expected {tuple(region_mask.shape)}, got {tuple(scores.shape)}"
+        )
+    scores = scores.masked_fill(~region_mask, 0.0)
+    valid_count = region_mask.to(dtype=region.dtype).sum(dim=1, keepdim=True).clamp_min(1.0)
+    mean = scores.sum(dim=1, keepdim=True) / valid_count
+    centered = (scores - mean).masked_fill(~region_mask, 0.0)
+    variance = (centered.square().sum(dim=1, keepdim=True) / valid_count).clamp_min(1e-6)
+    z_score = (scores - mean) / variance.sqrt()
+    z_score = z_score.masked_fill(~region_mask, 0.0)
+    rank_source = scores.masked_fill(~region_mask, -1e9)
+    rank = (-rank_source).argsort(dim=1).argsort(dim=1).to(dtype=region.dtype)
+    denom = (valid_count - 1.0).clamp_min(1.0)
+    rank = (rank / denom).masked_fill(~region_mask, 0.0)
+    return torch.stack([scores, z_score, rank], dim=-1)
 
 
 def _masked_region_logits(logits: torch.Tensor, batch: MultimodalEpisodeBatch) -> torch.Tensor:

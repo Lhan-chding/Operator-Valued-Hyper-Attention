@@ -208,6 +208,7 @@ def _write_split(
     _write_array(output_root / "supervision" / f"task_labels_{split}.npy", target_labels)
     _write_array(output_root / "supervision" / f"bbox_targets_{split}.npy", bbox_targets)
     _write_array(output_root / "supervision" / f"candidate_region_boxes_{split}.npy", proposal_boxes)
+    _write_array(output_root / "supervision" / f"candidate_region_detector_scores_{split}.npy", proposal_detector_scores)
     _write_array(output_root / "supervision" / f"region_targets_{split}.npy", target_indices.reshape(-1, 1))
     (output_root / "token_fields" / f"manifest_{split}.json").write_text(
         json.dumps(
