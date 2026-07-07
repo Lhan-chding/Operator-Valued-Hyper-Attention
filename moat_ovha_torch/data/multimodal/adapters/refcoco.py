@@ -131,7 +131,7 @@ def _write_common_cache_files(
         "target_slot_randomization": "stable_source_id_seeded",
         "fixed_k": False,
         "stratification_required": "target_slot_histogram_by_valid_count_{split}.json",
-        "split_policy": "official_refcoco_unc_preserve_val_testA_testB",
+        "split_policy": f"official_{dataset_name}_preserve_declared_splits",
     }
     (root / "data_card.json").write_text(json.dumps(data_card, sort_keys=True) + "\n")
     (root / "splits.json").write_text(json.dumps(split_source_ids, sort_keys=True) + "\n")

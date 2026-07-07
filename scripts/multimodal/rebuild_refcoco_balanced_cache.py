@@ -132,7 +132,7 @@ def rebuild_refcoco_balanced_cache(args: argparse.Namespace) -> dict[str, Any]:
 
     stage_raw_payload = stage_refcoco_raw(
         argparse.Namespace(
-            dataset_name="refcoco",
+            dataset_name=str(args.dataset_name),
             raw_root=args.raw_root,
             splits=splits_path,
             records=records_path,
@@ -146,9 +146,9 @@ def rebuild_refcoco_balanced_cache(args: argparse.Namespace) -> dict[str, Any]:
             reuse_existing_features=args.reuse_existing_raw_features,
         )
     )
-    adapter = RefCOCOAdapter()
+    adapter = RefCOCOAdapter(name=str(args.dataset_name), version=str(args.version))
     manifest = RawDatasetManifest(
-        dataset_name="refcoco",
+        dataset_name=str(args.dataset_name),
         raw_root=args.raw_root,
         files={
             "annotations/instances.json": args.raw_root / "annotations" / "instances.json",
@@ -162,7 +162,7 @@ def rebuild_refcoco_balanced_cache(args: argparse.Namespace) -> dict[str, Any]:
     for split in _ordered_splits(splits):
         adapter.write_cache(manifest, args.cache_root, split, args.version)
 
-    layout = MultimodalCacheLayout(args.cache_root, "refcoco", args.version)
+    layout = MultimodalCacheLayout(args.cache_root, str(args.dataset_name), args.version)
     cache_report = validate_cache_layout(layout, splits=tuple(_ordered_splits(splits)))
     return {
         "ok": cache_report.ok,

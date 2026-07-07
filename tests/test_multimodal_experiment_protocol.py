@@ -20,6 +20,9 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             ROOT / "configs" / "multimodal_refcoco_public_smoke.json",
             ROOT / "configs" / "multimodal_cmu_mosei_public_smoke.json",
             ROOT / "configs" / "multimodal_refcoco_public_main.json",
+            ROOT / "configs" / "multimodal_refcoco_gdino_swinb_proposal_rerankers.json",
+            ROOT / "configs" / "multimodal_refcoco_plus_gdino_proposal_rerankers.json",
+            ROOT / "configs" / "multimodal_refcocog_gdino_proposal_rerankers.json",
             ROOT / "configs" / "multimodal_cmu_mosei_public_main.json",
             ROOT / "configs" / "multimodal_external_sota_references.json",
             ROOT / "configs" / "multimodal_robustness_smoke.json",
@@ -32,11 +35,44 @@ class MultimodalExperimentProtocolTests(unittest.TestCase):
             ROOT / "scripts" / "multimodal" / "build_external_sota_runbook.py",
             ROOT / "scripts" / "multimodal" / "validate_public_main_artifacts.py",
             ROOT / "scripts" / "multimodal" / "run_robustness_stress_smoke.py",
+            ROOT / "scripts" / "multimodal" / "run_refcoco_proposal_robustness_min_matrix.sh",
             ROOT / "scripts" / "multimodal" / "summarize_diagnostics.py",
         ]
         for path in expected:
             with self.subTest(path=path):
                 self.assertTrue(path.exists(), path)
+
+    def test_refcoco_proposal_robustness_min_matrix_configs_are_scoped(self):
+        from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig
+
+        expectations = [
+            (
+                ROOT / "configs" / "multimodal_refcoco_gdino_swinb_proposal_rerankers.json",
+                "refcoco_gdino_swinb_proposals",
+                {"val", "testA", "testB"},
+            ),
+            (
+                ROOT / "configs" / "multimodal_refcoco_plus_gdino_proposal_rerankers.json",
+                "refcoco_plus_gdino_proposals",
+                {"val", "testA", "testB"},
+            ),
+            (
+                ROOT / "configs" / "multimodal_refcocog_gdino_proposal_rerankers.json",
+                "refcocog_gdino_proposals",
+                {"val", "test"},
+            ),
+        ]
+        for path, dataset_name, eval_splits in expectations:
+            with self.subTest(path=path):
+                config = MultimodalExperimentConfig.from_file(path)
+                self.assertEqual(config.dataset_name, dataset_name)
+                self.assertEqual(config.task_type, "phrase_region_grounding")
+                self.assertEqual(config.training_stages, ("T0", "T5"))
+                self.assertEqual(config.candidate_names, ("PRSO", "SRO", "TLEO", "CATO"))
+                self.assertEqual(set(config.eval_splits), eval_splits)
+                self.assertIn("gdino_score_box_aware_cross_attention_reranker", config.baseline_names)
+                self.assertTrue(config.enforce_same_features_for_baselines)
+                self.assertTrue(config.require_public_alignment_labels)
 
     def test_config_parser_enforces_multiseed_and_training_stages(self):
         from moat_ovha_torch.config_multimodal import MultimodalExperimentConfig

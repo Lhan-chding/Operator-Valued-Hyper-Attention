@@ -116,11 +116,11 @@ def build_refcoco_stage_records(args: argparse.Namespace) -> dict[str, Any]:
         **manifest,
         "manifest": str(manifest_path),
         "next": (
-            f"python scripts/multimodal/stage_refcoco_raw.py refcoco data/raw_multimodal/refcoco "
+            f"python scripts/multimodal/stage_refcoco_raw.py {args.dataset_name} data/raw_multimodal/{args.dataset_name} "
             f"--splits {splits_path} --records {records_path} "
-            f"--text-features {output_dir / 'refcoco_text_features.npy'} "
-            f"--region-features {output_dir / 'refcoco_region_features.npy'} "
-            f"--license-tag refcoco-coco2014 --preprocessing-version refcoco-frozen-features-v0.1"
+            f"--text-features {output_dir / (str(args.dataset_name) + '_text_features.npy')} "
+            f"--region-features {output_dir / (str(args.dataset_name) + '_region_features.npy')} "
+            f"--license-tag refcoco-coco2014 --preprocessing-version {args.dataset_name}-frozen-features-v0.1"
         ),
     }
 

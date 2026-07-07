@@ -1,0 +1,68 @@
+{
+  "name": "multimodal_refcoco_gdino_swinb_proposal_rerankers",
+  "dataset_name": "refcoco_gdino_swinb_proposals",
+  "task_type": "phrase_region_grounding",
+  "cache_version": "v0.1",
+  "cache_root": "data/multimodal_cache",
+  "output_dir": "outputs/multimodal/refcoco_gdino_swinb_proposal_rerankers",
+  "seeds": [201, 202, 203, 204, 205],
+  "main_table_seed_policy": "five_seed_default",
+  "training_stages": ["T0", "T5"],
+  "main_model_name": "ovha_gdino_swinb_proposals_prso_sro_tleo_cato",
+  "candidate_names": ["PRSO", "SRO", "TLEO", "CATO"],
+  "candidate_pool_names": ["PRSO", "SRO", "TLEO", "CATO"],
+  "baseline_names": [
+    "random_valid",
+    "train_slot_prior",
+    "box_prior",
+    "prso_clip_similarity",
+    "candidate_mlp_reranker",
+    "cross_attention_reranker",
+    "clip_geometry_mlp",
+    "gdino_score_clip_geometry_mlp",
+    "box_aware_cross_attention_reranker",
+    "gdino_score_box_aware_cross_attention_reranker",
+    "lightweight_transvg_style_reranker",
+    "index_prior_only",
+    "text_only",
+    "region_only",
+    "concat_fusion",
+    "cato_only",
+    "ovha_no_cato",
+    "ovha_no_rceo",
+    "ovha_no_evidence_router"
+  ],
+  "eval_splits": ["val", "testA", "testB"],
+  "checkpoint_selection_metric": "acc_at_0_5",
+  "eval_episode_count": 4096,
+  "enforce_same_features_for_baselines": true,
+  "fail_on_missing_cache_artifact": true,
+  "allow_hidden_losses": false,
+  "require_public_alignment_labels": true,
+  "losses_by_stage": {
+    "T0": ["cache_validation"],
+    "T5": ["task_loss", "candidate_individual_loss", "router_marginal_utility", "residual_gate_utility_loss"]
+  },
+  "loss_metadata": {
+    "candidate_individual_loss": {
+      "weight": 0.0,
+      "diagnostic_only": true
+    },
+    "router_marginal_utility": {
+      "weight": 0.01
+    },
+    "residual_gate_utility_loss": {
+      "weight": 0.01
+    }
+  },
+  "adapter_params_by_candidate": {
+    "PRSO": ["alignment_temperature", "scale", "bias"],
+    "SRO": ["scale", "bias"],
+    "TLEO": ["lengthscale", "local_temperature", "scale", "bias"],
+    "CATO": ["alignment_temperature", "transport_scale", "scale", "bias"]
+  },
+  "use_evidence_router": false,
+  "composition_mode": "base_plus_residual",
+  "base_candidate": "PRSO",
+  "residual_candidates": ["SRO", "TLEO", "CATO"]
+}

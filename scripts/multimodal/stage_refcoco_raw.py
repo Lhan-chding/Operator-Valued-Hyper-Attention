@@ -20,7 +20,7 @@ def main() -> int:
             "into the raw manifest layout consumed by scripts/multimodal/build_cache.py."
         )
     )
-    parser.add_argument("dataset_name", choices=("refcoco", "flickr30k_entities"))
+    parser.add_argument("dataset_name", choices=("refcoco", "refcoco_plus", "refcocog", "flickr30k_entities"))
     parser.add_argument("raw_root", type=Path)
     parser.add_argument("--splits", type=Path, required=True)
     parser.add_argument("--records", type=Path, required=True)
@@ -78,9 +78,10 @@ def stage_refcoco_raw(args: argparse.Namespace) -> dict[str, Any]:
         license_tag=args.license_tag,
         preprocessing_version=args.preprocessing_version,
     )
-    annotation_name = "refs.json" if args.dataset_name == "refcoco" else "phrase_regions.json"
+    is_refcoco_family = args.dataset_name in {"refcoco", "refcoco_plus", "refcocog"}
+    annotation_name = "refs.json" if is_refcoco_family else "phrase_regions.json"
     (raw_root / "annotations" / annotation_name).write_text(json.dumps({"records": records}, sort_keys=True) + "\n")
-    if args.dataset_name == "refcoco":
+    if is_refcoco_family:
         (raw_root / "annotations" / "instances.json").write_text(
             json.dumps({"records": [{"source_id": record["source_id"], "image_id": record["image_id"]} for record in records]}, sort_keys=True)
             + "\n"
