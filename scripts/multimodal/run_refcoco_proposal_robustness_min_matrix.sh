@@ -35,7 +35,7 @@ fi
 
 declare -a MATRIX=(
   "refcoco_pool_a_gdino_swint|refcoco_gdino_proposals|configs/multimodal_refcoco_gdino_proposal_rerankers.json|val testA testB"
-  "refcoco_pool_b_gdino_swinb|${ALT_POOL_DATASET_NAME:-refcoco_gdino_swinb_proposals}|configs/multimodal_refcoco_gdino_swinb_proposal_rerankers.json|val testA testB"
+  "refcoco_pool_b_gdino_swinb|refcoco_gdino_swinb_proposals|configs/multimodal_refcoco_gdino_swinb_proposal_rerankers.json|val testA testB"
   "refcoco_plus_gdino_swint|refcoco_plus_gdino_proposals|configs/multimodal_refcoco_plus_gdino_proposal_rerankers.json|val testA testB"
   "refcocog_gdino_swint|refcocog_gdino_proposals|configs/multimodal_refcocog_gdino_proposal_rerankers.json|val test"
 )
