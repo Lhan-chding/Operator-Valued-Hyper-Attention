@@ -63,6 +63,15 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertIn("enc_outputs_class.max(-1)[0]", source)
         self.assertNotIn("logsumexp(enc_outputs_class", source)
 
+    def test_dense_head_imports_instance_list_from_pinned_mmdet_api(self):
+        source = (
+            ROOT / "ovha_rod/models/dense_heads/ovha_grounding_dino_head.py"
+        ).read_text()
+        self.assertIn("from mmdet.structures import SampleList", source)
+        self.assertIn("from mmdet.utils import InstanceList", source)
+        self.assertNotIn(
+            "from mmdet.structures import InstanceList", source)
+
     def test_environment_is_pinned_to_a_commit(self):
         lock = (ROOT / "environment/mmdetection.lock").read_text()
         self.assertIn("cfd5d3a985b0249de009b67d04f37263e11cdf3d", lock)
