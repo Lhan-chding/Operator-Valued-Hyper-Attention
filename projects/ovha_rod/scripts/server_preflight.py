@@ -442,8 +442,8 @@ def _project_checks(project_root: Path, dataset: str, data_root: Path,
                 "checkpoint digest must pass before safe deserialization"))
         else:
             try:
-                payload = torch.load(
-                    checkpoint, map_location="cpu", weights_only=True)
+                payload = _load_locked_checkpoint(
+                    checkpoint, checkpoint_trusted=checkpoint_trusted)
                 state = payload.get("state_dict", payload)
                 state_keys = {
                     key.removeprefix("module.") for key in state.keys()
@@ -501,6 +501,28 @@ def _data_checks(data_root: Path, dataset: str) -> tuple[CheckResult, ...]:
 
 def _resolve_trusted_checkpoint(path: Path) -> Path:
     return _resolve_private_file(path)
+
+
+def _load_locked_checkpoint(
+        path: Path, checkpoint_trusted: bool) -> Any:
+    if not checkpoint_trusted:
+        raise ValueError(
+            "checkpoint trust checks must pass before compatibility load")
+    trusted_path = _resolve_trusted_checkpoint(path)
+    with trusted_path.open("rb") as handle:
+        file_stat = os.fstat(handle.fileno())
+        if file_stat.st_uid != os.getuid() or file_stat.st_mode & 0o077:
+            raise ValueError("checkpoint permissions changed before load")
+        if file_stat.st_size != EXPECTED_CHECKPOINT_SIZE:
+            raise ValueError("checkpoint size changed before load")
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+        if digest.hexdigest() != EXPECTED_CHECKPOINT_SHA256:
+            raise ValueError("checkpoint digest changed before load")
+        handle.seek(0)
+        import torch
+        return torch.load(handle, map_location="cpu", weights_only=False)
 
 
 def _resolve_private_file(path: Path) -> Path:
