@@ -68,6 +68,16 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertIn("cfd5d3a985b0249de009b67d04f37263e11cdf3d", lock)
         self.assertNotIn("@main", lock)
 
+    def test_phase0_parent_configs_preserve_official_optimizer_schedule(self):
+        for dataset in ("refcoco", "refcoco_plus", "refcocog"):
+            path = ROOT / "configs" / f"phase0_parent_swin_t_5e_{dataset}.py"
+            with self.subTest(path=path):
+                self.assertTrue(path.exists(), path)
+                source = path.read_text()
+                self.assertNotIn("optim_wrapper", source)
+                self.assertNotIn("param_scheduler", source)
+                self.assertNotIn("model =", source)
+
 
 if __name__ == "__main__":
     unittest.main()

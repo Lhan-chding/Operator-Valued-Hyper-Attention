@@ -51,7 +51,7 @@ class HookContractTests(unittest.TestCase):
         metric_path = ROOT / "ovha_rod/evaluation/ovha_refexp_metric.py"
         self.assertTrue(metric_path.exists(), metric_path)
         ast.parse(metric_path.read_text())
-        for config in sorted((ROOT / "configs").glob("*.py")):
+        for config in sorted((ROOT / "configs").glob("ovha_rod_*.py")):
             with self.subTest(config=config):
                 self.assertIn("type='OVHARefExpMetric'", config.read_text())
 
