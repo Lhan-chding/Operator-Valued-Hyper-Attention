@@ -31,6 +31,8 @@ class StaticIntegrationContractTests(unittest.TestCase):
     def test_required_phase1_files_exist_and_compile(self):
         required = [
             ROOT / "ovha_rod/models/detectors/ovha_grounding_dino.py",
+            ROOT / "ovha_rod/models/detectors/deterministic_grounding_dino.py",
+            ROOT / "ovha_rod/models/positional_encoding.py",
             ROOT / "ovha_rod/models/dense_heads/ovha_grounding_dino_head.py",
             ROOT / "configs/ovha_rod_swin_t_5e_refcoco.py",
             ROOT / "configs/ovha_rod_swin_t_5e_refcoco_plus.py",
@@ -171,6 +173,36 @@ class StaticIntegrationContractTests(unittest.TestCase):
                     source.replace(" ", ""),
                 )
                 self.assertIn("OperatorDiagnosticsHook", source)
+
+    def test_all_configs_use_deterministic_grounding_dino(self):
+        for path in sorted((ROOT / "configs").glob("*swin_t_5e_*.py")):
+            tree = ast.parse(path.read_text())
+            model_call = next(
+                node.value for node in tree.body
+                if isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == "model"
+                    for target in node.targets
+                )
+            )
+            model_type = next(
+                ast.literal_eval(keyword.value)
+                for keyword in model_call.keywords
+                if keyword.arg == "type"
+            )
+            expected = (
+                "OVHAGroundingDINO"
+                if path.name.startswith("ovha_rod_")
+                else "DeterministicGroundingDINO"
+            )
+            with self.subTest(path=path):
+                self.assertEqual(model_type, expected)
+
+    def test_preflight_requires_deterministic_positional_encoding(self):
+        source = (ROOT / "scripts/server_preflight.py").read_text()
+        self.assertIn("deterministic_positional_encoding", source)
+        smoke = (ROOT / "scripts/two_batch_smoke.py").read_text()
+        self.assertIn("DeterministicSinePositionalEncoding", smoke)
 
 
 if __name__ == "__main__":
