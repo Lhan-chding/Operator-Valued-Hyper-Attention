@@ -1,0 +1,100 @@
+import unittest
+
+import torch
+
+from ovha_rod.models.losses import build_seed_quality_targets, quality_focal_seed_loss
+from ovha_rod.models.operators.generic_seed import GenericDenseSeedPredictor
+from ovha_rod.models.operators.rqgo import RQGO
+from ovha_rod.models.role_encoder import LatentRoleEncoder
+
+
+class RQGOTests(unittest.TestCase):
+    def _inputs(self):
+        torch.manual_seed(13)
+        memory = torch.randn(2, 20, 16)
+        boxes = torch.rand(2, 20, 4).clamp(0.05, 0.95)
+        text = torch.randn(2, 7, 16)
+        text_mask = torch.tensor([[1, 1, 1, 1, 0, 0, 0], [1, 1, 1, 1, 1, 1, 0]], dtype=torch.bool)
+        memory_mask = torch.zeros(2, 20, dtype=torch.bool)
+        memory_mask[:, -3:] = True
+        spatial_shapes = torch.tensor([[4, 4], [2, 2]])
+        return memory, boxes, text, text_mask, memory_mask, spatial_shapes
+
+    def test_zero_init_preserves_parent_topk_exactly(self):
+        memory, boxes, text, text_mask, memory_mask, spatial_shapes = self._inputs()
+        roles = LatentRoleEncoder(16, num_heads=4)(text, text_mask)
+        model = RQGO(d_model=16, seed_bias_cap=2.0).eval()
+        base_scores = torch.randn(2, 20).masked_fill(memory_mask, float("-inf"))
+
+        result = model(memory, boxes, roles, spatial_shapes, memory_mask)
+        parent_topk = base_scores.topk(5, dim=1).indices
+        ovha_topk = (base_scores + result.seed_bias).topk(5, dim=1).indices
+
+        self.assertTrue(torch.equal(result.seed_bias, torch.zeros_like(result.seed_bias)))
+        self.assertTrue(torch.equal(parent_topk, ovha_topk))
+        self.assertLessEqual(float(result.seed_bias.abs().max()), 2.0)
+        self.assertTrue(torch.equal(result.valid, ~memory_mask))
+
+    def test_padding_content_cannot_change_valid_seed_logits(self):
+        memory, boxes, text, text_mask, memory_mask, spatial_shapes = self._inputs()
+        roles = LatentRoleEncoder(16, num_heads=4)(text, text_mask)
+        model = RQGO(d_model=16)
+        with torch.no_grad():
+            model.seed_head[-1].weight.fill_(0.05)
+        changed = memory.clone()
+        changed[memory_mask] = 999.0
+
+        first = model(memory, boxes, roles, spatial_shapes, memory_mask)
+        second = model(changed, boxes, roles, spatial_shapes, memory_mask)
+
+        self.assertTrue(torch.allclose(first.seed_bias.masked_select(first.valid), second.seed_bias.masked_select(second.valid), atol=1e-5))
+        self.assertTrue(torch.equal(first.seed_bias.masked_select(~first.valid), torch.zeros_like(first.seed_bias.masked_select(~first.valid))))
+
+    def test_seed_loss_backpropagates_to_rqgo(self):
+        memory, boxes, text, text_mask, memory_mask, spatial_shapes = self._inputs()
+        roles = LatentRoleEncoder(16, num_heads=4)(text, text_mask)
+        model = RQGO(d_model=16)
+        parent_score = torch.randn(2, 20)
+        gt = torch.tensor([[[0.5, 0.5, 0.4, 0.4]], [[0.3, 0.3, 0.2, 0.2]]])
+        gt_mask = torch.ones(2, 1, dtype=torch.bool)
+        result = model(memory, boxes, roles, spatial_shapes, memory_mask)
+        targets = build_seed_quality_targets(boxes, gt, gt_mask, gamma=1.0)
+        loss = quality_focal_seed_loss(parent_score.detach() + result.seed_bias, targets, result.valid)
+        loss.backward()
+        grad = model.seed_head[-1].weight.grad
+        self.assertIsNotNone(grad)
+        self.assertTrue(torch.isfinite(grad).all())
+        self.assertGreater(float(grad.abs().sum()), 0.0)
+
+    def test_generic_control_has_same_contract(self):
+        memory, boxes, text, text_mask, memory_mask, _ = self._inputs()
+        pooled = (text * text_mask[..., None]).sum(1) / text_mask.sum(1, keepdim=True)
+        model = GenericDenseSeedPredictor(d_model=16, num_levels=2)
+        level_ids = torch.tensor([0] * 16 + [1] * 4)
+        result = model(memory, boxes, pooled, level_ids, memory_mask)
+        self.assertEqual(tuple(result.seed_bias.shape), (2, 20))
+        self.assertTrue(torch.equal(result.valid, ~memory_mask))
+        self.assertTrue(torch.equal(result.seed_bias, torch.zeros_like(result.seed_bias)))
+
+
+class SeedLossTests(unittest.TestCase):
+    def test_iou_targets_are_bounded_and_stop_gradient(self):
+        proposals = torch.tensor([[[0.5, 0.5, 0.4, 0.4], [0.1, 0.1, 0.1, 0.1]]], requires_grad=True)
+        gt = torch.tensor([[[0.5, 0.5, 0.4, 0.4]]], requires_grad=True)
+        target = build_seed_quality_targets(proposals, gt, torch.ones(1, 1, dtype=torch.bool), gamma=2.0)
+        self.assertFalse(target.requires_grad)
+        self.assertAlmostEqual(float(target[0, 0]), 1.0, places=6)
+        self.assertGreaterEqual(float(target.min()), 0.0)
+        self.assertLessEqual(float(target.max()), 1.0)
+
+    def test_empty_ground_truth_and_invalid_proposals_are_safe(self):
+        proposals = torch.rand(1, 3, 4)
+        target = build_seed_quality_targets(proposals, torch.empty(1, 0, 4), torch.empty(1, 0, dtype=torch.bool))
+        valid = torch.tensor([[1, 0, 1]], dtype=torch.bool)
+        loss = quality_focal_seed_loss(torch.zeros(1, 3), target, valid)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertEqual(float(target.sum()), 0.0)
+
+
+if __name__ == "__main__":
+    unittest.main()
