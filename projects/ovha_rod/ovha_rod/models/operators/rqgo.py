@@ -5,7 +5,7 @@ from torch import Tensor, nn
 import torch.nn.functional as F
 
 from ..role_encoder import RoleState
-from .base import SeedResult
+from .base import SeedResult, memory_valid_mask
 from .relation_fields import RELATION_TYPES, RelationFieldBank
 
 
@@ -39,10 +39,7 @@ class RQGO(nn.Module):
                 roles: RoleState, spatial_shapes: Tensor,
                 memory_mask: Tensor | None = None) -> RQGOResult:
         self._validate_inputs(memory, proposal_boxes, roles, spatial_shapes)
-        valid = (torch.ones(memory.shape[:2], dtype=torch.bool, device=memory.device)
-                 if memory_mask is None else ~memory_mask.to(dtype=torch.bool))
-        if valid.shape != memory.shape[:2]:
-            raise ValueError("memory_mask must have shape [B,N]")
+        valid = memory_valid_mask(memory, memory_mask)
         semantic = [
             self._semantic_field(memory, roles.vectors[:, index], index)
             for index in range(3)

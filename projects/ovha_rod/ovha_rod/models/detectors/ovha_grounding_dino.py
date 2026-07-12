@@ -11,7 +11,7 @@ from mmdet.structures import OptSampleList
 
 from ..operators.generic_seed import (
     GenericDenseSeedPredictor, matched_generic_hidden_dim)
-from ..operators.base import SeedResult
+from ..operators.base import SeedResult, memory_valid_mask
 from ..operators.rqgo import RQGO
 from ..role_encoder import LatentRoleEncoder
 
@@ -117,7 +117,7 @@ class OVHAGroundingDINO(GroundingDINO):
     def pre_decoder(
         self,
         memory: Tensor,
-        memory_mask: Tensor,
+        memory_mask: Optional[Tensor],
         spatial_shapes: Tensor,
         memory_text: Tensor,
         text_token_mask: Tensor,
@@ -258,10 +258,10 @@ class OVHAGroundingDINO(GroundingDINO):
         dense_boxes: Tensor,
         memory_text: Tensor,
         text_token_mask: Tensor,
-        memory_mask: Tensor,
+        memory_mask: Optional[Tensor],
         spatial_shapes: Tensor,
     ):
-        valid = ~memory_mask.to(dtype=torch.bool)
+        valid = memory_valid_mask(output_memory, memory_mask)
         if self.seed_operator_name == "none":
             zeros = output_memory.new_zeros(valid.shape)
             result = SeedResult(zeros, zeros, valid, {})

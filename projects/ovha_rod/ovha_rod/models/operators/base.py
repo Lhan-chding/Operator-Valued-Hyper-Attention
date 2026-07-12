@@ -7,6 +7,19 @@ import torch
 from torch import Tensor
 
 
+def memory_valid_mask(
+        memory: Tensor, memory_mask: Tensor | None) -> Tensor:
+    """Normalize MMDetection's optional padding mask to valid-token form."""
+    if memory.ndim < 2:
+        raise ValueError("memory must have batch and token dimensions")
+    expected = memory.shape[:2]
+    if memory_mask is None:
+        return torch.ones(expected, dtype=torch.bool, device=memory.device)
+    if memory_mask.shape != expected:
+        raise ValueError("memory_mask must have shape [B,N]")
+    return ~memory_mask.to(device=memory.device, dtype=torch.bool)
+
+
 @dataclass(frozen=True)
 class SeedResult:
     seed_bias: Tensor

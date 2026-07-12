@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor, nn
 
-from .base import SeedResult
+from .base import SeedResult, memory_valid_mask
 
 
 class GenericDenseSeedPredictor(nn.Module):
@@ -28,8 +28,7 @@ class GenericDenseSeedPredictor(nn.Module):
             raise ValueError("pooled_text must have shape [B,D]")
         if level_ids.shape != (memory.shape[1],):
             raise ValueError("level_ids must have shape [N]")
-        valid = (torch.ones(memory.shape[:2], dtype=torch.bool, device=memory.device)
-                 if memory_mask is None else ~memory_mask.to(dtype=torch.bool))
+        valid = memory_valid_mask(memory, memory_mask)
         text = pooled_text[:, None].expand(-1, memory.shape[1], -1)
         levels = self.level_embedding(level_ids)[None].expand(memory.shape[0], -1, -1)
         raw = self.mlp(torch.cat((memory, text, boxes, levels), dim=-1)).squeeze(-1)
