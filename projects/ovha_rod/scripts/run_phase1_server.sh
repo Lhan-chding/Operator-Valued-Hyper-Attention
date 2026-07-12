@@ -170,6 +170,14 @@ export PATH="$(dirname "${PYTHON_RESOLVED}"):${PATH}"
 [[ "${GPUS}" =~ ^[1-9][0-9]*$ ]] || { printf '--gpus must be a positive integer\n' >&2; exit 2; }
 [[ "${PER_DEVICE_BATCH}" =~ ^[1-9][0-9]*$ ]] || { printf '--per-device-batch must be a positive integer\n' >&2; exit 2; }
 [[ "${SEED}" =~ ^[0-9]+$ ]] || { printf '--seed must be a non-negative integer\n' >&2; exit 2; }
+if [[ "${DRY_RUN}" == false ]]; then
+  [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]] || {
+    printf 'CUDA_VISIBLE_DEVICES must explicitly select the requested idle GPUs\n' >&2
+    exit 2
+  }
+  PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
+    "${PYTHON_BIN}" "${SCRIPT_DIR}/gpu_guard.py" --expected-count "${GPUS}"
+fi
 
 DENOMINATOR=$((GPUS * PER_DEVICE_BATCH))
 if (( DENOMINATOR > TARGET_GLOBAL_BATCH || TARGET_GLOBAL_BATCH % DENOMINATOR != 0 )); then
@@ -213,6 +221,11 @@ set_variant_options() {
 }
 
 if [[ "${DRY_RUN}" == false ]]; then
+  for run_variant in "${VARIANTS[@]}"; do
+    WORK_DIR="${WORK_ROOT}/${DATASET}/${run_variant}/seed_${SEED}"
+    PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
+      "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_work_dir.py" "${WORK_DIR}"
+  done
   PREFLIGHT_DIR="${WORK_ROOT}/${DATASET}/preflight"
   mkdir -p "${PREFLIGHT_DIR}"
   PREFLIGHT=(
@@ -257,7 +270,7 @@ for run_variant in "${VARIANTS[@]}"; do
       "param_scheduler.0.end=${WARMUP_ITERS}"
       "custom_hooks.0.warmup_iters=${WARMUP_ITERS}")
   fi
-  if [[ "${USE_AMP}" == true ]]; then
+  if [[ "${USE_AMP}" == true && "${run_variant}" != "phase0_parent" ]]; then
     CFG_OPTIONS+=("optim_wrapper.type=AmpOptimWrapper" "optim_wrapper.loss_scale=dynamic")
   fi
 
@@ -278,7 +291,6 @@ for run_variant in "${VARIANTS[@]}"; do
       printf 'trusted checkpoint changed before variant launch\n' >&2
       exit 2
     }
-    mkdir -p "${WORK_DIR}"
     if [[ -L "${WORK_DIR}/command.txt" ]]; then
       printf 'refusing symlink command log: %s\n' "${WORK_DIR}/command.txt" >&2
       exit 2

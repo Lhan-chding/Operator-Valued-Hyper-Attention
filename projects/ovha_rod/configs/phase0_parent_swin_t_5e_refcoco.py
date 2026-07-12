@@ -1,4 +1,6 @@
 _base_ = 'mmdet::mm_grounding_dino/refcoco/grounding_dino_swin-t_finetune_8xb4_5e_refcoco.py'
+load_from = None
+model = dict(backbone=dict(init_cfg=None))
 
 data_root = 'data/coco/'
 val_ann_file = 'mdetr_annotations/finetune_refcoco_val.json'

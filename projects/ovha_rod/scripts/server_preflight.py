@@ -404,9 +404,17 @@ def _project_checks(project_root: Path, dataset: str, data_root: Path,
         from mmengine.config import Config
         from mmengine.registry import init_default_scope
         from mmdet.registry import METRICS, MODELS
+        from ovha_rod.runtime_contracts import find_remote_weight_values
 
         resolved = Config.fromfile(config)
         resolved.model.language_model.name = str(bert_root)
+        remote_weights = find_remote_weight_values({
+            "model": resolved.model,
+            "load_from": resolved.get("load_from"),
+        })
+        if remote_weights:
+            raise ValueError(
+                f"resolved config contains remote model weights: {remote_weights}")
         init_default_scope("mmdet")
         model = MODELS.build(resolved.model)
         resolved.val_evaluator.ann_file = str(
@@ -425,6 +433,9 @@ def _project_checks(project_root: Path, dataset: str, data_root: Path,
         checks.append(CheckResult(
             "build_phase1_model", True,
             "pinned config builds detector/head/metric registries"))
+        checks.append(CheckResult(
+            "no_remote_model_weights", True,
+            "resolved model init and load sources are local-only"))
         zero_tensors = [
             model.bbox_head.referent_head[-1].weight,
             model.bbox_head.referent_head[-1].bias,

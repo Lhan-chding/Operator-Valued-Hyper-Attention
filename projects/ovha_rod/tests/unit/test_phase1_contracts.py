@@ -98,7 +98,8 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertLess(runner.index(export), runner.index("COMMAND=("))
         self.assertIn("randomness.deterministic=True", runner)
         self.assertIn("CUDA_VISIBLE_DEVICES", runner)
-        self.assertIn("require_visible_device_ids", runner)
+        self.assertIn("gpu_guard.py", runner)
+        self.assertIn("prepare_work_dir.py", runner)
 
     def test_metric_requires_encoder_oracle_for_every_phase1_sample(self):
         source = (

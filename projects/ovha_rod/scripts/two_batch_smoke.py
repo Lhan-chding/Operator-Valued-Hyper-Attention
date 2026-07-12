@@ -5,14 +5,39 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 from pathlib import Path
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
+from ovha_rod.runtime_contracts import (
+    audit_smoke_outputs,
+    find_remote_weight_values,
+    prepare_fresh_private_work_dir,
+    require_selected_gpus_idle,
+    require_visible_device_ids,
+    validate_local_bert,
+    validate_locked_checkpoint,
+)
 from mmengine.config import Config, DictAction
 from mmengine.runner import Runner
+
+
+ALLOWED_CFG_OPTIONS = frozenset({
+    "model.seed_operator",
+    "load_from",
+    "model.language_model.name",
+    "train_dataloader.batch_size",
+    "train_dataloader.num_workers",
+    "train_dataloader.dataset.data_root",
+    "train_dataloader.dataset.pipeline.5.tokenizer_name",
+    "val_dataloader.dataset.data_root",
+    "val_evaluator.ann_file",
+    "optim_wrapper.type",
+    "optim_wrapper.loss_scale",
+    "randomness.seed",
+    "randomness.deterministic",
+})
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,14 +50,33 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    os.umask(0o077)
     args = parse_args()
+    unknown_options = sorted(set(args.cfg_options) - ALLOWED_CFG_OPTIONS)
+    if unknown_options:
+        raise ValueError(f"smoke cfg-options are not allowed: {unknown_options}")
+    device_ids = require_visible_device_ids(
+        os.environ.get("CUDA_VISIBLE_DEVICES"), expected_count=1)
+    require_selected_gpus_idle(device_ids)
     trusted_root = Path(__file__).resolve().parents[1] / "configs"
     config_path = args.config.resolve()
     if not config_path.is_relative_to(trusted_root.resolve()):
         raise ValueError("smoke config must come from the project configs directory")
+    work_dir = prepare_fresh_private_work_dir(args.work_dir)
     config = Config.fromfile(str(config_path))
     config.merge_from_dict(args.cfg_options)
-    config.work_dir = str(args.work_dir.resolve())
+    remote_weights = find_remote_weight_values({
+        "model": config.model,
+        "load_from": config.get("load_from"),
+    })
+    if remote_weights:
+        raise ValueError(f"remote model weights are forbidden: {remote_weights}")
+    validate_locked_checkpoint(Path(str(config.get("load_from", ""))))
+    validate_local_bert(Path(str(config.model.language_model.name)))
+    expected_operator = str(config.model.get("seed_operator", "none"))
+    if expected_operator not in {"none", "generic", "rqgo"}:
+        raise ValueError(f"unsupported smoke seed operator: {expected_operator}")
+    config.work_dir = str(work_dir)
     config.train_cfg = dict(
         type="IterBasedTrainLoop", max_iters=2, val_interval=3)
     config.param_scheduler = []
@@ -47,43 +91,16 @@ def main() -> int:
 
     runner = Runner.from_cfg(config)
     runner.train()
-    summary = _audit_outputs(Path(config.work_dir))
+    summary = audit_smoke_outputs(
+        Path(config.work_dir), expected_operator=expected_operator)
     summary_path = Path(config.work_dir) / "smoke_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    if summary_path.is_symlink():
+        raise ValueError("smoke summary must not be a symlink")
+    rendered = json.dumps(
+        summary, indent=2, sort_keys=True, allow_nan=False)
+    summary_path.write_text(rendered + "\n")
+    print(rendered)
     return 0 if summary["ok"] else 2
-
-
-def _audit_outputs(work_dir: Path) -> dict:
-    diagnostics_path = work_dir / "operator_diagnostics.jsonl"
-    rows = []
-    if diagnostics_path.is_file():
-        rows = [json.loads(line) for line in diagnostics_path.read_text().splitlines()
-                if line.strip()]
-    nonfinite = []
-    for row_index, row in enumerate(rows):
-        for key, value in row.items():
-            if isinstance(value, (int, float)) and not math.isfinite(float(value)):
-                nonfinite.append({"row": row_index, "key": key, "value": value})
-    checkpoints = sorted(str(path) for path in work_dir.glob("iter_2.pth"))
-    active_rows = [row for row in rows if row.get("seed_operator") in {"rqgo", "generic"}]
-    gradients_ok = not active_rows or any(
-        float(row.get("seed_gradient_norm", 0.0)) > 0.0 for row in active_rows)
-    bias_ok = all(float(row.get("seed_bias_abs_max", 0.0)) <= 2.0 + 1e-6
-                  and float(row.get("seed_invalid_bias_abs_max", 0.0)) == 0.0
-                  for row in active_rows)
-    ok = (len(rows) >= 2 and not nonfinite and bool(checkpoints)
-          and gradients_ok and bias_ok)
-    return {
-        "ok": ok,
-        "contract": "ovha_rod_phase1_two_batch_smoke_v1",
-        "diagnostic_rows": len(rows),
-        "nonfinite": nonfinite,
-        "active_seed_gradient_nonzero": gradients_ok,
-        "seed_bias_contract": bias_ok,
-        "checkpoints": checkpoints,
-        "diagnostics": str(diagnostics_path),
-    }
 
 
 if __name__ == "__main__":

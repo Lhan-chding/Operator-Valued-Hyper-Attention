@@ -70,17 +70,16 @@ class OVHARefExpMetric(RefExpMetric):
             array = np.asarray(values, dtype=np.float64)
             output[f"{name}_acc@0.75"] = float((array >= 0.75).mean())
             output[f"{name}_miou"] = float(array.mean())
-            if encoder_ious[name] and len(encoder_ious[name]) != len(values):
+            if len(encoder_ious[name]) != len(values):
                 raise ValueError(
                     f"encoder query boxes missing for {name}: "
                     f"{len(encoder_ious[name])}/{len(values)} samples")
-            if encoder_ious[name]:
-                encoder_array = np.asarray(encoder_ious[name], dtype=np.float64)
-                output[f"{name}_encoder_oracle@0.5"] = float(
-                    (encoder_array >= 0.5).mean())
-                output[f"{name}_encoder_oracle@0.75"] = float(
-                    (encoder_array >= 0.75).mean())
-                output[f"{name}_encoder_max_iou"] = float(encoder_array.mean())
+            encoder_array = np.asarray(encoder_ious[name], dtype=np.float64)
+            output[f"{name}_encoder_oracle@0.5"] = float(
+                (encoder_array >= 0.5).mean())
+            output[f"{name}_encoder_oracle@0.75"] = float(
+                (encoder_array >= 0.75).mean())
+            output[f"{name}_encoder_max_iou"] = float(encoder_array.mean())
             populated.append(array)
         if populated:
             combined = np.concatenate(populated)

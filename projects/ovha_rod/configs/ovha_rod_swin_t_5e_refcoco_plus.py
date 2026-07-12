@@ -1,4 +1,5 @@
 _base_ = 'mmdet::mm_grounding_dino/refcoco/grounding_dino_swin-t_finetune_8xb4_5e_refcoco_plus.py'
+load_from = None
 
 custom_imports = dict(imports=['ovha_rod'], allow_failed_imports=False)
 
@@ -6,6 +7,7 @@ data_root = 'data/coco/'
 val_ann_file = 'mdetr_annotations/finetune_refcoco+_val.json'
 model = dict(
     type='OVHAGroundingDINO',
+    backbone=dict(init_cfg=None),
     seed_operator='rqgo',
     seed_operator_cfg=dict(
         seed_bias_cap=2.0, relation_scales=(0.05, 0.15, 0.30)),

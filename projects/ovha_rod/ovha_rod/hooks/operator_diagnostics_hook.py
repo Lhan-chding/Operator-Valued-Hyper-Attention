@@ -9,6 +9,8 @@ from mmengine.hooks import Hook
 
 from mmdet.registry import HOOKS
 
+from ..runtime_contracts import collect_scalar_diagnostics
+
 
 @HOOKS.register_module()
 class OperatorDiagnosticsHook(Hook):
@@ -53,32 +55,22 @@ class OperatorDiagnosticsHook(Hook):
             "seed_gradient_norm": float(
                 getattr(model, "_seed_grad_squared", 0.0) ** 0.5),
         }
-        row.update(_finite_scalars(getattr(model, "last_seed_diagnostics", {})))
-        row.update(_finite_scalars(
-            getattr(model.bbox_head, "last_seed_metrics", {})))
-        row.update(_finite_scalars(outputs or {}, prefix="loss/"))
+        nonfinite_keys = []
+        for values, prefix in (
+            (getattr(model, "last_seed_diagnostics", {}), ""),
+            (getattr(model.bbox_head, "last_seed_metrics", {}), ""),
+            (outputs or {}, "loss/"),
+        ):
+            finite, nonfinite = collect_scalar_diagnostics(values, prefix=prefix)
+            row.update(finite)
+            nonfinite_keys.extend(nonfinite)
+        row["nonfinite_scalar_count"] = len(nonfinite_keys)
+        row["nonfinite_scalar_keys"] = sorted(set(nonfinite_keys))
         path = Path(runner.work_dir) / self.filename
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(row, sort_keys=True) + "\n")
-
-
-def _finite_scalars(values, prefix: str = "") -> dict[str, float]:
-    result: dict[str, float] = {}
-    for key, value in values.items():
-        if isinstance(value, torch.Tensor) and value.numel() == 1:
-            number = float(value.detach().cpu())
-        elif isinstance(value, (float, int)):
-            number = float(value)
-        else:
-            continue
-        if math_isfinite(number):
-            result[f"{prefix}{key}"] = number
-    return result
-
-
-def math_isfinite(value: float) -> bool:
-    return value == value and value not in (float("inf"), float("-inf"))
+            stream.write(json.dumps(
+                row, sort_keys=True, allow_nan=False) + "\n")
 
 
 def _record_gradient(model, gradient: torch.Tensor) -> None:
