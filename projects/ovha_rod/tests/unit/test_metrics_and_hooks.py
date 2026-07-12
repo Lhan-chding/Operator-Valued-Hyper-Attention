@@ -47,6 +47,14 @@ class HookContractTests(unittest.TestCase):
                 self.assertTrue(path.exists(), path)
                 ast.parse(path.read_text())
 
+    def test_mmdetection_metric_is_registered_in_all_configs(self):
+        metric_path = ROOT / "ovha_rod/evaluation/ovha_refexp_metric.py"
+        self.assertTrue(metric_path.exists(), metric_path)
+        ast.parse(metric_path.read_text())
+        for config in sorted((ROOT / "configs").glob("*.py")):
+            with self.subTest(config=config):
+                self.assertIn("type='OVHARefExpMetric'", config.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
