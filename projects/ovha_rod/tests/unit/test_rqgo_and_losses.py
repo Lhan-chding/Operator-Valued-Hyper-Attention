@@ -109,6 +109,39 @@ class RQGOTests(unittest.TestCase):
         generic_count = sum(parameter.numel() for parameter in generic.parameters())
         self.assertLess(abs(generic_count - typed_count) / typed_count, 0.01)
 
+    def test_seed_operators_are_finite_under_autocast_backward(self):
+        memory, boxes, text, text_mask, memory_mask, spatial_shapes = self._inputs()
+        roles = LatentRoleEncoder(16, num_heads=4)(text, text_mask)
+        parent_score = torch.randn(2, 20)
+        targets = torch.rand(2, 20)
+        operators = (
+            (RQGO(d_model=16), (memory, boxes, roles, spatial_shapes, memory_mask)),
+            (
+                GenericDenseSeedPredictor(d_model=16, num_levels=2),
+                (memory, boxes, text.mean(dim=1),
+                 torch.tensor([0] * 16 + [1] * 4), memory_mask),
+            ),
+        )
+        for operator, inputs in operators:
+            with self.subTest(operator=type(operator).__name__):
+                with torch.autocast("cpu", dtype=torch.bfloat16):
+                    result = operator(*inputs)
+                    loss = quality_focal_seed_loss(
+                        parent_score.detach() + result.seed_bias,
+                        targets,
+                        result.valid,
+                    )
+                loss.backward()
+                gradients = [
+                    parameter.grad for parameter in operator.parameters()
+                    if parameter.grad is not None
+                ]
+                self.assertTrue(torch.isfinite(result.seed_bias).all())
+                self.assertTrue(torch.isfinite(loss))
+                self.assertTrue(gradients)
+                self.assertTrue(all(torch.isfinite(grad).all() for grad in gradients))
+                self.assertLessEqual(float(result.seed_bias.detach().abs().max()), 2.0)
+
 
 class SeedLossTests(unittest.TestCase):
     def test_iou_targets_are_bounded_and_stop_gradient(self):

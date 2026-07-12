@@ -89,6 +89,21 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertIn("validate_locked_checkpoint", smoke)
         self.assertIn("validate_local_bert", smoke)
         self.assertIn("prepare_fresh_private_work_dir", smoke)
+        self.assertIn("sys.path.insert", smoke)
+        self.assertLess(smoke.index("sys.path.insert"),
+                        smoke.index("from ovha_rod.runtime_contracts"))
+        self.assertIn('"train_dataloader.persistent_workers"', smoke)
+        self.assertIn('"optim_wrapper.accumulative_counts"', smoke)
+        self.assertIn('"custom_hooks.0.warmup_iters"', smoke)
+        self.assertIn("Phase 1 smoke requires an OVHA config", smoke)
+        self.assertGreaterEqual(smoke.count("require_selected_gpus_idle"), 3)
+        self.assertIn('os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"', smoke)
+        self.assertIn('os.environ["TRANSFORMERS_OFFLINE"] = "1"', smoke)
+        self.assertIn('config.train_dataloader.batch_size = 1', smoke)
+        self.assertIn('config.train_dataloader.num_workers = 0', smoke)
+        self.assertIn('config.train_dataloader.persistent_workers = False', smoke)
+        self.assertIn('config.optim_wrapper.type = "AmpOptimWrapper"', smoke)
+        self.assertIn("tokenizer root must equal the locked local BERT root", smoke)
 
     def test_server_runner_exports_cublas_before_launch_commands(self):
         runner = (ROOT / "scripts/run_phase1_server.sh").read_text()
@@ -98,8 +113,18 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertLess(runner.index(export), runner.index("COMMAND=("))
         self.assertIn("randomness.deterministic=True", runner)
         self.assertIn("CUDA_VISIBLE_DEVICES", runner)
+        self.assertIn("CUDA_DEVICE_ORDER", runner)
         self.assertIn("gpu_guard.py", runner)
         self.assertIn("prepare_work_dir.py", runner)
+        self.assertGreaterEqual(runner.count("gpu_guard.py"), 2)
+        self.assertIn("--master-port", runner)
+        self.assertIn("port_guard.py", runner)
+
+        documentation = (
+            (ROOT / "README.md").read_text()
+            + (ROOT / "RUNBOOK.md").read_text()
+        )
+        self.assertIn("CUDA_VISIBLE_DEVICES", documentation)
 
     def test_metric_requires_encoder_oracle_for_every_phase1_sample(self):
         source = (
@@ -108,6 +133,20 @@ class StaticIntegrationContractTests(unittest.TestCase):
             "if len(encoder_ious[name]) != len(values):", source)
         self.assertNotIn(
             "if encoder_ious[name] and len(encoder_ious[name])", source)
+        self.assertIn("non-finite prediction boxes", source)
+        self.assertIn("unexpected RefExp dataset_name", source)
+
+    def test_full_training_aborts_on_nonfinite_diagnostics(self):
+        source = (
+            ROOT / "ovha_rod/hooks/operator_diagnostics_hook.py").read_text()
+        raise_index = source.index("raise FloatingPointError")
+        interval_index = source.index("(runner.iter + 1) % self.interval")
+        self.assertLess(raise_index, interval_index)
+
+    def test_preflight_requires_complete_backbone_checkpoint(self):
+        source = (ROOT / "scripts/server_preflight.py").read_text()
+        self.assertIn("checkpoint_backbone_key_coverage", source)
+        self.assertIn("missing_backbone", source)
 
     def test_environment_is_pinned_to_a_commit(self):
         lock = (ROOT / "environment/mmdetection.lock").read_text()

@@ -47,6 +47,12 @@ class HookContractTests(unittest.TestCase):
                 self.assertTrue(path.exists(), path)
                 ast.parse(path.read_text())
 
+        diagnostics = (
+            ROOT / "ovha_rod/hooks/operator_diagnostics_hook.py").read_text()
+        self.assertIn("collect_scalar_diagnostics", diagnostics)
+        self.assertIn('row["nonfinite_scalar_count"]', diagnostics)
+        self.assertIn("allow_nan=False", diagnostics)
+
     def test_mmdetection_metric_is_registered_in_all_configs(self):
         metric_path = ROOT / "ovha_rod/evaluation/ovha_refexp_metric.py"
         self.assertTrue(metric_path.exists(), metric_path)
