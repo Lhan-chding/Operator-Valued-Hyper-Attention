@@ -37,6 +37,7 @@ class StaticIntegrationContractTests(unittest.TestCase):
             ROOT / "configs/ovha_rod_swin_t_5e_refcocog.py",
             ROOT / "scripts/server_preflight.py",
             ROOT / "scripts/run_phase1_server.sh",
+            ROOT / "scripts/two_batch_smoke.py",
             ROOT / "README.md",
             ROOT / "environment/mmdetection.lock",
         ]
