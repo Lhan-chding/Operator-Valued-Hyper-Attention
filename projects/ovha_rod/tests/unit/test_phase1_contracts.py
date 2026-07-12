@@ -72,6 +72,18 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertNotIn(
             "from mmdet.structures import InstanceList", source)
 
+    def test_deterministic_gpu_entrypoints_pin_cublas_workspace(self):
+        smoke = (ROOT / "scripts/two_batch_smoke.py").read_text()
+        assignment = (
+            'os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"')
+        self.assertIn(assignment, smoke)
+        self.assertLess(smoke.index(assignment), smoke.index("from mmengine.runner"))
+
+        runner = (ROOT / "scripts/run_phase1_server.sh").read_text()
+        self.assertIn(
+            'export CUBLAS_WORKSPACE_CONFIG=":4096:8"', runner)
+        self.assertIn("randomness.deterministic=True", runner)
+
     def test_environment_is_pinned_to_a_commit(self):
         lock = (ROOT / "environment/mmdetection.lock").read_text()
         self.assertIn("cfd5d3a985b0249de009b67d04f37263e11cdf3d", lock)
