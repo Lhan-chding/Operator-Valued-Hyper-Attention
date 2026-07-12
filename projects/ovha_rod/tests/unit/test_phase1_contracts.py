@@ -147,6 +147,7 @@ class StaticIntegrationContractTests(unittest.TestCase):
         source = (ROOT / "scripts/server_preflight.py").read_text()
         self.assertIn("checkpoint_backbone_key_coverage", source)
         self.assertIn("missing_backbone", source)
+        self.assertIn("pre_decoder_none_memory_mask", source)
 
     def test_environment_is_pinned_to_a_commit(self):
         lock = (ROOT / "environment/mmdetection.lock").read_text()
