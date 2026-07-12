@@ -166,6 +166,7 @@ class StaticIntegrationContractTests(unittest.TestCase):
                     "model=dict(backbone=dict(init_cfg=None))",
                     source.replace(" ", ""),
                 )
+                self.assertIn("OperatorDiagnosticsHook", source)
 
 
 if __name__ == "__main__":
