@@ -122,9 +122,33 @@ def _gaussian_blur_axis(values: Tensor, scale: float, axis: int) -> Tensor:
 
 
 def _mass_strictly_before(values: Tensor, dim: int) -> Tensor:
-    return (values.cumsum(dim=dim) - values).clamp_min(0.0)
+    return _strict_triangular_mass(values, dim=dim, after=False)
 
 
 def _mass_strictly_after(values: Tensor, dim: int) -> Tensor:
-    reversed_values = values.flip((dim,))
-    return (reversed_values.cumsum(dim=dim) - reversed_values).flip((dim,)).clamp_min(0.0)
+    return _strict_triangular_mass(values, dim=dim, after=True)
+
+
+def _strict_triangular_mass(values: Tensor, dim: int, *, after: bool) -> Tensor:
+    """Sum values strictly before or after each position without CUDA cumsum.
+
+    CUDA cumsum has no deterministic implementation in the locked Torch 2.1
+    runtime.  Moving one spatial axis at a time keeps the triangular operator
+    bounded by the feature-map width or height rather than the full token count.
+    """
+    moved = values.movedim(dim, -1)
+    extent = moved.shape[-1]
+    compute_dtype = (
+        torch.float32
+        if moved.dtype in (torch.float16, torch.bfloat16)
+        else moved.dtype
+    )
+    weight = torch.ones(
+        (extent, extent), dtype=compute_dtype, device=moved.device)
+    weight = (
+        torch.tril(weight, diagonal=-1)
+        if after
+        else torch.triu(weight, diagonal=1)
+    )
+    mass = moved.to(dtype=compute_dtype) @ weight
+    return mass.movedim(-1, dim).clamp_min(0.0).to(dtype=values.dtype)
