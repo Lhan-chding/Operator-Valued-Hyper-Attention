@@ -1,17 +1,29 @@
-# OVHA-ROD Phase 0/1 reproducibility lock.
+# OVHA-ROD Phase 0/1 CUDA 12.1 compatibility lock.
+# Torch 2.1 is allowed only with the exact private official checkpoint below.
 # Values in this file are consumed as an audit contract, not as shell code.
 format_version=1
+profile=cu121-wheel
 mmdetection_repository=https://github.com/open-mmlab/mmdetection.git
 mmdetection_commit=cfd5d3a985b0249de009b67d04f37263e11cdf3d
 mmdetection_tree=e389bc213f4772c481a0b5f81f0d1786c0b79e66
 mmdetection_install=editable
 mmcv_version=2.1.0
+mmcv_install=official-prebuilt-wheel
+mmcv_wheel_url=https://download.openmmlab.com/mmcv/dist/cu121/torch2.1.0/mmcv-2.1.0-cp310-cp310-manylinux1_x86_64.whl
+mmcv_wheel_sha256=a95a64e12fa88c568d4384e6d5f42230e9e407e2b052f0b8da2ef859dc079b53
 mmengine_version=0.10.3
-torch_version=2.6.0
-torchvision_version=0.21.0
-default_cuda_wheel=cu124
+torch_version=2.1.0
+torchvision_version=0.16.0
+torch_cuda_runtime=12.1
+default_cuda_wheel=cu121
 transformers_version=4.36.2
 bert_model=bert-base-uncased
+bert_repository=google-bert/bert-base-uncased
+bert_revision=86b5e0934494bd15c9632b12f734a8a67f723594
+bert_weights_format=safetensors-only
+bert_safetensors_sha256=68d45e234eb4a928074dfd868cead0219ab85354cc53d20e772753c6bb9169d3
+bert_safetensors_size_bytes=440449768
+checkpoint_policy=official-sha256-private-file-only
 checkpoint_url=https://download.openmmlab.com/mmdetection/v3.0/mm_grounding_dino/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det_20231204_095047-b448804b.pth
 checkpoint_sha256=b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a
 checkpoint_size_bytes=1093815743

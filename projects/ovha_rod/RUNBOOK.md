@@ -16,7 +16,7 @@ is not the same-schedule causal control.
 ## 2. Required server state
 
 - Linux server with NVIDIA CUDA and enough memory for MM-Grounding-DINO Swin-T.
-- Python 3.9, 3.10, or 3.11.
+- Python 3.10 on Linux x86_64 for the exact prebuilt MMCV wheel.
 - Git and network access during setup.
 - COCO `train2014/` images.
 - MDETR-style training and validation annotations for the selected dataset.
@@ -38,25 +38,49 @@ names checked by `server_preflight.py`.
 
 ## 3. Create the locked environment
 
-The default setup targets PyTorch 2.6.0 with CUDA 12.4, the first patched
-release for CVE-2025-32434. If the server requires CUDA 11.8 or 12.6, pass the
-matching allowlisted official PyTorch wheel index while keeping the locked
-PyTorch/torchvision versions fixed. Do not downgrade below 2.6.0.
+The selected `cu121-wheel` compatibility profile pins PyTorch 2.1.0,
+torchvision 0.16.0, and the exact official MMCV 2.1.0 cp310 Linux x86_64 wheel.
+It downloads CUDA 12.1 runtime wheels into a user venv; it does not invoke
+`nvcc`, install a CUDA toolkit, change the NVIDIA driver, or use a GPU during
+setup. The MMCV URL and SHA-256 are version controlled, and binary-only
+installation fails closed instead of falling back to a source build.
+
+This profile is a compatibility exception, not the general security baseline:
+PyTorch 2.1.0 predates the patched checkpoint loader. Never load an unknown
+`.pth`. The only allowed initial checkpoint is the exact OpenMMLab artifact
+whose byte size and SHA-256 are locked in `environment/mmdetection.lock`.
 
 ```bash
-cd /path/to/Operator-Valued-Hyper-Attention/projects/ovha_rod
+PRIVATE_ROOT="$HOME/.local/share/ovha-rod"
+umask 077
+install -d -m 700 "$PRIVATE_ROOT"
+git clone --depth 1 --single-branch \
+  --branch codex/ovha-rod-implementation \
+  https://github.com/Lhan-chding/Operator-Valued-Hyper-Attention.git \
+  "$PRIVATE_ROOT/project"
+cd "$PRIVATE_ROOT/project/projects/ovha_rod"
 
 bash scripts/setup_mmdetection.sh \
-  --venv /srv/envs/ovha-rod \
-  --mmdet-dir /srv/src/mmdetection-cfd5d3a
+  --venv "$PRIVATE_ROOT/env-cu121" \
+  --mmdet-dir "$PRIVATE_ROOT/mmdetection" \
+  --python /usr/bin/python3
 
-source /srv/envs/ovha-rod/bin/activate
-export PYTHONPATH="$PWD:/srv/src/mmdetection-cfd5d3a${PYTHONPATH:+:$PYTHONPATH}"
+source "$PRIVATE_ROOT/env-cu121/bin/activate"
+export PYTHONPATH="$PWD:$PRIVATE_ROOT/mmdetection${PYTHONPATH:+:$PYTHONPATH}"
+chmod -R go-w "$PRIVATE_ROOT/project" "$PRIVATE_ROOT/mmdetection"
+DATA_ROOT="$HOME/work/Operator-Valued-Hyper-Attention/data/raw_public/multimodal/COCO2014"
+BERT_ROOT="$PRIVATE_ROOT/bert-base-uncased"
+CHECKPOINT="$PRIVATE_ROOT/inputs/checkpoints/mm_grounding_dino_swin_t.pth"
 ```
 
-The setup script refuses a non-Git destination, verifies the official origin,
-checks out the exact locked commit, installs it editable, and verifies the
-compiled deformable-attention import.
+The setup script refuses any existing or symlinked venv, refuses a non-Git or
+symlinked MMDetection destination, verifies the official origin, checks out the
+exact locked commit, installs it editable, and verifies the prebuilt
+deformable-attention import plus the CUDA 12.1 runtime. It also writes a
+mode-600 environment manifest inside the venv.
+
+Unverified resume is intentionally disabled for this older-Torch compatibility
+profile. Start each preregistered run in a new private work directory.
 
 ## 4. Download immutable model inputs
 
@@ -66,27 +90,59 @@ stable local paths. Verify the checkpoint against the version-controlled
 digest:
 
 ```bash
-sha256sum /srv/checkpoints/mm_grounding_dino_swin_t.pth
-grep checkpoint_sha256 environment/mmdetection.lock
+PRIVATE_ROOT="$HOME/.local/share/ovha-rod"
+INPUT_DIR="$PRIVATE_ROOT/inputs/checkpoints"
+CHECKPOINT="$INPUT_DIR/mm_grounding_dino_swin_t.pth"
+CHECKPOINT_URL="https://download.openmmlab.com/mmdetection/v3.0/mm_grounding_dino/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det_20231204_095047-b448804b.pth"
+EXPECTED_SHA="b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a"
+install -d -m 700 "$INPUT_DIR"
+curl -fL --retry 5 -o "$CHECKPOINT.partial" "$CHECKPOINT_URL"
+test "$(stat -c %s "$CHECKPOINT.partial")" = "1093815743"
+echo "$EXPECTED_SHA  $CHECKPOINT.partial" | sha256sum -c -
+chmod 400 "$CHECKPOINT.partial"
+mv "$CHECKPOINT.partial" "$CHECKPOINT"
 ```
 
-The values must match exactly, and passing the locked digest to preflight and
-training is mandatory. Python configs and PyTorch checkpoints are executable
-trust-boundary inputs: use only the reviewed project configs and official
-checkpoint, never an untrusted file. Perform the first load in a
-least-privilege environment without secrets or host-sensitive mounts.
+Use the pinned safetensors BERT snapshot. `pytorch_model.bin` is prohibited in
+this profile because it would cross the older-Torch pickle boundary:
+
+```bash
+BERT_ROOT="$PRIVATE_ROOT/bert-base-uncased"
+BERT_REVISION="86b5e0934494bd15c9632b12f734a8a67f723594"
+BERT_BASE="https://huggingface.co/google-bert/bert-base-uncased/resolve/$BERT_REVISION"
+install -d -m 700 "$BERT_ROOT"
+for name in config.json tokenizer_config.json tokenizer.json vocab.txt; do
+  curl -fL --retry 5 -o "$BERT_ROOT/$name" "$BERT_BASE/$name"
+  chmod 400 "$BERT_ROOT/$name"
+done
+curl -fL --retry 5 -o "$BERT_ROOT/model.safetensors.partial" \
+  "$BERT_BASE/model.safetensors"
+test "$(stat -c %s "$BERT_ROOT/model.safetensors.partial")" = "440449768"
+echo "68d45e234eb4a928074dfd868cead0219ab85354cc53d20e772753c6bb9169d3  $BERT_ROOT/model.safetensors.partial" | sha256sum -c -
+chmod 400 "$BERT_ROOT/model.safetensors.partial"
+mv "$BERT_ROOT/model.safetensors.partial" "$BERT_ROOT/model.safetensors"
+test ! -e "$BERT_ROOT/pytorch_model.bin"
+```
+
+The size and digest must match exactly, the file must be user-owned with no
+group/other permissions or symlinked path component, and passing the locked
+digest to preflight and training is mandatory. Python configs and PyTorch
+checkpoints are executable trust-boundary inputs: use only the reviewed project
+configs and official checkpoint, never an untrusted file. Perform the first
+load in a least-privilege environment without secrets or host-sensitive mounts.
 
 ## 5. Run fail-fast preflight
 
 ```bash
 python scripts/server_preflight.py \
   --dataset refcoco \
-  --mmdet-root /srv/src/mmdetection-cfd5d3a \
-  --data-root /srv/data/coco \
-  --checkpoint /srv/checkpoints/mm_grounding_dino_swin_t.pth \
+  --mmdet-root "$PRIVATE_ROOT/mmdetection" \
+  --data-root "$DATA_ROOT" \
+  --checkpoint "$CHECKPOINT" \
   --checkpoint-sha256 b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a \
-  --bert-root /srv/models/bert-base-uncased \
-  --output /srv/runs/ovha_rod/refcoco/preflight.json
+  --bert-root "$BERT_ROOT" \
+  --work-root "$PRIVATE_ROOT/runs" \
+  --output "$PRIVATE_ROOT/runs/refcoco/preflight.json"
 ```
 
 Exit code `0` is mandatory. The report checks:
@@ -106,11 +162,12 @@ Exit code `0` is mandatory. The report checks:
 bash scripts/run_phase1_server.sh \
   --dataset refcoco \
   --variant all \
-  --mmdet-root /srv/src/mmdetection-cfd5d3a \
-  --data-root /srv/data/coco \
-  --checkpoint /srv/checkpoints/mm_grounding_dino_swin_t.pth \
+  --mmdet-root "$PRIVATE_ROOT/mmdetection" \
+  --data-root "$DATA_ROOT" \
+  --checkpoint "$CHECKPOINT" \
   --checkpoint-sha256 b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a \
-  --bert-root /srv/models/bert-base-uncased \
+  --bert-root "$BERT_ROOT" \
+  --work-root "$PRIVATE_ROOT/runs" \
   --gpus 8 \
   --dry-run
 ```
@@ -126,12 +183,12 @@ iteration-based learning-rate and seed-loss warmups so that both still cover
 bash scripts/run_phase1_server.sh \
   --dataset refcoco \
   --variant all \
-  --mmdet-root /srv/src/mmdetection-cfd5d3a \
-  --data-root /srv/data/coco \
-  --checkpoint /srv/checkpoints/mm_grounding_dino_swin_t.pth \
+  --mmdet-root "$PRIVATE_ROOT/mmdetection" \
+  --data-root "$DATA_ROOT" \
+  --checkpoint "$CHECKPOINT" \
   --checkpoint-sha256 b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a \
-  --bert-root /srv/models/bert-base-uncased \
-  --work-root /srv/runs/ovha_rod \
+  --bert-root "$BERT_ROOT" \
+  --work-root "$PRIVATE_ROOT/runs" \
   --gpus 8 \
   --per-device-batch 4 \
   --seed 2026
@@ -151,13 +208,13 @@ overrides for each dataset):
 
 ```bash
 python scripts/two_batch_smoke.py configs/ovha_rod_swin_t_5e_refcoco.py \
-  --work-dir /srv/runs/ovha_rod/refcoco/rqgo-smoke \
+  --work-dir "$PRIVATE_ROOT/runs/refcoco/rqgo-smoke" \
   --cfg-options \
     model.seed_operator=rqgo \
-    load_from=/srv/checkpoints/mm_grounding_dino_swin_t.pth \
-    model.language_model.name=/srv/models/bert-base-uncased \
-    train_dataloader.dataset.data_root=/srv/data/coco \
-    train_dataloader.dataset.pipeline.5.tokenizer_name=/srv/models/bert-base-uncased
+    load_from="$CHECKPOINT" \
+    model.language_model.name="$BERT_ROOT" \
+    train_dataloader.dataset.data_root="$DATA_ROOT" \
+    train_dataloader.dataset.pipeline.5.tokenizer_name="$BERT_ROOT"
 ```
 
 Then inspect the two batches:

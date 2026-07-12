@@ -1,6 +1,5 @@
 # CUDA-specific torch, torchvision, and mmcv are installed by setup_mmdetection.sh.
 mmengine==0.10.3
-openmim==0.3.9
 transformers==4.36.2
 tokenizers==0.15.2
 fairscale==0.4.13

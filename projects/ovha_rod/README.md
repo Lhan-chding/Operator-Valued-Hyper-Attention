@@ -31,8 +31,12 @@ RUNBOOK.md               server procedure and acceptance checklist
 - Main protocol: five epochs, validation-only model selection, global batch 32,
   500 optimizer-step learning-rate and seed-loss warmup, AdamW, AMP, and no
   separate freeze stage
-- Security baseline: PyTorch 2.6.0 patched line; load only the locked official
-  checkpoint after its version-controlled SHA-256 matches exactly
+- Compatibility profile: `cu121-wheel`, using Python 3.10, PyTorch 2.1.0,
+  torchvision 0.16.0, and the SHA-256-pinned official prebuilt MMCV 2.1.0
+  wheel; it neither invokes `nvcc` nor changes the host CUDA toolkit
+- Security exception: PyTorch 2.1.0 is an older compatibility release, so only
+  the exact user-private official checkpoint may be loaded after its locked
+  byte size and SHA-256 match; unknown `.pth` files are prohibited
 
 The three configs inherit the official dataset-specific 5e recipes and replace
 their evaluation surface with validation only. Held-out evaluation is not part
@@ -85,20 +89,36 @@ bash scripts/run_phase1_server.sh --help
 See [RUNBOOK.md](RUNBOOK.md). The short path is:
 
 ```bash
-bash scripts/setup_mmdetection.sh \
-  --venv /srv/envs/ovha-rod \
-  --mmdet-dir /srv/src/mmdetection-cfd5d3a
+PRIVATE_ROOT="$HOME/.local/share/ovha-rod"
+umask 077
+install -d -m 700 "$PRIVATE_ROOT"
+git clone --depth 1 --single-branch \
+  --branch codex/ovha-rod-implementation \
+  https://github.com/Lhan-chding/Operator-Valued-Hyper-Attention.git \
+  "$PRIVATE_ROOT/project"
+cd "$PRIVATE_ROOT/project/projects/ovha_rod"
 
-source /srv/envs/ovha-rod/bin/activate
+bash scripts/setup_mmdetection.sh \
+  --venv "$PRIVATE_ROOT/env-cu121" \
+  --mmdet-dir "$PRIVATE_ROOT/mmdetection" \
+  --python /usr/bin/python3
+
+source "$PRIVATE_ROOT/env-cu121/bin/activate"
+
+DATA_ROOT="$HOME/work/Operator-Valued-Hyper-Attention/data/raw_public/multimodal/COCO2014"
+BERT_ROOT="$PRIVATE_ROOT/bert-base-uncased"
+CHECKPOINT="$PRIVATE_ROOT/inputs/checkpoints/mm_grounding_dino_swin_t.pth"
+WORK_ROOT="$PRIVATE_ROOT/runs"
 
 bash scripts/run_phase1_server.sh \
   --dataset refcoco \
   --variant all \
-  --mmdet-root /srv/src/mmdetection-cfd5d3a \
-  --data-root /srv/data/coco \
-  --checkpoint /srv/checkpoints/mm_grounding_dino_swin_t.pth \
+  --mmdet-root "$PRIVATE_ROOT/mmdetection" \
+  --data-root "$DATA_ROOT" \
+  --checkpoint "$CHECKPOINT" \
   --checkpoint-sha256 b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a \
-  --bert-root /srv/models/bert-base-uncased \
+  --bert-root "$BERT_ROOT" \
+  --work-root "$WORK_ROOT" \
   --gpus 8
 ```
 
@@ -107,13 +127,13 @@ the same `--cfg-options` printed by the runner:
 
 ```bash
 python scripts/two_batch_smoke.py configs/ovha_rod_swin_t_5e_refcoco.py \
-  --work-dir /srv/runs/ovha_rod/refcoco/rqgo-smoke \
+  --work-dir "$WORK_ROOT/refcoco/rqgo-smoke" \
   --cfg-options \
     model.seed_operator=rqgo \
-    load_from=/srv/checkpoints/mm_grounding_dino_swin_t.pth \
-    model.language_model.name=/srv/models/bert-base-uncased \
-    train_dataloader.dataset.data_root=/srv/data/coco \
-    train_dataloader.dataset.pipeline.5.tokenizer_name=/srv/models/bert-base-uncased
+    load_from="$CHECKPOINT" \
+    model.language_model.name="$BERT_ROOT" \
+    train_dataloader.dataset.data_root="$DATA_ROOT" \
+    train_dataloader.dataset.pipeline.5.tokenizer_name="$BERT_ROOT"
 ```
 
 Do not proceed to TQ-CATO, Q-SRO, or MS-TLEO until the RQGO gate in the

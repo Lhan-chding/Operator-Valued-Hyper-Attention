@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -19,7 +20,7 @@ SEED=2026
 PYTHON_BIN="python"
 CHECKPOINT_SHA256=""
 LOCKED_CHECKPOINT_SHA256="b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a"
-RESUME=false
+LOCKED_CHECKPOINT_SIZE=1093815743
 USE_AMP=true
 DRY_RUN=false
 
@@ -43,7 +44,6 @@ usage() {
     "  --seed N                Run seed (default: 2026)" \
     "  --python PATH           Python in the locked environment" \
     "  --checkpoint-sha256 HEX Required trusted checkpoint digest" \
-    "  --resume                Resume the selected work directory" \
     "  --no-amp                Disable AMP" \
     "  --dry-run               Validate arguments and print commands only" \
     "  -h, --help              Show this help" \
@@ -72,7 +72,6 @@ while [[ $# -gt 0 ]]; do
     --seed) require_value "$1" "$#"; SEED="$2"; shift 2 ;;
     --python) require_value "$1" "$#"; PYTHON_BIN="$2"; shift 2 ;;
     --checkpoint-sha256) require_value "$1" "$#"; CHECKPOINT_SHA256="$2"; shift 2 ;;
-    --resume) RESUME=true; shift ;;
     --no-amp) USE_AMP=false; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -104,6 +103,63 @@ NORMALIZED_CHECKPOINT_SHA256="$(printf '%s' "${CHECKPOINT_SHA256}" | tr '[:upper
 if [[ "${NORMALIZED_CHECKPOINT_SHA256}" != "${LOCKED_CHECKPOINT_SHA256}" ]]; then
   printf 'checkpoint SHA-256 does not match the locked official artifact\n' >&2
   exit 2
+fi
+TRAIN_CHECKPOINT="${CHECKPOINT}"
+if [[ "${DRY_RUN}" == false ]]; then
+  [[ -f "${CHECKPOINT}" && ! -L "${CHECKPOINT}" ]] || {
+    printf 'checkpoint must be a regular non-symlink file: %s\n' "${CHECKPOINT}" >&2
+    exit 2
+  }
+  [[ -n "${HOME:-}" && -d "${HOME}" && ! -L "${HOME}" ]] || {
+    printf 'HOME must be a real user-owned directory\n' >&2
+    exit 2
+  }
+  PRIVATE_ROOT="${HOME}/.local/share/ovha-rod"
+  PRIVATE_INPUT_DIR="${PRIVATE_ROOT}/trusted_inputs"
+  install -d -m 700 "${PRIVATE_ROOT}" "${PRIVATE_INPUT_DIR}"
+  for private_dir in \
+      "${HOME}" "${HOME}/.local" "${HOME}/.local/share" \
+      "${PRIVATE_ROOT}" "${PRIVATE_INPUT_DIR}"; do
+    [[ -d "${private_dir}" && ! -L "${private_dir}" ]] || {
+      printf 'private input parent is missing or symlinked: %s\n' "${private_dir}" >&2
+      exit 2
+    }
+    OWNER_ID="$(stat -c %u "${private_dir}")"
+    DIR_MODE="$(stat -c %a "${private_dir}")"
+    if [[ "${OWNER_ID}" != "$(id -u)" ]] || (( (8#${DIR_MODE} & 022) != 0 )); then
+      printf 'private input parent is not user-owned/private: %s mode=%s\n' \
+        "${private_dir}" "${DIR_MODE}" >&2
+      exit 2
+    fi
+  done
+  TRAIN_CHECKPOINT="${PRIVATE_INPUT_DIR}/mm_grounding_dino_swin_t-b448804b.pth"
+  if [[ ! -e "${TRAIN_CHECKPOINT}" ]]; then
+    TEMP_CHECKPOINT="$(mktemp "${PRIVATE_INPUT_DIR}/.checkpoint.XXXXXX")"
+    cp --reflink=auto -- "${CHECKPOINT}" "${TEMP_CHECKPOINT}"
+    OBSERVED_SIZE="$(stat -c %s "${TEMP_CHECKPOINT}")"
+    OBSERVED_SHA256="$(sha256sum "${TEMP_CHECKPOINT}" | awk '{print $1}')"
+    [[ "${OBSERVED_SIZE}" == "${LOCKED_CHECKPOINT_SIZE}" && \
+       "${OBSERVED_SHA256}" == "${LOCKED_CHECKPOINT_SHA256}" ]] || {
+      printf 'copied checkpoint does not match locked size/SHA-256\n' >&2
+      rm -f -- "${TEMP_CHECKPOINT}"
+      exit 2
+    }
+    chmod 400 "${TEMP_CHECKPOINT}"
+    mv -- "${TEMP_CHECKPOINT}" "${TRAIN_CHECKPOINT}"
+  fi
+  [[ -f "${TRAIN_CHECKPOINT}" && ! -L "${TRAIN_CHECKPOINT}" ]] || {
+    printf 'trusted checkpoint copy is invalid\n' >&2
+    exit 2
+  }
+  OBSERVED_SIZE="$(stat -c %s "${TRAIN_CHECKPOINT}")"
+  OBSERVED_SHA256="$(sha256sum "${TRAIN_CHECKPOINT}" | awk '{print $1}')"
+  FILE_MODE="$(stat -c %a "${TRAIN_CHECKPOINT}")"
+  [[ "${OBSERVED_SIZE}" == "${LOCKED_CHECKPOINT_SIZE}" && \
+     "${OBSERVED_SHA256}" == "${LOCKED_CHECKPOINT_SHA256}" && \
+     "${FILE_MODE}" == "400" ]] || {
+    printf 'trusted checkpoint copy failed final integrity/permission check\n' >&2
+    exit 2
+  }
 fi
 PYTHON_RESOLVED="$(command -v "${PYTHON_BIN}")" || {
   printf 'Python executable not found: %s\n' "${PYTHON_BIN}" >&2
@@ -163,7 +219,7 @@ if [[ "${DRY_RUN}" == false ]]; then
     --dataset "${DATASET}"
     --mmdet-root "${MMDET_ROOT}"
     --data-root "${DATA_ROOT}"
-    --checkpoint "${CHECKPOINT}"
+    --checkpoint "${TRAIN_CHECKPOINT}"
     --bert-root "${BERT_ROOT}"
     --work-root "${WORK_ROOT}"
     --output "${PREFLIGHT_DIR}/preflight.json"
@@ -184,7 +240,7 @@ for run_variant in "${VARIANTS[@]}"; do
     CFG_OPTIONS=("${VARIANT_OPTIONS[@]}")
   fi
   CFG_OPTIONS+=(
-    "load_from=${CHECKPOINT}"
+    "load_from=${TRAIN_CHECKPOINT}"
     "model.language_model.name=${BERT_ROOT}"
     "train_dataloader.batch_size=${PER_DEVICE_BATCH}"
     "train_dataloader.dataset.data_root=${DATA_ROOT}"
@@ -209,10 +265,6 @@ for run_variant in "${VARIANTS[@]}"; do
     --work-dir "${WORK_DIR}"
     --cfg-options "${CFG_OPTIONS[@]}"
   )
-  if [[ "${RESUME}" == true ]]; then
-    COMMAND+=(--resume)
-  fi
-
   printf 'Variant %s, effective global batch %d, accumulation %d, warmup iterations %d\n' \
     "${run_variant}" "${TARGET_GLOBAL_BATCH}" "${ACCUMULATIVE_COUNTS}" "${WARMUP_ITERS}"
   printf 'Command:'
@@ -220,6 +272,11 @@ for run_variant in "${VARIANTS[@]}"; do
   printf '\n'
 
   if [[ "${DRY_RUN}" == false ]]; then
+    CURRENT_CHECKPOINT_SHA256="$(sha256sum "${TRAIN_CHECKPOINT}" | awk '{print $1}')"
+    [[ "${CURRENT_CHECKPOINT_SHA256}" == "${LOCKED_CHECKPOINT_SHA256}" ]] || {
+      printf 'trusted checkpoint changed before variant launch\n' >&2
+      exit 2
+    }
     mkdir -p "${WORK_DIR}"
     if [[ -L "${WORK_DIR}/command.txt" ]]; then
       printf 'refusing symlink command log: %s\n' "${WORK_DIR}/command.txt" >&2

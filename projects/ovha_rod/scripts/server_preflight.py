@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 import hashlib
 import importlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -18,9 +19,15 @@ EXPECTED_MMDET_COMMIT = "cfd5d3a985b0249de009b67d04f37263e11cdf3d"
 EXPECTED_MMDET_TREE = "e389bc213f4772c481a0b5f81f0d1786c0b79e66"
 EXPECTED_CHECKPOINT_SHA256 = (
     "b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a")
+EXPECTED_CHECKPOINT_SIZE = 1093815743
+ENVIRONMENT_PROFILE = "cu121-wheel"
+EXPECTED_TORCH_CUDA = "12.1"
+EXPECTED_BERT_SAFETENSORS_SHA256 = (
+    "68d45e234eb4a928074dfd868cead0219ab85354cc53d20e772753c6bb9169d3")
+EXPECTED_BERT_SAFETENSORS_SIZE = 440449768
 EXPECTED_VERSIONS = {
-    "torch": "2.6.0",
-    "torchvision": "0.21.0",
+    "torch": "2.1.0",
+    "torchvision": "0.16.0",
     "mmcv": "2.1.0",
     "mmengine": "0.10.3",
     "transformers": "4.36.2",
@@ -89,6 +96,7 @@ def main() -> int:
     payload = {
         "ok": all(check.ok for check in checks),
         "contract": "ovha_rod_phase1_server_preflight_v1",
+        "environment_profile": ENVIRONMENT_PROFILE,
         "dataset": args.dataset,
         "expected_mmdetection_commit": EXPECTED_MMDET_COMMIT,
         "checks": [asdict(check) for check in checks],
@@ -111,23 +119,37 @@ def run_checks(args: argparse.Namespace) -> tuple[CheckResult, ...]:
     project_root = Path(__file__).resolve().parents[1]
     mmdet_root = args.mmdet_root.expanduser().resolve()
     data_root = args.data_root.expanduser().resolve()
-    checkpoint = args.checkpoint.expanduser().resolve()
-    bert_root = args.bert_root.expanduser().resolve()
+    checkpoint_input = args.checkpoint.expanduser()
+    try:
+        checkpoint = _resolve_trusted_checkpoint(checkpoint_input)
+    except ValueError:
+        checkpoint = Path(os.path.abspath(checkpoint_input))
+    bert_root = args.bert_root.expanduser()
 
     checks: list[CheckResult] = []
     checks.extend(_python_checks())
-    checkpoint_checks = _checkpoint_checks(checkpoint, args.checkpoint_sha256)
+    trust_checks = (
+        *_mmdet_checks(mmdet_root),
+        *_project_source_checks(project_root),
+    )
+    checks.extend(trust_checks)
+    if not all(check.ok for check in trust_checks):
+        return tuple(checks)
+    checkpoint_checks = _checkpoint_checks(
+        checkpoint_input, args.checkpoint_sha256)
     checkpoint_trusted = all(check.ok for check in checkpoint_checks)
     checks.extend(_package_checks(mmdet_root))
-    checks.extend(_mmdet_checks(mmdet_root))
     checks.extend(checkpoint_checks)
+    bert_checks = _bert_checks(bert_root)
+    checks.extend(bert_checks)
+    checks.extend(_data_checks(data_root, args.dataset))
+    checks.extend(_storage_checks(args.work_root, args.min_free_gb))
+    if not checkpoint_trusted or not all(check.ok for check in bert_checks):
+        return tuple(checks)
     checks.extend(_project_checks(
         project_root, args.dataset, data_root, bert_root,
         checkpoint, checkpoint_trusted))
-    checks.extend(_data_checks(data_root, args.dataset))
-    checks.extend(_bert_checks(bert_root))
     checks.extend(_cuda_checks())
-    checks.extend(_storage_checks(args.work_root, args.min_free_gb))
     return tuple(checks)
 
 
@@ -157,12 +179,12 @@ def _storage_checks(work_root: Path, min_free_gb: float) -> tuple[CheckResult, .
 
 def _python_checks() -> tuple[CheckResult, ...]:
     version = sys.version_info
-    supported = (3, 9) <= version[:2] <= (3, 11)
+    supported = version[:2] == (3, 10)
     return (
         CheckResult(
             "python_version",
             supported,
-            "Python 3.9--3.11 is required by the locked stack.",
+            "Python 3.10 is required by the cp310 cu121-wheel profile.",
             ".".join(str(part) for part in version[:3]),
         ),
     )
@@ -194,15 +216,38 @@ def _package_checks(mmdet_root: Path) -> tuple[CheckResult, ...]:
                 str(imported_path),
             ))
     try:
-        from mmcv.ops import MultiScaleDeformableAttention  # noqa: F401
+        from mmcv.ops import (MultiScaleDeformableAttention,  # noqa: F401
+                              get_compiling_cuda_version)
     except Exception as exc:  # pragma: no cover - server-specific extension
         checks.append(CheckResult("mmcv_deformable_ops", False, str(exc)))
     else:
         checks.append(CheckResult("mmcv_deformable_ops", True, "compiled MMCV op imports"))
+        compiled_cuda = str(get_compiling_cuda_version())
+        checks.append(CheckResult(
+            "mmcv_compiled_cuda",
+            ".".join(compiled_cuda.split(".")[:2]) == EXPECTED_TORCH_CUDA,
+            "MMCV must be the official CUDA 12.1 binary wheel",
+            compiled_cuda,
+        ))
+    try:
+        import torch
+        torch_cuda = str(torch.version.cuda)
+    except Exception as exc:  # pragma: no cover - server-specific import
+        checks.append(CheckResult("torch_cuda_runtime", False, str(exc)))
+    else:
+        checks.append(CheckResult(
+            "torch_cuda_runtime",
+            torch_cuda == EXPECTED_TORCH_CUDA,
+            "PyTorch must use the locked CUDA 12.1 runtime",
+            torch_cuda,
+        ))
     return tuple(checks)
 
 
 def _mmdet_checks(mmdet_root: Path) -> tuple[CheckResult, ...]:
+    trust = _executable_tree_check(mmdet_root, "mmdetection_source_private")
+    if not trust.ok:
+        return (trust,)
     if not (mmdet_root / ".git").is_dir():
         return (CheckResult("mmdetection_checkout", False, "missing Git checkout", str(mmdet_root)),)
     commit = _git_output(mmdet_root, "rev-parse", "HEAD")
@@ -213,7 +258,7 @@ def _mmdet_checks(mmdet_root: Path) -> tuple[CheckResult, ...]:
         "https://github.com/open-mmlab/mmdetection.git",
         "git@github.com:open-mmlab/mmdetection.git",
     }
-    return (
+    return (trust,
         CheckResult(
             "mmdetection_commit",
             commit == EXPECTED_MMDET_COMMIT,
@@ -238,6 +283,68 @@ def _mmdet_checks(mmdet_root: Path) -> tuple[CheckResult, ...]:
             "checkout must come from the official repository",
             "official" if origin in allowed_origins else "unexpected",
         ),
+    )
+
+
+def _project_source_checks(project_root: Path) -> tuple[CheckResult, ...]:
+    trust = _executable_tree_check(project_root, "project_source_private")
+    if not trust.ok:
+        return (trust,)
+    dirty = _git_output(
+        project_root, "status", "--porcelain", "--untracked-files=all")
+    protected_roots = (
+        project_root / "configs",
+        project_root / "ovha_rod",
+        project_root / "scripts",
+    )
+    unsafe: list[str] = []
+    for root in protected_roots:
+        for path in (root, *root.rglob("*")):
+            try:
+                stat = path.lstat()
+            except OSError as exc:
+                unsafe.append(f"{path}: {exc}")
+                continue
+            if path.is_symlink() or stat.st_uid != os.getuid() or stat.st_mode & 0o022:
+                unsafe.append(str(path))
+    return (
+        trust,
+        CheckResult(
+            "project_git_clean",
+            dirty == "",
+            "reviewed project worktree must be clean before execution",
+            "clean" if not dirty else dirty[:2000],
+        ),
+        CheckResult(
+            "project_runtime_paths_private",
+            not unsafe,
+            "configs, scripts, and package must be user-owned and not group/other writable",
+            unsafe[:50],
+        ),
+    )
+
+
+def _executable_tree_check(root: Path, name: str) -> CheckResult:
+    try:
+        resolved = _resolve_private_file(root)
+    except (OSError, ValueError) as exc:
+        return CheckResult(name, False, str(exc), str(root))
+    if not resolved.is_dir():
+        return CheckResult(name, False, "executable root is not a directory", str(resolved))
+    unsafe: list[str] = []
+    for path in (resolved, *resolved.rglob("*")):
+        try:
+            stat = path.lstat()
+        except OSError as exc:
+            unsafe.append(f"{path}: {exc}")
+            continue
+        if path.is_symlink() or stat.st_uid != os.getuid() or stat.st_mode & 0o022:
+            unsafe.append(str(path))
+    return CheckResult(
+        name,
+        not unsafe,
+        "executable tree and parent chain must be user-owned, private, and symlink-free",
+        unsafe[:50],
     )
 
 
@@ -375,11 +482,54 @@ def _data_checks(data_root: Path, dataset: str) -> tuple[CheckResult, ...]:
     return tuple(checks)
 
 
+def _resolve_trusted_checkpoint(path: Path) -> Path:
+    return _resolve_private_file(path)
+
+
+def _resolve_private_file(path: Path) -> Path:
+    lexical = Path(os.path.abspath(path.expanduser()))
+    trusted_home = Path.home().resolve()
+    if not lexical.is_relative_to(trusted_home):
+        raise ValueError(f"trusted file must stay under the user home: {trusted_home}")
+    if lexical.is_symlink():
+        raise ValueError("trusted file must not be a symlink")
+    for parent in lexical.parents:
+        if parent.is_symlink():
+            raise ValueError(f"trusted parent must not be a symlink: {parent}")
+        stat = parent.stat()
+        if stat.st_uid != os.getuid() or stat.st_mode & 0o022:
+            raise ValueError(f"trusted parent is not private: {parent}")
+        if parent == trusted_home:
+            break
+    return lexical.resolve(strict=False)
+
+
 def _checkpoint_checks(path: Path, expected_sha256: str | None) -> tuple[CheckResult, ...]:
-    exists = path.is_file() and not path.is_symlink() and path.stat().st_size > 0
+    try:
+        trusted_path = _resolve_trusted_checkpoint(path)
+    except ValueError as exc:
+        return (CheckResult(
+            "pretrained_checkpoint", False, str(exc), str(path)),)
+    exists = trusted_path.is_file() and trusted_path.stat().st_size > 0
     checks = [CheckResult(
         "pretrained_checkpoint", exists,
-        "checkpoint exists, is non-empty, and is not a symlink", str(path))]
+        "checkpoint exists, is non-empty, and has no symlink component",
+        str(trusted_path))]
+    if exists:
+        stat = trusted_path.stat()
+        checks.append(CheckResult(
+            "checkpoint_size",
+            stat.st_size == EXPECTED_CHECKPOINT_SIZE,
+            "checkpoint byte size must match the locked official artifact",
+            stat.st_size,
+        ))
+        private = stat.st_uid == os.getuid() and (stat.st_mode & 0o077) == 0
+        checks.append(CheckResult(
+            "checkpoint_private_permissions",
+            private,
+            "checkpoint must be user-owned and inaccessible to group/other",
+            oct(stat.st_mode & 0o777),
+        ))
     if expected_sha256 is not None:
         normalized = expected_sha256.strip().lower()
         valid_expected = len(normalized) == 64 and all(char in "0123456789abcdef" for char in normalized)
@@ -389,7 +539,7 @@ def _checkpoint_checks(path: Path, expected_sha256: str | None) -> tuple[CheckRe
             normalized == EXPECTED_CHECKPOINT_SHA256,
             "provided digest must equal the version-controlled official digest"))
         if exists and valid_expected:
-            observed = _sha256(path)
+            observed = _sha256(trusted_path)
             checks.append(CheckResult(
                 "checkpoint_sha256",
                 observed == normalized == EXPECTED_CHECKPOINT_SHA256,
@@ -399,8 +549,25 @@ def _checkpoint_checks(path: Path, expected_sha256: str | None) -> tuple[CheckRe
 
 
 def _bert_checks(root: Path) -> tuple[CheckResult, ...]:
-    alternatives = (root / "model.safetensors", root / "pytorch_model.bin")
+    safetensors = root / "model.safetensors"
+    pytorch_weights = root / "pytorch_model.bin"
     required = (root / "config.json", root / "vocab.txt")
+    try:
+        trusted_safetensors = _resolve_private_file(safetensors)
+    except ValueError as exc:
+        trusted_safetensors = None
+        weights_detail = str(exc)
+    else:
+        weights_detail = str(trusted_safetensors)
+    weights_ok = bool(
+        trusted_safetensors is not None
+        and trusted_safetensors.is_file()
+        and trusted_safetensors.stat().st_size == EXPECTED_BERT_SAFETENSORS_SIZE
+        and _sha256(trusted_safetensors) == EXPECTED_BERT_SAFETENSORS_SHA256
+        and trusted_safetensors.stat().st_uid == os.getuid()
+        and (trusted_safetensors.stat().st_mode & 0o077) == 0
+        and not pytorch_weights.exists()
+    )
     checks = [
         CheckResult(
             "bert_directory",
@@ -416,9 +583,9 @@ def _bert_checks(root: Path) -> tuple[CheckResult, ...]:
         ),
         CheckResult(
             "bert_weights",
-            any(path.is_file() and path.stat().st_size > 0 for path in alternatives),
-            "local BERT requires safetensors or PyTorch weights",
-            [str(path) for path in alternatives],
+            weights_ok,
+            "local BERT requires locked safetensors and no pytorch_model.bin",
+            weights_detail,
         ),
     ]
     return tuple(checks)

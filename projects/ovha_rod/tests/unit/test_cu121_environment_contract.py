@@ -1,4 +1,6 @@
+import hashlib
 import importlib.util
+import re
 import sys
 import tempfile
 import unittest
@@ -46,6 +48,50 @@ class Cu121EnvironmentContractTests(unittest.TestCase):
         self.assertIn("Python 3.10", source)
         self.assertIn("x86_64", source)
 
+    def test_lock_setup_and_preflight_profiles_are_synchronized(self):
+        lock = {}
+        for line in (ROOT / "environment/mmdetection.lock").read_text().splitlines():
+            if line and not line.startswith("#"):
+                key, value = line.split("=", 1)
+                lock[key] = value
+        setup = (ROOT / "scripts/setup_mmdetection.sh").read_text()
+
+        def shell_value(name):
+            match = re.search(rf'^{name}="([^"]+)"$', setup, re.MULTILINE)
+            self.assertIsNotNone(match, name)
+            return match.group(1)
+
+        preflight = _load_preflight_module()
+        self.assertEqual(shell_value("ENVIRONMENT_PROFILE"), lock["profile"])
+        self.assertEqual(shell_value("TORCH_VERSION"), lock["torch_version"])
+        self.assertEqual(
+            shell_value("TORCHVISION_VERSION"), lock["torchvision_version"])
+        self.assertEqual(shell_value("MMCV_WHEEL_URL"), lock["mmcv_wheel_url"])
+        self.assertEqual(
+            shell_value("MMCV_WHEEL_SHA256"), lock["mmcv_wheel_sha256"])
+        self.assertEqual(
+            shell_value("MMDET_COMMIT"), lock["mmdetection_commit"])
+        self.assertEqual(preflight.ENVIRONMENT_PROFILE, lock["profile"])
+        self.assertEqual(
+            preflight.EXPECTED_VERSIONS["torch"], lock["torch_version"])
+        self.assertEqual(
+            preflight.EXPECTED_VERSIONS["torchvision"],
+            lock["torchvision_version"])
+        self.assertEqual(
+            preflight.EXPECTED_TORCH_CUDA, lock["torch_cuda_runtime"])
+        self.assertEqual(
+            preflight.EXPECTED_CHECKPOINT_SIZE,
+            int(lock["checkpoint_size_bytes"]))
+        self.assertEqual(
+            preflight.EXPECTED_CHECKPOINT_SHA256,
+            lock["checkpoint_sha256"])
+        self.assertEqual(
+            preflight.EXPECTED_BERT_SAFETENSORS_SHA256,
+            lock["bert_safetensors_sha256"])
+        self.assertEqual(
+            preflight.EXPECTED_BERT_SAFETENSORS_SIZE,
+            int(lock["bert_safetensors_size_bytes"]))
+
     def test_preflight_requires_exact_cu121_runtime(self):
         preflight = _load_preflight_module()
         self.assertEqual(preflight.ENVIRONMENT_PROFILE, "cu121-wheel")
@@ -55,7 +101,7 @@ class Cu121EnvironmentContractTests(unittest.TestCase):
 
     def test_checkpoint_path_rejects_symlinks_before_resolution(self):
         preflight = _load_preflight_module()
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             root = Path(directory)
             target = root / "official.pth"
             target.write_bytes(b"checkpoint")
@@ -63,6 +109,51 @@ class Cu121EnvironmentContractTests(unittest.TestCase):
             link.symlink_to(target)
             with self.assertRaises(ValueError):
                 preflight._resolve_trusted_checkpoint(link)
+
+    def test_checkpoint_checks_reject_public_permissions_and_wrong_size(self):
+        preflight = _load_preflight_module()
+        payload = b"locked checkpoint"
+        digest = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            checkpoint = Path(directory) / "official.pth"
+            checkpoint.write_bytes(payload)
+            checkpoint.chmod(0o600)
+            old_size = preflight.EXPECTED_CHECKPOINT_SIZE
+            old_digest = preflight.EXPECTED_CHECKPOINT_SHA256
+            try:
+                preflight.EXPECTED_CHECKPOINT_SIZE = len(payload)
+                preflight.EXPECTED_CHECKPOINT_SHA256 = digest
+                checks = preflight._checkpoint_checks(checkpoint, digest)
+                self.assertTrue(all(check.ok for check in checks), checks)
+
+                checkpoint.chmod(0o644)
+                checks = preflight._checkpoint_checks(checkpoint, digest)
+                permission = next(
+                    check for check in checks
+                    if check.name == "checkpoint_private_permissions")
+                self.assertFalse(permission.ok)
+
+                checkpoint.chmod(0o600)
+                preflight.EXPECTED_CHECKPOINT_SIZE += 1
+                checks = preflight._checkpoint_checks(checkpoint, digest)
+                size = next(
+                    check for check in checks if check.name == "checkpoint_size")
+                self.assertFalse(size.ok)
+            finally:
+                preflight.EXPECTED_CHECKPOINT_SIZE = old_size
+                preflight.EXPECTED_CHECKPOINT_SHA256 = old_digest
+
+    def test_runner_disables_unverified_resume(self):
+        source = (ROOT / "scripts/run_phase1_server.sh").read_text()
+        self.assertNotIn("--resume", source)
+        self.assertIn("/trusted_inputs", source)
+        self.assertIn("LOCKED_CHECKPOINT_SIZE=1093815743", source)
+
+    def test_preflight_requires_safetensors_only_bert(self):
+        source = (ROOT / "scripts/server_preflight.py").read_text()
+        self.assertIn("EXPECTED_BERT_SAFETENSORS_SHA256", source)
+        self.assertIn("and not pytorch_weights.exists()", source)
+        self.assertIn("model.safetensors", source)
 
     def test_docs_disclose_compatibility_exception(self):
         documentation = "\n".join([
@@ -73,6 +164,7 @@ class Cu121EnvironmentContractTests(unittest.TestCase):
         self.assertIn("compatibility", documentation)
         self.assertIn("sha-256", documentation)
         self.assertNotIn("do not downgrade below 2.6.0", documentation)
+        self.assertNotRegex(documentation, r"/home/(?!user)[a-z0-9._-]+/")
 
 
 if __name__ == "__main__":
