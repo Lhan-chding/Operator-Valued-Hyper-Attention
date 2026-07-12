@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
@@ -10,6 +11,7 @@ from ovha_rod.runtime_contracts import (
     collect_scalar_diagnostics,
     find_remote_weight_values,
     prepare_fresh_private_work_dir,
+    require_selected_gpus_idle,
     require_visible_device_ids,
 )
 
@@ -25,6 +27,19 @@ class RuntimeContractTests(unittest.TestCase):
             with self.subTest(value=value, count=count):
                 with self.assertRaises(ValueError):
                     require_visible_device_ids(value, count)
+
+    def test_selected_gpu_guard_rejects_existing_compute_process(self):
+        outputs = iter((
+            "0, GPU-zero\n4, GPU-four\n",
+            "GPU-four, 1234, python, 1024 MiB\n",
+        ))
+
+        def fake_run(*args, **kwargs):
+            del args, kwargs
+            return SimpleNamespace(returncode=0, stdout=next(outputs), stderr="")
+
+        with self.assertRaisesRegex(RuntimeError, "GPU 4"):
+            require_selected_gpus_idle((4,), run_command=fake_run)
 
     def test_fresh_private_work_dir_rejects_stale_or_symlinked_output(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
