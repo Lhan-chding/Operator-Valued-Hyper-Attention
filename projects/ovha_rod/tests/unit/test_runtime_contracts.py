@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import torch
 
@@ -13,6 +14,8 @@ from ovha_rod.runtime_contracts import (
     prepare_fresh_private_work_dir,
     require_selected_gpus_idle,
     require_visible_device_ids,
+    validate_local_bert,
+    validate_locked_checkpoint,
 )
 
 
@@ -120,6 +123,44 @@ class RuntimeContractTests(unittest.TestCase):
             find_remote_weight_values(config),
             ("https://example.invalid/swin.pth",),
         )
+
+    def test_smoke_inputs_require_locked_checkpoint_and_safetensors_bert(self):
+        import ovha_rod.runtime_contracts as contracts
+
+        checkpoint_bytes = b"locked checkpoint"
+        bert_bytes = b"locked bert"
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            root = Path(directory)
+            checkpoint = root / "model.pth"
+            checkpoint.write_bytes(checkpoint_bytes)
+            checkpoint.chmod(0o600)
+            bert = root / "bert"
+            bert.mkdir(mode=0o700)
+            (bert / "config.json").write_text("{}")
+            (bert / "vocab.txt").write_text("token\n")
+            weights = bert / "model.safetensors"
+            weights.write_bytes(bert_bytes)
+            weights.chmod(0o600)
+            with mock.patch.multiple(
+                contracts,
+                LOCKED_CHECKPOINT_SIZE=len(checkpoint_bytes),
+                LOCKED_CHECKPOINT_SHA256=(
+                    __import__("hashlib").sha256(checkpoint_bytes).hexdigest()),
+                LOCKED_BERT_SIZE=len(bert_bytes),
+                LOCKED_BERT_SHA256=(
+                    __import__("hashlib").sha256(bert_bytes).hexdigest()),
+            ):
+                self.assertEqual(validate_locked_checkpoint(checkpoint), checkpoint)
+                self.assertEqual(validate_local_bert(bert), bert)
+
+                checkpoint.write_bytes(b"tampered")
+                with self.assertRaisesRegex(ValueError, "checkpoint"):
+                    validate_locked_checkpoint(checkpoint)
+
+                checkpoint.write_bytes(checkpoint_bytes)
+                (bert / "pytorch_model.bin").write_bytes(b"unsafe pickle")
+                with self.assertRaisesRegex(ValueError, "pytorch_model.bin"):
+                    validate_local_bert(bert)
 
 
 if __name__ == "__main__":
