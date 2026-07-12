@@ -131,14 +131,12 @@ class RelationFieldBankTests(unittest.TestCase):
     ) -> torch.Tensor:
         moved = values.movedim(dim, -1)
         extent = moved.shape[-1]
-        weight = torch.ones(
-            (extent, extent), dtype=values.dtype, device=values.device)
-        weight = (
-            torch.tril(weight, diagonal=-1)
+        strict_sums = (
+            [moved[..., index + 1:].sum(dim=-1) for index in range(extent)]
             if after
-            else torch.triu(weight, diagonal=1)
+            else [moved[..., :index].sum(dim=-1) for index in range(extent)]
         )
-        return (moved @ weight).movedim(-1, dim)
+        return torch.stack(strict_sums, dim=-1).movedim(-1, dim)
 
 
 if __name__ == "__main__":
