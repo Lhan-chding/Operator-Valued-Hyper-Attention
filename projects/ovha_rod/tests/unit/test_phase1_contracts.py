@@ -62,6 +62,8 @@ class StaticIntegrationContractTests(unittest.TestCase):
         source = (ROOT / "ovha_rod/models/detectors/ovha_grounding_dino.py").read_text()
         self.assertIn("enc_outputs_class.max(-1)[0]", source)
         self.assertNotIn("logsumexp(enc_outputs_class", source)
+        self.assertIn(
+            "valid = memory_valid_mask(output_memory, memory_mask)", source)
 
     def test_dense_head_imports_instance_list_from_pinned_mmdet_api(self):
         source = (

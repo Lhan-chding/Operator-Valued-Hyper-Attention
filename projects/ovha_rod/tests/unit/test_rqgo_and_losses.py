@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from ovha_rod.models.losses import build_seed_quality_targets, quality_focal_seed_loss
+from ovha_rod.models.operators.base import memory_valid_mask
 from ovha_rod.models.operators.generic_seed import (
     GenericDenseSeedPredictor, matched_generic_hidden_dim)
 from ovha_rod.models.operators.rqgo import RQGO
@@ -76,6 +77,26 @@ class RQGOTests(unittest.TestCase):
         self.assertEqual(tuple(result.seed_bias.shape), (2, 20))
         self.assertTrue(torch.equal(result.valid, ~memory_mask))
         self.assertTrue(torch.equal(result.seed_bias, torch.zeros_like(result.seed_bias)))
+
+    def test_none_memory_mask_means_every_encoder_token_is_valid(self):
+        memory, boxes, text, text_mask, _, spatial_shapes = self._inputs()
+        roles = LatentRoleEncoder(16, num_heads=4)(text, text_mask)
+
+        valid = memory_valid_mask(memory, None)
+        rqgo = RQGO(d_model=16)(memory, boxes, roles, spatial_shapes, None)
+        generic = GenericDenseSeedPredictor(
+            d_model=16, num_levels=2)(
+                memory, boxes, text.mean(dim=1),
+                torch.tensor([0] * 16 + [1] * 4), None)
+
+        self.assertTrue(valid.all())
+        self.assertTrue(rqgo.valid.all())
+        self.assertTrue(generic.valid.all())
+
+    def test_memory_valid_mask_rejects_wrong_shape(self):
+        memory, *_ = self._inputs()
+        with self.assertRaisesRegex(ValueError, "shape"):
+            memory_valid_mask(memory, torch.zeros(2, 19, dtype=torch.bool))
 
     def test_generic_control_matches_rqgo_and_role_capacity(self):
         hidden = matched_generic_hidden_dim(
