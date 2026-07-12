@@ -57,6 +57,9 @@ class StaticIntegrationContractTests(unittest.TestCase):
                 self.assertNotIn("proposal_cache", source)
                 self.assertNotIn("clip crop", source)
                 self.assertIn("max_epochs=5", source.replace(" ", ""))
+                self.assertIn("backbone=dict(init_cfg=none)",
+                              source.replace(" ", ""))
+                self.assertIn("load_from = none", source)
 
     def test_detector_keeps_parent_token_max_for_topk(self):
         source = (ROOT / "ovha_rod/models/detectors/ovha_grounding_dino.py").read_text()
@@ -89,6 +92,16 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertLess(runner.index(export), runner.index("PREFLIGHT=("))
         self.assertLess(runner.index(export), runner.index("COMMAND=("))
         self.assertIn("randomness.deterministic=True", runner)
+        self.assertIn("CUDA_VISIBLE_DEVICES", runner)
+        self.assertIn("require_visible_device_ids", runner)
+
+    def test_metric_requires_encoder_oracle_for_every_phase1_sample(self):
+        source = (
+            ROOT / "ovha_rod/evaluation/ovha_refexp_metric.py").read_text()
+        self.assertIn(
+            "if len(encoder_ious[name]) != len(values):", source)
+        self.assertNotIn(
+            "if encoder_ious[name] and len(encoder_ious[name])", source)
 
     def test_environment_is_pinned_to_a_commit(self):
         lock = (ROOT / "environment/mmdetection.lock").read_text()
