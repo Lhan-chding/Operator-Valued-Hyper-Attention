@@ -83,7 +83,11 @@ class RuntimeContractTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             work_dir = Path(directory)
-            rows = [dict(required, iteration=index) for index in (1, 2)]
+            rows = [dict(
+                required,
+                iteration=index,
+                loss_seed_weight=0.25 * index,
+            ) for index in (1, 2)]
             (work_dir / "operator_diagnostics.jsonl").write_text(
                 "".join(json.dumps(row) + "\n" for row in rows))
             (work_dir / "iter_2.pth").write_bytes(b"checkpoint")
@@ -95,6 +99,15 @@ class RuntimeContractTests(unittest.TestCase):
             failed = audit_smoke_outputs(work_dir, "rqgo")
             self.assertFalse(failed["ok"])
             self.assertIn("seed_gradient_norm", failed["missing_fields"])
+
+            wrong_schedule = [dict(
+                required, iteration=index, loss_seed_weight=0.5
+            ) for index in (1, 2)]
+            (work_dir / "operator_diagnostics.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in wrong_schedule))
+            failed = audit_smoke_outputs(work_dir, "rqgo")
+            self.assertFalse(failed["ok"])
+            self.assertFalse(failed["warmup_schedule_exact"])
 
     def test_smoke_audit_rejects_unknown_operator_and_nonfinite_marker(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
