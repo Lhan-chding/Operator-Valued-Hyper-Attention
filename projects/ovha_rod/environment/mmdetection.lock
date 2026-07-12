@@ -1,0 +1,17 @@
+# OVHA-ROD Phase 0/1 reproducibility lock.
+# Values in this file are consumed as an audit contract, not as shell code.
+format_version=1
+mmdetection_repository=https://github.com/open-mmlab/mmdetection.git
+mmdetection_commit=cfd5d3a985b0249de009b67d04f37263e11cdf3d
+mmdetection_tree=e389bc213f4772c481a0b5f81f0d1786c0b79e66
+mmdetection_install=editable
+mmcv_version=2.1.0
+mmengine_version=0.10.3
+torch_version=2.6.0
+torchvision_version=0.21.0
+default_cuda_wheel=cu124
+transformers_version=4.36.2
+bert_model=bert-base-uncased
+checkpoint_url=https://download.openmmlab.com/mmdetection/v3.0/mm_grounding_dino/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det/grounding_dino_swin-t_pretrain_obj365_goldg_grit9m_v3det_20231204_095047-b448804b.pth
+checkpoint_sha256=b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a
+checkpoint_size_bytes=1093815743

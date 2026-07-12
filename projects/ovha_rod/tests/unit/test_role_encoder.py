@@ -16,7 +16,8 @@ class LatentRoleEncoderTests(unittest.TestCase):
 
         self.assertEqual(tuple(state.vectors.shape), (2, 4, 16))
         self.assertEqual(tuple(state.attention.shape), (2, 4, 6))
-        self.assertTrue(torch.equal(state.attention.masked_select(~valid[:, None, :]), torch.zeros(12)))
+        padded_attention = state.attention.masked_select(~valid[:, None, :])
+        self.assertTrue(torch.equal(padded_attention, torch.zeros_like(padded_attention)))
         self.assertTrue(torch.allclose(state.attention.sum(-1), torch.ones(2, 4), atol=1e-6))
 
     def test_padding_content_cannot_change_roles(self):
