@@ -84,6 +84,11 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertIn(assignment, smoke)
         self.assertLess(smoke.index("import os"), smoke.index(assignment))
         self.assertLess(smoke.index(assignment), smoke.index("from mmengine.config"))
+        self.assertIn("ALLOWED_CFG_OPTIONS", smoke)
+        self.assertIn("require_selected_gpus_idle", smoke)
+        self.assertIn("validate_locked_checkpoint", smoke)
+        self.assertIn("validate_local_bert", smoke)
+        self.assertIn("prepare_fresh_private_work_dir", smoke)
 
     def test_server_runner_exports_cublas_before_launch_commands(self):
         runner = (ROOT / "scripts/run_phase1_server.sh").read_text()
@@ -116,7 +121,10 @@ class StaticIntegrationContractTests(unittest.TestCase):
                 source = path.read_text()
                 self.assertNotIn("optim_wrapper", source)
                 self.assertNotIn("param_scheduler", source)
-                self.assertNotIn("model =", source)
+                self.assertIn(
+                    "model=dict(backbone=dict(init_cfg=None))",
+                    source.replace(" ", ""),
+                )
 
 
 if __name__ == "__main__":
