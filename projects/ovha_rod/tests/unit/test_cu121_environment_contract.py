@@ -5,6 +5,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -139,6 +141,55 @@ class Cu121EnvironmentContractTests(unittest.TestCase):
                 size = next(
                     check for check in checks if check.name == "checkpoint_size")
                 self.assertFalse(size.ok)
+            finally:
+                preflight.EXPECTED_CHECKPOINT_SIZE = old_size
+                preflight.EXPECTED_CHECKPOINT_SHA256 = old_digest
+
+    def test_locked_checkpoint_loader_rehashes_before_compatibility_load(self):
+        preflight = _load_preflight_module()
+        payload = b"locked official checkpoint"
+        digest = hashlib.sha256(payload).hexdigest()
+        fake_load = mock.Mock(return_value={"state_dict": {}})
+        fake_torch = SimpleNamespace(load=fake_load)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            checkpoint = Path(directory) / "official.pth"
+            checkpoint.write_bytes(payload)
+            checkpoint.chmod(0o600)
+            old_size = preflight.EXPECTED_CHECKPOINT_SIZE
+            old_digest = preflight.EXPECTED_CHECKPOINT_SHA256
+            try:
+                preflight.EXPECTED_CHECKPOINT_SIZE = len(payload)
+                preflight.EXPECTED_CHECKPOINT_SHA256 = digest
+                with mock.patch.dict(sys.modules, {"torch": fake_torch}):
+                    loaded = preflight._load_locked_checkpoint(
+                        checkpoint, checkpoint_trusted=True)
+                self.assertEqual(loaded, {"state_dict": {}})
+                fake_load.assert_called_once()
+                self.assertEqual(fake_load.call_args.kwargs["map_location"], "cpu")
+                self.assertFalse(fake_load.call_args.kwargs["weights_only"])
+            finally:
+                preflight.EXPECTED_CHECKPOINT_SIZE = old_size
+                preflight.EXPECTED_CHECKPOINT_SHA256 = old_digest
+
+    def test_locked_checkpoint_loader_rejects_digest_mismatch_before_torch_load(self):
+        preflight = _load_preflight_module()
+        payload = b"tampered checkpoint"
+        fake_load = mock.Mock()
+        fake_torch = SimpleNamespace(load=fake_load)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            checkpoint = Path(directory) / "official.pth"
+            checkpoint.write_bytes(payload)
+            checkpoint.chmod(0o600)
+            old_size = preflight.EXPECTED_CHECKPOINT_SIZE
+            old_digest = preflight.EXPECTED_CHECKPOINT_SHA256
+            try:
+                preflight.EXPECTED_CHECKPOINT_SIZE = len(payload)
+                preflight.EXPECTED_CHECKPOINT_SHA256 = "0" * 64
+                with mock.patch.dict(sys.modules, {"torch": fake_torch}):
+                    with self.assertRaisesRegex(ValueError, "digest"):
+                        preflight._load_locked_checkpoint(
+                            checkpoint, checkpoint_trusted=True)
+                fake_load.assert_not_called()
             finally:
                 preflight.EXPECTED_CHECKPOINT_SIZE = old_size
                 preflight.EXPECTED_CHECKPOINT_SHA256 = old_digest
