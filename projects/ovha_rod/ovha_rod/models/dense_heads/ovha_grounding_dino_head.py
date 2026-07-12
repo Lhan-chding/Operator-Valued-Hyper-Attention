@@ -8,7 +8,8 @@ import torch.nn.functional as F
 
 from mmdet.models.dense_heads.grounding_dino_head import GroundingDINOHead
 from mmdet.registry import MODELS
-from mmdet.structures import InstanceList, SampleList
+from mmdet.structures import SampleList
+from mmdet.utils import InstanceList
 from mmdet.structures.bbox import bbox_cxcywh_to_xyxy, bbox_xyxy_to_cxcywh
 
 from ..losses import build_seed_quality_targets, quality_focal_seed_loss
