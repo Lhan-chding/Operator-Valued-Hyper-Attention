@@ -155,6 +155,27 @@ class Cu121EnvironmentContractTests(unittest.TestCase):
         self.assertIn("and not pytorch_weights.exists()", source)
         self.assertIn("model.safetensors", source)
 
+    def test_executable_tree_allows_internal_links_but_rejects_escape(self):
+        preflight = _load_preflight_module()
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            tree = Path(directory) / "trusted"
+            tree.mkdir(mode=0o700)
+            target = tree / "configs"
+            target.mkdir(mode=0o700)
+            (target / "model.py").write_text("MODEL = True\n")
+            (target / "model.py").chmod(0o600)
+            internal = tree / "config-link"
+            internal.symlink_to(target, target_is_directory=True)
+
+            check = preflight._executable_tree_check(tree, "tree")
+            self.assertTrue(check.ok, check)
+
+            external = tree / "escape-link"
+            external.symlink_to(Path.home(), target_is_directory=True)
+            check = preflight._executable_tree_check(tree, "tree")
+            self.assertFalse(check.ok)
+            self.assertIn(str(external), check.observed)
+
     def test_docs_disclose_compatibility_exception(self):
         documentation = "\n".join([
             (ROOT / "README.md").read_text(),
