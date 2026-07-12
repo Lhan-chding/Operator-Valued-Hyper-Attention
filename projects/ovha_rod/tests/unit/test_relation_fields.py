@@ -114,6 +114,14 @@ class RelationFieldBankTests(unittest.TestCase):
             torch.zeros_like(values.transpose(-1, -2)),
         ))
 
+    def test_strict_mass_keeps_float32_accumulation_under_autocast(self):
+        values = torch.linspace(
+            0.001, 1.0, 257, dtype=torch.float32).reshape(1, 1, -1)
+        expected = _mass_strictly_before(values, dim=-1)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            actual = _mass_strictly_before(values, dim=-1)
+        self.assertTrue(torch.equal(actual, expected))
+
     @staticmethod
     def _strict_mass_reference(
         values: torch.Tensor,
