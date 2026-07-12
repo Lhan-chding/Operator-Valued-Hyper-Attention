@@ -150,5 +150,6 @@ def _strict_triangular_mass(values: Tensor, dim: int, *, after: bool) -> Tensor:
         if after
         else torch.triu(weight, diagonal=1)
     )
-    mass = moved.to(dtype=compute_dtype) @ weight
+    with torch.autocast(device_type=moved.device.type, enabled=False):
+        mass = moved.to(dtype=compute_dtype) @ weight
     return mass.movedim(-1, dim).clamp_min(0.0).to(dtype=values.dtype)
