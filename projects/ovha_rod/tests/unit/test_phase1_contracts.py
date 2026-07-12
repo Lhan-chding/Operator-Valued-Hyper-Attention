@@ -38,6 +38,10 @@ class StaticIntegrationContractTests(unittest.TestCase):
             ROOT / "scripts/server_preflight.py",
             ROOT / "scripts/run_phase1_server.sh",
             ROOT / "scripts/two_batch_smoke.py",
+            ROOT / "scripts/gpu_guard.py",
+            ROOT / "scripts/port_guard.py",
+            ROOT / "scripts/prepare_work_dir.py",
+            ROOT / "ovha_rod/runtime_contracts.py",
             ROOT / "README.md",
             ROOT / "environment/mmdetection.lock",
         ]

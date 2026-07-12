@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -45,16 +46,10 @@ class OperatorDiagnosticsHook(Hook):
     def after_train_iter(self, runner, batch_idx: int,
                          data_batch=None, outputs=None) -> None:
         del batch_idx, data_batch
-        if not is_main_process() or (runner.iter + 1) % self.interval:
-            return
         model = runner.model.module if hasattr(runner.model, "module") else runner.model
-        row = {
-            "iteration": int(runner.iter + 1),
-            "seed_operator": getattr(model, "seed_operator_name", "unknown"),
-            "loss_seed_weight": float(getattr(model.bbox_head, "loss_seed_weight", 0.0)),
-            "seed_gradient_norm": float(
-                getattr(model, "_seed_grad_squared", 0.0) ** 0.5),
-        }
+        gradient_norm = float(
+            getattr(model, "_seed_grad_squared", 0.0) ** 0.5)
+        finite_scalars = {}
         nonfinite_keys = []
         for values, prefix in (
             (getattr(model, "last_seed_diagnostics", {}), ""),
@@ -62,8 +57,23 @@ class OperatorDiagnosticsHook(Hook):
             (outputs or {}, "loss/"),
         ):
             finite, nonfinite = collect_scalar_diagnostics(values, prefix=prefix)
-            row.update(finite)
+            finite_scalars.update(finite)
             nonfinite_keys.extend(nonfinite)
+        if not math.isfinite(gradient_norm):
+            nonfinite_keys.append("seed_gradient_norm")
+        if nonfinite_keys:
+            raise FloatingPointError(
+                "non-finite Phase 1 diagnostics: "
+                + ", ".join(sorted(set(nonfinite_keys))))
+        if not is_main_process() or (runner.iter + 1) % self.interval:
+            return
+        row = {
+            "iteration": int(runner.iter + 1),
+            "seed_operator": getattr(model, "seed_operator_name", "unknown"),
+            "loss_seed_weight": float(getattr(model.bbox_head, "loss_seed_weight", 0.0)),
+            "seed_gradient_norm": gradient_norm,
+        }
+        row.update(finite_scalars)
         row["nonfinite_scalar_count"] = len(nonfinite_keys)
         row["nonfinite_scalar_keys"] = sorted(set(nonfinite_keys))
         path = Path(runner.work_dir) / self.filename

@@ -175,6 +175,16 @@ def audit_smoke_outputs(work_dir: Path, expected_operator: str) -> dict[str, Any
         str(path) for path in work_dir.glob("iter_2.pth")
         if path.is_file() and not path.is_symlink() and path.stat().st_size > 0)
     active = expected_operator in {"rqgo", "generic"}
+    observed_weights = [
+        float(row.get("loss_seed_weight", float("nan"))) for row in rows
+    ]
+    expected_weights = [0.25, 0.5] if active else [0.0, 0.0]
+    warmup_ok = (
+        len(observed_weights) == 2
+        and all(math.isclose(observed, expected, abs_tol=1e-8)
+                for observed, expected in zip(
+                    observed_weights, expected_weights))
+    )
     gradients_ok = (not active) or (
         operator_ok and any(
             float(row.get("seed_gradient_norm", 0.0)) > 0.0 for row in rows))
@@ -193,6 +203,7 @@ def audit_smoke_outputs(work_dir: Path, expected_operator: str) -> dict[str, Any
         bool(checkpoints),
         gradients_ok,
         bias_ok,
+        warmup_ok,
     ))
     return {
         "ok": ok,
@@ -206,6 +217,7 @@ def audit_smoke_outputs(work_dir: Path, expected_operator: str) -> dict[str, Any
         "nonfinite": [*nonfinite, *numeric_nonfinite],
         "active_seed_gradient_nonzero": gradients_ok,
         "seed_bias_contract": bias_ok,
+        "warmup_schedule_exact": warmup_ok,
         "checkpoints": checkpoints,
         "diagnostics": str(diagnostics_path),
     }
@@ -269,6 +281,10 @@ def _resolve_private_input(path: Path, label: str) -> Path:
         raise ValueError(f"{label} must stay under {trusted_home}")
     if lexical.is_symlink():
         raise ValueError(f"{label} must not be a symlink")
+    if lexical.exists():
+        lexical_stat = lexical.stat()
+        if lexical_stat.st_uid != os.getuid() or lexical_stat.st_mode & 0o022:
+            raise ValueError(f"{label} is not user-owned/private")
     for parent in lexical.parents:
         if parent.is_symlink():
             raise ValueError(f"{label} parent must not be a symlink: {parent}")

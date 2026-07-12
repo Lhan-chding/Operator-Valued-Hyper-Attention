@@ -2,6 +2,9 @@
 set -euo pipefail
 umask 077
 export CUBLAS_WORKSPACE_CONFIG=":4096:8"
+export CUDA_DEVICE_ORDER="PCI_BUS_ID"
+export TRANSFORMERS_OFFLINE=1
+export HF_HUB_OFFLINE=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -20,6 +23,7 @@ PER_DEVICE_BATCH="${DEFAULT_PER_DEVICE_BATCH}"
 SEED=2026
 PYTHON_BIN="python"
 CHECKPOINT_SHA256=""
+MASTER_PORT=""
 LOCKED_CHECKPOINT_SHA256="b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a"
 LOCKED_CHECKPOINT_SIZE=1093815743
 USE_AMP=true
@@ -45,6 +49,7 @@ usage() {
     "  --seed N                Run seed (default: 2026)" \
     "  --python PATH           Python in the locked environment" \
     "  --checkpoint-sha256 HEX Required trusted checkpoint digest" \
+    "  --master-port N        Explicit free localhost torchrun port" \
     "  --no-amp                Disable AMP" \
     "  --dry-run               Validate arguments and print commands only" \
     "  -h, --help              Show this help" \
@@ -73,6 +78,7 @@ while [[ $# -gt 0 ]]; do
     --seed) require_value "$1" "$#"; SEED="$2"; shift 2 ;;
     --python) require_value "$1" "$#"; PYTHON_BIN="$2"; shift 2 ;;
     --checkpoint-sha256) require_value "$1" "$#"; CHECKPOINT_SHA256="$2"; shift 2 ;;
+    --master-port) require_value "$1" "$#"; MASTER_PORT="$2"; shift 2 ;;
     --no-amp) USE_AMP=false; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -171,6 +177,11 @@ export PATH="$(dirname "${PYTHON_RESOLVED}"):${PATH}"
 [[ "${PER_DEVICE_BATCH}" =~ ^[1-9][0-9]*$ ]] || { printf '--per-device-batch must be a positive integer\n' >&2; exit 2; }
 [[ "${SEED}" =~ ^[0-9]+$ ]] || { printf '--seed must be a non-negative integer\n' >&2; exit 2; }
 if [[ "${DRY_RUN}" == false ]]; then
+  [[ "${MASTER_PORT}" =~ ^[0-9]+$ ]] && \
+    (( MASTER_PORT >= 1024 && MASTER_PORT <= 65535 )) || {
+      printf '--master-port must be an integer in [1024, 65535]\n' >&2
+      exit 2
+    }
   [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]] || {
     printf 'CUDA_VISIBLE_DEVICES must explicitly select the requested idle GPUs\n' >&2
     exit 2
@@ -226,8 +237,9 @@ if [[ "${DRY_RUN}" == false ]]; then
     PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
       "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_work_dir.py" "${WORK_DIR}"
   done
-  PREFLIGHT_DIR="${WORK_ROOT}/${DATASET}/preflight"
-  mkdir -p "${PREFLIGHT_DIR}"
+  PREFLIGHT_DIR="${WORK_ROOT}/${DATASET}/preflight/seed_${SEED}_$(date -u +%Y%m%dT%H%M%SZ)"
+  PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
+    "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_work_dir.py" "${PREFLIGHT_DIR}"
   PREFLIGHT=(
     "${PYTHON_BIN}" "${SCRIPT_DIR}/server_preflight.py"
     --dataset "${DATASET}"
@@ -291,15 +303,28 @@ for run_variant in "${VARIANTS[@]}"; do
       printf 'trusted checkpoint changed before variant launch\n' >&2
       exit 2
     }
+    PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
+      "${PYTHON_BIN}" "${SCRIPT_DIR}/gpu_guard.py" --expected-count "${GPUS}"
+    "${PYTHON_BIN}" "${SCRIPT_DIR}/port_guard.py" --port "${MASTER_PORT}"
     if [[ -L "${WORK_DIR}/command.txt" ]]; then
       printf 'refusing symlink command log: %s\n' "${WORK_DIR}/command.txt" >&2
       exit 2
     fi
-    printf '%q ' "${COMMAND[@]}" > "${WORK_DIR}/command.txt"
-    printf '\n' >> "${WORK_DIR}/command.txt"
+    {
+      printf 'CUDA_DEVICE_ORDER=%q\n' "${CUDA_DEVICE_ORDER}"
+      printf 'CUDA_VISIBLE_DEVICES=%q\n' "${CUDA_VISIBLE_DEVICES}"
+      printf 'MASTER_ADDR=%q\n' "127.0.0.1"
+      printf 'PORT=%q\n' "${MASTER_PORT}"
+      printf 'TRANSFORMERS_OFFLINE=%q\n' "${TRANSFORMERS_OFFLINE}"
+      printf 'COMMAND='
+      printf '%q ' "${COMMAND[@]}"
+      printf '\n'
+    } > "${WORK_DIR}/command.txt"
     (
       cd "${MMDET_ROOT}"
-      PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "${COMMAND[@]}"
+      PORT="${MASTER_PORT}" MASTER_ADDR="127.0.0.1" \
+        PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
+        "${COMMAND[@]}"
     )
   fi
 done

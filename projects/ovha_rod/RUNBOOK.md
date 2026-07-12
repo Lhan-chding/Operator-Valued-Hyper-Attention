@@ -158,6 +158,12 @@ Exit code `0` is mandatory. The report checks:
 
 ## 6. Dry-run command generation
 
+For any real launch, first reserve or otherwise coordinate the physical GPUs,
+then set `CUDA_DEVICE_ORDER=PCI_BUS_ID` and an explicit
+`CUDA_VISIBLE_DEVICES` list whose length equals `--gpus`. The runner refuses
+busy cards and rechecks them immediately before every variant. Also choose a
+free localhost `--master-port`; do not share the default torchrun port.
+
 ```bash
 bash scripts/run_phase1_server.sh \
   --dataset refcoco \
@@ -169,6 +175,7 @@ bash scripts/run_phase1_server.sh \
   --bert-root "$BERT_ROOT" \
   --work-root "$PRIVATE_ROOT/runs" \
   --gpus 8 \
+  --master-port 29626 \
   --dry-run
 ```
 
@@ -191,6 +198,7 @@ bash scripts/run_phase1_server.sh \
   --work-root "$PRIVATE_ROOT/runs" \
   --gpus 8 \
   --per-device-batch 4 \
+  --master-port 29626 \
   --seed 2026
 ```
 
@@ -207,8 +215,10 @@ backward/checkpoint smoke (the full runner's dry-run prints the equivalent
 overrides for each dataset):
 
 ```bash
+SMOKE_DIR="$PRIVATE_ROOT/runs/refcoco/rqgo-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=4 \
 python scripts/two_batch_smoke.py configs/ovha_rod_swin_t_5e_refcoco.py \
-  --work-dir "$PRIVATE_ROOT/runs/refcoco/rqgo-smoke" \
+  --work-dir "$SMOKE_DIR" \
   --cfg-options \
     model.seed_operator=rqgo \
     load_from="$CHECKPOINT" \

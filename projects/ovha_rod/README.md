@@ -110,6 +110,10 @@ BERT_ROOT="$PRIVATE_ROOT/bert-base-uncased"
 CHECKPOINT="$PRIVATE_ROOT/inputs/checkpoints/mm_grounding_dino_swin_t.pth"
 WORK_ROOT="$PRIVATE_ROOT/runs"
 
+# Set this only after verifying that the selected physical GPUs are idle.
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
 bash scripts/run_phase1_server.sh \
   --dataset refcoco \
   --variant all \
@@ -119,15 +123,19 @@ bash scripts/run_phase1_server.sh \
   --checkpoint-sha256 b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a \
   --bert-root "$BERT_ROOT" \
   --work-root "$WORK_ROOT" \
-  --gpus 8
+  --gpus 8 \
+  --master-port 29626
 ```
 
 Before a full run, execute the dedicated two-batch train/backward smoke with
 the same `--cfg-options` printed by the runner:
 
 ```bash
-python scripts/two_batch_smoke.py configs/ovha_rod_swin_t_5e_refcoco.py \
-  --work-dir "$WORK_ROOT/refcoco/rqgo-smoke" \
+# The smoke entrypoint requires exactly one explicitly selected idle GPU.
+SMOKE_DIR="$WORK_ROOT/refcoco/rqgo-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
+CUDA_VISIBLE_DEVICES=4 python scripts/two_batch_smoke.py \
+  configs/ovha_rod_swin_t_5e_refcoco.py \
+  --work-dir "$SMOKE_DIR" \
   --cfg-options \
     model.seed_operator=rqgo \
     load_from="$CHECKPOINT" \

@@ -7,8 +7,16 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from ovha_rod.runtime_contracts import (
     audit_smoke_outputs,
@@ -25,16 +33,23 @@ from mmengine.runner import Runner
 
 ALLOWED_CFG_OPTIONS = frozenset({
     "model.seed_operator",
+    "model.bbox_head.loss_seed_weight",
+    "model.bbox_head.loss_ref_weight",
+    "model.bbox_head.loss_role_div_weight",
     "load_from",
     "model.language_model.name",
     "train_dataloader.batch_size",
     "train_dataloader.num_workers",
+    "train_dataloader.persistent_workers",
     "train_dataloader.dataset.data_root",
     "train_dataloader.dataset.pipeline.5.tokenizer_name",
     "val_dataloader.dataset.data_root",
     "val_evaluator.ann_file",
     "optim_wrapper.type",
     "optim_wrapper.loss_scale",
+    "optim_wrapper.accumulative_counts",
+    "param_scheduler.0.end",
+    "custom_hooks.0.warmup_iters",
     "randomness.seed",
     "randomness.deterministic",
 })
@@ -62,6 +77,8 @@ def main() -> int:
     config_path = args.config.resolve()
     if not config_path.is_relative_to(trusted_root.resolve()):
         raise ValueError("smoke config must come from the project configs directory")
+    if not config_path.name.startswith("ovha_rod_"):
+        raise ValueError("Phase 1 smoke requires an OVHA config")
     work_dir = prepare_fresh_private_work_dir(args.work_dir)
     config = Config.fromfile(str(config_path))
     config.merge_from_dict(args.cfg_options)
@@ -72,11 +89,38 @@ def main() -> int:
     if remote_weights:
         raise ValueError(f"remote model weights are forbidden: {remote_weights}")
     validate_locked_checkpoint(Path(str(config.get("load_from", ""))))
-    validate_local_bert(Path(str(config.model.language_model.name)))
+    bert_root = validate_local_bert(
+        Path(str(config.model.language_model.name)))
+    tokenizer_root = Path(str(
+        config.train_dataloader.dataset.pipeline[5].tokenizer_name
+    )).expanduser().resolve()
+    if tokenizer_root != bert_root:
+        raise ValueError(
+            "tokenizer root must equal the locked local BERT root")
     expected_operator = str(config.model.get("seed_operator", "none"))
     if expected_operator not in {"none", "generic", "rqgo"}:
         raise ValueError(f"unsupported smoke seed operator: {expected_operator}")
+    expected_loss_weights = {
+        "none": (0.0, 0.5, 0.0),
+        "generic": (0.5, 0.5, 0.0),
+        "rqgo": (0.5, 0.5, 0.005),
+    }[expected_operator]
+    observed_loss_weights = (
+        float(config.model.bbox_head.loss_seed_weight),
+        float(config.model.bbox_head.loss_ref_weight),
+        float(config.model.bbox_head.loss_role_div_weight),
+    )
+    if observed_loss_weights != expected_loss_weights:
+        raise ValueError(
+            "smoke auxiliary loss weights do not match the locked variant: "
+            f"{observed_loss_weights} != {expected_loss_weights}")
     config.work_dir = str(work_dir)
+    config.train_dataloader.batch_size = 1
+    config.train_dataloader.num_workers = 0
+    config.train_dataloader.persistent_workers = False
+    config.optim_wrapper.type = "AmpOptimWrapper"
+    config.optim_wrapper.loss_scale = "dynamic"
+    config.optim_wrapper.accumulative_counts = 1
     config.train_cfg = dict(
         type="IterBasedTrainLoop", max_iters=2, val_interval=3)
     config.param_scheduler = []
@@ -89,6 +133,7 @@ def main() -> int:
         if hook.get("type") == "OperatorDiagnosticsHook":
             hook["interval"] = 1
 
+    require_selected_gpus_idle(device_ids)
     runner = Runner.from_cfg(config)
     runner.train()
     summary = audit_smoke_outputs(

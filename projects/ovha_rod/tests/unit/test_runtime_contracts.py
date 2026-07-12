@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +24,32 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class RuntimeContractTests(unittest.TestCase):
+    def test_port_guard_accepts_free_port_and_rejects_bound_port(self):
+        script = ROOT / "scripts/port_guard.py"
+        spec = importlib.util.spec_from_file_location("ovha_port_guard", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        class FakeSocket:
+            def __init__(self, busy=False):
+                self.busy = busy
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                del args
+
+            def bind(self, address):
+                del address
+                if self.busy:
+                    raise OSError("address in use")
+
+        module.require_port_available(
+            29626, socket_factory=lambda *args: FakeSocket())
+        with self.assertRaisesRegex(RuntimeError, "unavailable"):
+            module.require_port_available(
+                29626, socket_factory=lambda *args: FakeSocket(busy=True))
     def test_visible_devices_are_explicit_unique_and_counted(self):
         self.assertEqual(require_visible_device_ids("4", 1), (4,))
         self.assertEqual(require_visible_device_ids("4,5", 2), (4, 5))

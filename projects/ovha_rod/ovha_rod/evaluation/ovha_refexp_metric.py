@@ -45,18 +45,28 @@ class OVHARefExpMetric(RefExpMetric):
                     f"RefExp sample {image_id} must have exactly one annotation")
             image_info = self.coco.loadImgs(image_id)[0]
             dataset_name = image_info["dataset_name"]
+            if dataset_name not in names:
+                raise ValueError(
+                    f"unexpected RefExp dataset_name: {dataset_name!r}")
             annotation = self.coco.loadAnns(annotation_ids[0])[0]
             x, y, width, height = annotation["bbox"]
             target = np.asarray([[x, y, x + width, y + height]], dtype=np.float32)
             predictions = result["bboxes"]
+            if not np.isfinite(predictions).all():
+                raise ValueError(
+                    f"non-finite prediction boxes for sample {image_id}")
             top1_iou = 0.0
             if len(predictions):
                 overlaps = bbox_overlaps(predictions[:1], target)
                 top1_iou = float(overlaps[0, 0])
             ious.setdefault(dataset_name, []).append(top1_iou)
             if "encoder_query_boxes" in result:
+                encoder_boxes = result["encoder_query_boxes"]
+                if not np.isfinite(encoder_boxes).all():
+                    raise ValueError(
+                        f"non-finite encoder boxes for sample {image_id}")
                 encoder_overlaps = bbox_overlaps(
-                    result["encoder_query_boxes"], target)
+                    encoder_boxes, target)
                 encoder_ious.setdefault(dataset_name, []).append(
                     float(encoder_overlaps.max()) if encoder_overlaps.size else 0.0)
 

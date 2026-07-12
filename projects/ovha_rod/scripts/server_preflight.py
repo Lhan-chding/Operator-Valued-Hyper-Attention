@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 import hashlib
 import importlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -105,11 +106,12 @@ def main() -> int:
     print(rendered)
     if args.output is not None:
         work_root = args.work_root.expanduser().resolve()
-        output = args.output.expanduser().resolve()
+        output_lexical = Path(os.path.abspath(args.output.expanduser()))
+        if output_lexical.is_symlink():
+            raise ValueError("preflight output must not be a symlink")
+        output = output_lexical.resolve()
         if not output.is_relative_to(work_root):
             raise ValueError("preflight output must stay inside work root")
-        if output.is_symlink():
-            raise ValueError("preflight output must not be a symlink")
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(rendered + "\n")
     return 0 if payload["ok"] else 2
@@ -447,6 +449,49 @@ def _project_checks(project_root: Path, dataset: str, data_root: Path,
         checks.append(CheckResult(
             "zero_initialized_residual_heads", zero_init,
             "seed and referent output heads must be exactly zero initialized"))
+        try:
+            model.eval()
+            token_count = max(int(model.num_queries), 1)
+            grid_side = math.isqrt(token_count)
+            if grid_side * grid_side != token_count:
+                raise ValueError(
+                    "pre-decoder probe requires a square query grid")
+            embed_dims = int(model.embed_dims)
+            probe_memory = torch.zeros(1, token_count, embed_dims)
+            probe_spatial_shapes = torch.tensor(
+                [[grid_side, grid_side]], dtype=torch.long)
+            probe_text = torch.zeros(1, 4, embed_dims)
+            probe_text_mask = torch.ones(1, 4, dtype=torch.bool)
+            with torch.no_grad():
+                _, probe_head_inputs = model.pre_decoder(
+                    memory=probe_memory,
+                    memory_mask=None,
+                    spatial_shapes=probe_spatial_shapes,
+                    memory_text=probe_text,
+                    text_token_mask=probe_text_mask,
+                    batch_data_samples=None,
+                )
+            probe_valid = probe_head_inputs["seed_valid"]
+            probe_bias = probe_head_inputs["seed_bias"]
+            probe_ok = (
+                tuple(probe_valid.shape) == (1, token_count)
+                and bool(probe_valid.all())
+                and bool(torch.isfinite(probe_bias).all())
+            )
+        except Exception as exc:
+            checks.append(CheckResult(
+                "pre_decoder_none_memory_mask", False, str(exc)))
+        else:
+            checks.append(CheckResult(
+                "pre_decoder_none_memory_mask",
+                probe_ok,
+                "real Phase 1 pre-decoder accepts the official None mask",
+                {
+                    "tokens": token_count,
+                    "all_valid": bool(probe_valid.all()),
+                    "finite_bias": bool(torch.isfinite(probe_bias).all()),
+                },
+            ))
         if not checkpoint_trusted:
             checks.append(CheckResult(
                 "checkpoint_base_key_coverage", False,
@@ -468,7 +513,23 @@ def _project_checks(project_root: Path, dataset: str, data_root: Path,
                     if not key.startswith(new_prefixes)
                 }
                 missing = sorted(base_keys - state_keys)
+                backbone_keys = {
+                    key for key in model_keys if key.startswith("backbone.")
+                }
+                missing_backbone = sorted(backbone_keys - state_keys)
                 coverage = 1.0 - len(missing) / max(len(base_keys), 1)
+                checks.append(CheckResult(
+                    "checkpoint_backbone_key_coverage",
+                    not missing_backbone,
+                    "every backbone parameter key must be present",
+                    {
+                        "coverage": (
+                            1.0 - len(missing_backbone)
+                            / max(len(backbone_keys), 1)),
+                        "missing_count": len(missing_backbone),
+                        "missing_preview": missing_backbone[:20],
+                    },
+                ))
                 checks.append(CheckResult(
                     "checkpoint_base_key_coverage",
                     coverage >= 0.99,
