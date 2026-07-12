@@ -3,7 +3,8 @@ import unittest
 import torch
 
 from ovha_rod.models.losses import build_seed_quality_targets, quality_focal_seed_loss
-from ovha_rod.models.operators.generic_seed import GenericDenseSeedPredictor
+from ovha_rod.models.operators.generic_seed import (
+    GenericDenseSeedPredictor, matched_generic_hidden_dim)
 from ovha_rod.models.operators.rqgo import RQGO
 from ovha_rod.models.role_encoder import LatentRoleEncoder
 
@@ -32,7 +33,7 @@ class RQGOTests(unittest.TestCase):
 
         self.assertTrue(torch.equal(result.seed_bias, torch.zeros_like(result.seed_bias)))
         self.assertTrue(torch.equal(parent_topk, ovha_topk))
-        self.assertLessEqual(float(result.seed_bias.abs().max()), 2.0)
+        self.assertLessEqual(float(result.seed_bias.detach().abs().max()), 2.0)
         self.assertTrue(torch.equal(result.valid, ~memory_mask))
 
     def test_padding_content_cannot_change_valid_seed_logits(self):
@@ -75,6 +76,17 @@ class RQGOTests(unittest.TestCase):
         self.assertEqual(tuple(result.seed_bias.shape), (2, 20))
         self.assertTrue(torch.equal(result.valid, ~memory_mask))
         self.assertTrue(torch.equal(result.seed_bias, torch.zeros_like(result.seed_bias)))
+
+    def test_generic_control_matches_rqgo_and_role_capacity(self):
+        hidden = matched_generic_hidden_dim(
+            d_model=256, num_levels=4, relation_count=8, scale_count=3)
+        typed_modules = (LatentRoleEncoder(256, num_heads=8), RQGO(256))
+        generic = GenericDenseSeedPredictor(256, 4, hidden_dim=hidden)
+        typed_count = sum(
+            parameter.numel() for module in typed_modules
+            for parameter in module.parameters())
+        generic_count = sum(parameter.numel() for parameter in generic.parameters())
+        self.assertLess(abs(generic_count - typed_count) / typed_count, 0.01)
 
 
 class SeedLossTests(unittest.TestCase):
