@@ -6,7 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from pathlib import Path
+
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 from mmengine.config import Config, DictAction
 from mmengine.runner import Runner
