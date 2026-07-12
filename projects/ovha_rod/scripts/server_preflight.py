@@ -305,7 +305,9 @@ def _project_source_checks(project_root: Path) -> tuple[CheckResult, ...]:
             except OSError as exc:
                 unsafe.append(f"{path}: {exc}")
                 continue
-            if path.is_symlink() or stat.st_uid != os.getuid() or stat.st_mode & 0o022:
+            if path.is_symlink():
+                continue
+            if stat.st_uid != os.getuid() or stat.st_mode & 0o022:
                 unsafe.append(str(path))
     return (
         trust,
@@ -338,12 +340,27 @@ def _executable_tree_check(root: Path, name: str) -> CheckResult:
         except OSError as exc:
             unsafe.append(f"{path}: {exc}")
             continue
-        if path.is_symlink() or stat.st_uid != os.getuid() or stat.st_mode & 0o022:
+        if path.is_symlink():
+            try:
+                target = path.resolve(strict=True)
+                target_stat = target.stat()
+            except OSError:
+                unsafe.append(str(path))
+                continue
+            internal = target == resolved or target.is_relative_to(resolved)
+            target_private = (
+                target_stat.st_uid == os.getuid()
+                and not target_stat.st_mode & 0o022
+            )
+            if not internal or not target_private:
+                unsafe.append(str(path))
+            continue
+        if stat.st_uid != os.getuid() or stat.st_mode & 0o022:
             unsafe.append(str(path))
     return CheckResult(
         name,
         not unsafe,
-        "executable tree and parent chain must be user-owned, private, and symlink-free",
+        "executable tree must be private; links may only resolve inside the same trusted root",
         unsafe[:50],
     )
 
