@@ -5,6 +5,11 @@ from .decoder_contracts import (
     DecoderResidualState,
     StructuredResidualFusion,
 )
+from .decoder_integration import (
+    DecoderIntegrationResult,
+    apply_matching_query_residual,
+    stack_decoder_operator_outputs,
+)
 from .generic_seed import GenericDenseSeedPredictor, matched_generic_hidden_dim
 from .hyper_adapter import HyperAdapterResult, LowRankHyperAdapter
 from .operator_memory import OperatorMemory, OperatorMemoryState
@@ -32,6 +37,7 @@ def __getattr__(name: str):
 
 __all__ = [
     "DecoderOperatorResidual",
+    "DecoderIntegrationResult",
     "DecoderResidualState",
     "GenericDenseSeedPredictor",
     "HyperAdapterResult",
@@ -50,6 +56,8 @@ __all__ = [
     "RQGO",
     "RQGOResult",
     "StructuredResidualFusion",
+    "apply_matching_query_residual",
+    "stack_decoder_operator_outputs",
     "TQCATO",
     "TQCATOResult",
 ]

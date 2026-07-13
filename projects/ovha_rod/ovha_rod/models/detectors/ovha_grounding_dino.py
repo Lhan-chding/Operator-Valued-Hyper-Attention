@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -7,10 +8,19 @@ from torch import Tensor, nn
 
 from mmdet.registry import MODELS
 from mmdet.structures import OptSampleList
+from mmdet.models.layers.transformer.utils import (
+    coordinate_to_encoding,
+    inverse_sigmoid,
+)
 
 from ..operators.generic_seed import (
     GenericDenseSeedPredictor, matched_generic_hidden_dim)
 from ..operators.base import SeedResult, memory_valid_mask
+from ..operators.decoder_contracts import DecoderOperatorResidual
+from ..operators.decoder_integration import (
+    apply_matching_query_residual,
+    stack_decoder_operator_outputs,
+)
 from ..operators.rqgo import RQGO
 from ..role_encoder import LatentRoleEncoder
 from .deterministic_grounding_dino import DeterministicGroundingDINO
@@ -27,6 +37,7 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
     """
 
     _SEED_OPERATORS = frozenset({"none", "rqgo", "generic"})
+    _PINNED_MMDET_COMMIT = "cfd5d3a985b0249de009b67d04f37263e11cdf3d"
 
     def __init__(
         self,
@@ -34,6 +45,7 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
         seed_operator: Optional[str] = None,
         seed_operator_cfg: Optional[Dict] = None,
         role_encoder_cfg: Optional[Dict] = None,
+        decoder_operator_cfg: Optional[Dict] = None,
         ovha_cfg: Optional[Dict] = None,
         **kwargs,
     ) -> None:
@@ -71,6 +83,14 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
             **dict(seed_operator_cfg or {}),
         }
         self.role_encoder_cfg = dict(role_encoder_cfg or {})
+        decoder_cfg = (
+            None if decoder_operator_cfg is None else dict(decoder_operator_cfg)
+        )
+        if decoder_cfg is not None and not decoder_cfg.pop("enabled", True):
+            if decoder_cfg:
+                raise ValueError(
+                    "disabled decoder_operator_cfg cannot contain build fields")
+            decoder_cfg = None
         if "role_count" in phase_cfg:
             self.role_encoder_cfg.setdefault(
                 "role_count", int(phase_cfg["role_count"])
@@ -113,6 +133,113 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
         else:
             self.role_encoder = None
             self.seed_operator = None
+        self.decoder_operator: Optional[nn.Module] = (
+            None if decoder_cfg is None else MODELS.build(decoder_cfg)
+        )
+
+    def forward_decoder(
+        self,
+        query: Tensor,
+        memory: Tensor,
+        memory_mask: Optional[Tensor],
+        reference_points: Tensor,
+        spatial_shapes: Tensor,
+        level_start_index: Tensor,
+        valid_ratios: Tensor,
+        dn_mask: Optional[Tensor] = None,
+        **kwargs,
+    ) -> Dict:
+        """Run the pinned DINO loop with optional matching-query operators."""
+        if self.decoder_operator is None:
+            return super().forward_decoder(
+                query=query,
+                memory=memory,
+                memory_mask=memory_mask,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+                valid_ratios=valid_ratios,
+                dn_mask=dn_mask,
+                **kwargs,
+            )
+
+        intermediate = []
+        intermediate_reference_points = [reference_points]
+        operator_outputs = []
+        reg_branches = self.bbox_head.reg_branches
+        for lid, layer in enumerate(self.decoder.layers):
+            if reference_points.shape[-1] == 4:
+                reference_points_input = reference_points[:, :, None] * torch.cat(
+                    [valid_ratios, valid_ratios], -1)[:, None]
+            else:
+                if reference_points.shape[-1] != 2:
+                    raise ValueError("reference_points must end in 2 or 4 values")
+                reference_points_input = (
+                    reference_points[:, :, None] * valid_ratios[:, None]
+                )
+            query_sine_embed = coordinate_to_encoding(reference_points_input[:, :, 0, :])
+            query_pos = self.decoder.ref_point_head(query_sine_embed)
+            query = layer(
+                query,
+                query_pos=query_pos,
+                value=memory,
+                key_padding_mask=memory_mask,
+                self_attn_mask=dn_mask,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+                valid_ratios=valid_ratios,
+                reference_points=reference_points_input,
+                **kwargs,
+            )
+            tmp = reg_branches[lid](query)
+            if reference_points.shape[-1] != 4:
+                raise ValueError(
+                    "operator decoder integration requires 4D references")
+            parent_box_logits = tmp + inverse_sigmoid(reference_points, eps=1e-3)
+            operator_result = self.decoder_operator(
+                query=query[:, -self.num_queries:, :],
+                reference_points=reference_points[:, -self.num_queries:, :],
+                parent_box_logits=parent_box_logits[:, -self.num_queries:, :],
+                memory=memory,
+                memory_mask=memory_mask,
+                memory_text=kwargs.get("memory_text"),
+                text_attention_mask=kwargs.get("text_attention_mask"),
+                spatial_shapes=spatial_shapes,
+                layer_index=lid,
+            )
+            residuals = _decoder_operator_residuals(operator_result)
+            integration = apply_matching_query_residual(
+                query=query,
+                parent_box_logits=parent_box_logits,
+                residual=residuals,
+                matching_query_count=self.num_queries,
+            )
+            query = integration.query
+            new_reference_points = integration.reference_points
+            reference_points = new_reference_points.detach()
+            operator_outputs.append(integration)
+            if self.decoder.return_intermediate:
+                intermediate.append(self.decoder.norm(query))
+                intermediate_reference_points.append(new_reference_points)
+
+        if self.decoder.return_intermediate:
+            inter_states = torch.stack(intermediate)
+            references = torch.stack(intermediate_reference_points)
+        else:
+            inter_states = query
+            references = reference_points
+        if len(query) == self.num_queries:
+            inter_states[0] += (
+                self.dn_query_generator.label_embedding.weight[0, 0] * 0.0)
+        operator_box_deltas, operator_referent_scores = (
+            stack_decoder_operator_outputs(operator_outputs)
+        )
+        return dict(
+            hidden_states=inter_states,
+            references=list(references),
+            operator_box_deltas=operator_box_deltas,
+            operator_referent_scores=operator_referent_scores,
+        )
 
     def pre_decoder(
         self,
@@ -294,6 +421,28 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
 def _masked_text_mean(memory_text: Tensor, text_token_mask: Tensor) -> Tensor:
     mask = text_token_mask.to(dtype=memory_text.dtype).unsqueeze(-1)
     return (memory_text * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
+
+
+def _decoder_operator_residuals(output) -> Tuple[DecoderOperatorResidual, ...]:
+    if isinstance(output, DecoderOperatorResidual):
+        return (output,)
+    if hasattr(output, "residual"):
+        return _decoder_operator_residuals(output.residual)
+    if isinstance(output, Mapping):
+        if "residuals" in output:
+            return _decoder_operator_residuals(output["residuals"])
+        if "residual" in output:
+            return _decoder_operator_residuals(output["residual"])
+    if isinstance(output, Sequence) and not isinstance(output, (str, bytes)):
+        residuals = tuple(
+            residual
+            for item in output
+            for residual in _decoder_operator_residuals(item)
+        )
+        if residuals:
+            return residuals
+    raise TypeError(
+        "decoder operator must return DecoderOperatorResidual values")
 
 
 def _flattened_level_ids(
