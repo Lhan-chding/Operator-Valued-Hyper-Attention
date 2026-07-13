@@ -1,10 +1,14 @@
 import ast
+import subprocess
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_ROOT = ROOT / "configs" / "post_rqgo"
+RUNNER = ROOT / "scripts" / "run_phase1_server.sh"
+LOCKED_CHECKPOINT_SHA256 = (
+    "b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a")
 
 
 EXPECTED_VARIANTS = {
@@ -99,6 +103,37 @@ def _config_literal(node):
 
 
 class PostRQGOExperimentSurfaceTests(unittest.TestCase):
+    def _runner_dry_run(self, variant, dataset="refcoco"):
+        return subprocess.run(
+            [
+                "bash",
+                str(RUNNER),
+                "--dataset",
+                dataset,
+                "--variant",
+                variant,
+                "--mmdet-root",
+                "/reviewed/mmdetection",
+                "--data-root",
+                "/private/coco",
+                "--checkpoint",
+                "/private/checkpoint.pth",
+                "--checkpoint-sha256",
+                LOCKED_CHECKPOINT_SHA256,
+                "--bert-root",
+                "/private/bert",
+                "--gpus",
+                "1",
+                "--per-device-batch",
+                "8",
+                "--dry-run",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def test_all_complete_and_ablation_configs_exist(self):
         observed = {
             path.stem.removeprefix("ovha_rod_swin_t_5e_refcoco_bank_")
@@ -197,6 +232,30 @@ class PostRQGOExperimentSurfaceTests(unittest.TestCase):
         self.assertIn("post-rqgo", documentation)
         self.assertIn("cuda", documentation)
         self.assertIn("pending", documentation)
+
+    def test_locked_runner_can_select_every_post_rqgo_config(self):
+        for name in EXPECTED_VARIANTS:
+            variant = f"bank_{name}"
+            with self.subTest(variant=variant):
+                result = self._runner_dry_run(variant)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(
+                    f"ovha_rod_swin_t_5e_refcoco_bank_{name}.py",
+                    result.stdout,
+                )
+                self.assertIn(f"Variant {variant}", result.stdout)
+
+    def test_post_all_expands_to_the_complete_eight_run_matrix(self):
+        result = self._runner_dry_run("post_all")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count("Command:"), len(EXPECTED_VARIANTS))
+        for name in EXPECTED_VARIANTS:
+            self.assertIn(f"Variant bank_{name}", result.stdout)
+
+    def test_post_rqgo_runner_fails_closed_for_unsupported_dataset(self):
+        result = self._runner_dry_run("bank_full", dataset="refcocog")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("post-RQGO variants require refcoco", result.stderr)
 
 
 if __name__ == "__main__":
