@@ -12,6 +12,7 @@ from .operator_router import OperatorRouter, OperatorRouterResult
 from .relation_fields import RELATION_TYPES, RelationFieldBank
 from .rceo import RCEO, RCEOResult
 from .rqgo import RQGO, RQGOResult
+from .tq_cato import TQCATO, TQCATOResult
 
 if TYPE_CHECKING:  # pragma: no cover - static imports only.
     from .qsro import QSRO, QuerySpatialRelationOperator
@@ -49,4 +50,6 @@ __all__ = [
     "RQGO",
     "RQGOResult",
     "StructuredResidualFusion",
+    "TQCATO",
+    "TQCATOResult",
 ]

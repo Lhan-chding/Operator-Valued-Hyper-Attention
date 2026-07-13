@@ -1,5 +1,5 @@
 import unittest
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import torch
@@ -8,7 +8,7 @@ from ovha_rod.models.operators.decoder_contracts import (
     DecoderResidualState,
     StructuredResidualFusion,
 )
-from ovha_rod.models.operators.tq_cato import TQCATO
+from ovha_rod.models.operators.tq_cato import TQCATO, TQCATOResult
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,6 +52,16 @@ class TQCATOTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sample 0.*valid text"):
             TQCATO(d_model=8)(query, text, query_valid, text_valid)
 
+    def test_constructor_rejects_invalid_dimensions_and_temperatures(self):
+        for d_model in (0, -1, 1.5, True):
+            with self.subTest(d_model=d_model):
+                with self.assertRaisesRegex(ValueError, "d_model"):
+                    TQCATO(d_model=d_model)
+        for temperature in (0.0, -1.0, float("inf"), float("nan"), "hot", True):
+            with self.subTest(temperature=temperature):
+                with self.assertRaisesRegex(ValueError, "temperature"):
+                    TQCATO(d_model=8, temperature=temperature)
+
     def test_input_contract_rejects_shapes_masks_dtypes_and_nonfinite(self):
         query, text, query_valid, text_valid = self._inputs()
         operator = TQCATO(d_model=8)
@@ -71,6 +81,59 @@ class TQCATOTests(unittest.TestCase):
         query[0, 0, 0] = float("nan")
         with self.assertRaisesRegex(ValueError, "finite"):
             operator(query, text, query_valid, text_valid)
+
+    def test_input_contract_rejects_boundary_types_and_devices(self):
+        query, text, query_valid, text_valid = self._inputs()
+        operator = TQCATO(d_model=8)
+        cases = (
+            ((None, text, query_valid, text_valid), "query.*tensor"),
+            ((query[0], text, query_valid, text_valid), "shape"),
+            ((query, text[:1], query_valid, text_valid[:1]), "batch"),
+            ((query.to(torch.int64), text, query_valid, text_valid), "floating"),
+            ((query, text, query_valid, text_valid[:, :4]), "text_valid"),
+            (
+                (query, torch.empty(text.shape, device="meta"), query_valid, text_valid),
+                "share a device",
+            ),
+            (
+                (
+                    query,
+                    text,
+                    torch.empty(query_valid.shape, dtype=torch.bool, device="meta"),
+                    text_valid,
+                ),
+                "masks must share a device",
+            ),
+        )
+        for arguments, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    operator(*arguments)
+
+    def test_result_contract_rejects_invalid_payloads(self):
+        query, text, query_valid, text_valid = self._inputs()
+        result = TQCATO(d_model=8)(query, text, query_valid, text_valid)
+        self.assertIsInstance(result, TQCATOResult)
+        cases = (
+            ({"residual": object()}, "DecoderOperatorResidual"),
+            ({"transport": result.transport[:, 0]}, "shape"),
+            ({"transport": result.transport[:, :, :3]}, "shapes must agree"),
+            ({"transport": torch.zeros(2, 5, 4, dtype=torch.int64)}, "floating"),
+            ({"transport": result.transport.double()}, "dtype"),
+            (
+                {"transport": torch.empty(result.transport.shape, device="meta")},
+                "device",
+            ),
+        )
+        for changes, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    replace(result, **changes)
+
+        nonfinite = result.transport.clone()
+        nonfinite[0, 0, 0] = float("inf")
+        with self.assertRaisesRegex(ValueError, "finite"):
+            replace(result, transport=nonfinite)
 
     def test_zero_initialized_gate_is_exact_structured_fusion_noop(self):
         query, text, query_valid, text_valid = self._inputs()
