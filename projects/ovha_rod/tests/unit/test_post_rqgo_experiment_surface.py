@@ -113,6 +113,10 @@ class PostRQGOExperimentSurfaceTests(unittest.TestCase):
             "enabled_operators",
             "router_hidden_dim",
             "adapter_rank",
+            "qsro_cfg",
+            "tq_cato_cfg",
+            "ms_tleo_cfg",
+            "rceo_cfg",
             "use_router",
             "use_memory",
             "use_hyper_adapter",
@@ -128,6 +132,14 @@ class PostRQGOExperimentSurfaceTests(unittest.TestCase):
                 self.assertIs(contract["enabled"], True)
                 self.assertEqual(contract["router_hidden_dim"], 128)
                 self.assertEqual(contract["adapter_rank"], 16)
+                self.assertEqual(
+                    contract["qsro_cfg"], {"query_chunk_size": 128})
+                self.assertEqual(
+                    contract["tq_cato_cfg"], {"temperature": 1.0})
+                self.assertEqual(
+                    contract["ms_tleo_cfg"], {"context_scale": 1.5})
+                self.assertEqual(
+                    contract["rceo_cfg"], {"prior_cap": 2.0})
                 for key, value in expected.items():
                     self.assertEqual(contract[key], value)
 
