@@ -203,6 +203,8 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertIn("deterministic_positional_encoding", source)
         smoke = (ROOT / "scripts/two_batch_smoke.py").read_text()
         self.assertIn("DeterministicSinePositionalEncoding", smoke)
+        self.assertIn("are_deterministic_algorithms_enabled", smoke)
+        self.assertIn("deterministic positional CUDA probe", smoke)
 
 
 if __name__ == "__main__":
