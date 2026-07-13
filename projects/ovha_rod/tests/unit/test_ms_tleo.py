@@ -75,6 +75,100 @@ class MSTLEOTests(unittest.TestCase):
         self.assertTrue(torch.allclose(evidence.boundary, expected, atol=1e-6))
         self.assertTrue(torch.allclose(evidence.context, expected, atol=1e-6))
 
+    def test_per_level_valid_ratios_scale_padding_coordinates(self):
+        def affine_xy_map(height: int, width: int) -> torch.Tensor:
+            y_centres = (torch.arange(height, dtype=torch.float32) + 0.5) / height
+            x_centres = (torch.arange(width, dtype=torch.float32) + 0.5) / width
+            y_coordinate, x_coordinate = torch.meshgrid(
+                y_centres, x_centres, indexing="ij")
+            return (x_coordinate + 10.0 * y_coordinate).view(
+                1, 1, height, width).expand(2, 1, height, width)
+
+        feature_maps = (affine_xy_map(16, 16), affine_xy_map(8, 8))
+        boxes = torch.tensor(
+            [
+                [[0.5, 0.5, 0.2, 0.2]],
+                [[0.5, 0.5, 0.2, 0.2]],
+            ]
+        )
+        valid = torch.ones(2, 1, dtype=torch.bool)
+        # Ratios are ordered as (valid width, valid height). For sample 0,
+        # the two level centres become (0.25, 0.375) and (0.5, 0.25), so
+        # the equally averaged affine evidence is (4.0 + 3.0) / 2 = 3.5.
+        valid_ratios = torch.tensor(
+            [
+                [[0.50, 0.75], [1.00, 0.50]],
+                [[0.25, 1.00], [0.75, 0.25]],
+            ]
+        )
+
+        evidence = MSTLEO(d_model=1).extract_evidence(
+            feature_maps,
+            boxes,
+            valid,
+            valid_ratios=valid_ratios,
+        )
+
+        expected = torch.tensor([[[3.500]], [[3.375]]])
+        self.assertTrue(torch.allclose(evidence.interior, expected, atol=1e-5))
+        self.assertTrue(torch.allclose(evidence.boundary, expected, atol=1e-5))
+        self.assertTrue(torch.allclose(evidence.context, expected, atol=1e-5))
+
+    def test_none_and_all_one_valid_ratios_preserve_legacy_behavior(self):
+        feature_maps = self._features()
+        boxes = self._boxes()
+        valid = torch.tensor([[True, True], [True, False]])
+
+        legacy = self.operator(feature_maps, boxes, valid)
+        explicit_none = self.operator(
+            feature_maps, boxes, valid, valid_ratios=None)
+        all_one = self.operator(
+            feature_maps,
+            boxes,
+            valid,
+            valid_ratios=torch.ones(2, len(feature_maps), 2),
+        )
+
+        for field in (
+            "query_delta",
+            "box_delta",
+            "score_delta",
+            "gate_logits",
+            "valid",
+        ):
+            self.assertTrue(torch.equal(getattr(legacy, field),
+                                        getattr(explicit_none, field)))
+            self.assertTrue(torch.equal(getattr(legacy, field),
+                                        getattr(all_one, field)))
+        for name in legacy.diagnostics:
+            self.assertTrue(torch.equal(legacy.diagnostics[name],
+                                        all_one.diagnostics[name]))
+
+    def test_valid_ratios_shape_dtype_device_finite_and_range_fail_fast(self):
+        feature_maps = self._features()
+        boxes = self._boxes()
+        valid = torch.ones(2, 2, dtype=torch.bool)
+
+        invalid_cases = (
+            (torch.ones(2, 2), "shape.*B,L,2"),
+            (torch.ones(2, 3, 2), "shape.*B,L,2"),
+            (torch.ones(2, 2, 2, dtype=torch.int64), "floating point"),
+            (torch.ones(2, 2, 2, dtype=torch.float64), "same dtype"),
+            (torch.full((2, 2, 2), float("nan")), "finite"),
+            (torch.zeros(2, 2, 2), "greater than zero"),
+            (torch.full((2, 2, 2), 1.01), "at most one"),
+            (torch.ones(2, 2, 2, device="meta"), "same device"),
+        )
+        for ratios, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    self.operator(
+                        feature_maps,
+                        boxes,
+                        valid,
+                        valid_ratios=ratios,
+                    )
+
     def test_context_ring_expands_beyond_boundary_and_interior_layouts(self):
         size = 64
         centres = (torch.arange(size, dtype=torch.float32) + 0.5) / size
