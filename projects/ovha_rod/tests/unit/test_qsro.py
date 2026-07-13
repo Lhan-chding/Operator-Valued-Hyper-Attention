@@ -1,0 +1,259 @@
+import inspect
+import unittest
+from pathlib import Path
+
+import torch
+
+from ovha_rod.models.operators.decoder_contracts import (
+    DecoderResidualState,
+    StructuredResidualFusion,
+)
+from ovha_rod.models.operators.qsro import QuerySpatialRelationOperator
+
+
+class QuerySpatialRelationOperatorTests(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(101)
+        self.d_model = 16
+        self.operator = QuerySpatialRelationOperator(d_model=self.d_model)
+        self.query = torch.randn(2, 4, self.d_model)
+        self.boxes = torch.tensor(
+            [
+                [
+                    [0.20, 0.25, 0.18, 0.20],
+                    [0.70, 0.28, 0.16, 0.22],
+                    [0.35, 0.72, 0.25, 0.18],
+                    [0.82, 0.78, 0.12, 0.14],
+                ],
+                [
+                    [0.15, 0.20, 0.10, 0.12],
+                    [0.48, 0.45, 0.30, 0.24],
+                    [0.75, 0.65, 0.14, 0.20],
+                    [0.55, 0.85, 0.20, 0.10],
+                ],
+            ],
+            dtype=self.query.dtype,
+        )
+        self.relation_role = torch.randn(2, self.d_model)
+        self.valid = torch.tensor(
+            [[True, True, True, False], [True, True, False, False]],
+            dtype=torch.bool,
+        )
+
+    def _forward(self):
+        return self.operator(
+            self.query, self.boxes, self.relation_role, self.valid)
+
+    def test_outputs_structured_residual_with_scalar_finite_diagnostics(self):
+        result = self._forward()
+
+        self.assertEqual(tuple(result.query_delta.shape), (2, 4, 16))
+        self.assertEqual(tuple(result.box_delta.shape), (2, 4, 4))
+        self.assertEqual(tuple(result.score_delta.shape), (2, 4))
+        self.assertEqual(tuple(result.gate_logits.shape), (2, 4, 3))
+        self.assertTrue(torch.equal(result.valid, self.valid))
+        self.assertGreaterEqual(len(result.diagnostics), 3)
+        for value in result.diagnostics.values():
+            self.assertEqual(value.numel(), 1)
+            self.assertTrue(torch.isfinite(value).all())
+
+    def test_query_permutation_is_equivariant(self):
+        permutation = torch.tensor([2, 0, 3, 1])
+        original = self._forward()
+        permuted = self.operator(
+            self.query[:, permutation],
+            self.boxes[:, permutation],
+            self.relation_role,
+            self.valid[:, permutation],
+        )
+
+        torch.testing.assert_close(
+            permuted.query_delta, original.query_delta[:, permutation])
+        torch.testing.assert_close(
+            permuted.box_delta, original.box_delta[:, permutation])
+        torch.testing.assert_close(
+            permuted.score_delta, original.score_delta[:, permutation])
+        torch.testing.assert_close(
+            permuted.gate_logits, original.gate_logits[:, permutation])
+        self.assertTrue(torch.equal(permuted.valid, self.valid[:, permutation]))
+        self.assertEqual(permuted.diagnostics.keys(), original.diagnostics.keys())
+        for name in original.diagnostics:
+            torch.testing.assert_close(
+                permuted.diagnostics[name], original.diagnostics[name])
+
+    def test_invalid_queries_are_zero_and_cannot_influence_valid_queries(self):
+        baseline = self._forward()
+        changed_query = self.query.clone()
+        changed_boxes = self.boxes.clone()
+        changed_query[~self.valid] = 1e4
+        changed_boxes[~self.valid] = torch.tensor(
+            [0.99, 0.01, 0.01, 0.99], dtype=changed_boxes.dtype)
+
+        changed = self.operator(
+            changed_query, changed_boxes, self.relation_role, self.valid)
+
+        torch.testing.assert_close(
+            changed.query_delta[self.valid], baseline.query_delta[self.valid])
+        torch.testing.assert_close(
+            changed.box_delta[self.valid], baseline.box_delta[self.valid])
+        torch.testing.assert_close(
+            changed.score_delta[self.valid], baseline.score_delta[self.valid])
+        self.assertEqual(float(changed.query_delta[~self.valid].abs().sum()), 0.0)
+        self.assertEqual(float(changed.box_delta[~self.valid].abs().sum()), 0.0)
+        self.assertEqual(float(changed.score_delta[~self.valid].abs().sum()), 0.0)
+        self.assertEqual(float(changed.gate_logits[~self.valid].abs().sum()), 0.0)
+
+    def test_single_and_zero_valid_query_samples_are_finite_and_masked(self):
+        valid = torch.tensor(
+            [[True, False, False, False], [False, False, False, False]],
+            dtype=torch.bool,
+        )
+        result = self.operator(
+            self.query, self.boxes, self.relation_role, valid)
+
+        for value in (
+            result.query_delta,
+            result.box_delta,
+            result.score_delta,
+            result.gate_logits,
+            *result.diagnostics.values(),
+        ):
+            self.assertTrue(torch.isfinite(value).all())
+        self.assertEqual(float(result.query_delta[~valid].abs().sum()), 0.0)
+        self.assertEqual(float(result.box_delta[~valid].abs().sum()), 0.0)
+        self.assertEqual(float(result.score_delta[~valid].abs().sum()), 0.0)
+        self.assertEqual(float(result.gate_logits[~valid].abs().sum()), 0.0)
+
+    def test_zero_initialized_gate_is_exact_structured_fusion_noop(self):
+        result = self._forward()
+        parent = DecoderResidualState(
+            query=self.query.clone(),
+            box_logits=torch.randn(2, 4, 4),
+            referent_score=torch.randn(2, 4),
+        )
+
+        fused = StructuredResidualFusion()(parent, (result,))
+
+        self.assertEqual(float(result.gate_logits.abs().sum()), 0.0)
+        self.assertTrue(torch.equal(fused.query, parent.query))
+        self.assertTrue(torch.equal(fused.box_logits, parent.box_logits))
+        self.assertTrue(torch.equal(
+            fused.referent_score, parent.referent_score))
+
+    def test_fused_backward_is_finite_and_reaches_zero_gate_head(self):
+        query = self.query.clone().requires_grad_(True)
+        boxes = self.boxes.clone().requires_grad_(True)
+        relation_role = self.relation_role.clone().requires_grad_(True)
+        result = self.operator(query, boxes, relation_role, self.valid)
+        parent = DecoderResidualState(
+            query=query,
+            box_logits=torch.randn(2, 4, 4, requires_grad=True),
+            referent_score=torch.randn(2, 4, requires_grad=True),
+        )
+        fused = StructuredResidualFusion()(parent, (result,))
+
+        loss = (
+            fused.query.square().mean()
+            + fused.box_logits.square().mean()
+            + fused.referent_score.square().mean()
+        )
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(loss))
+        for parameter in self.operator.parameters():
+            self.assertIsNotNone(parameter.grad)
+            self.assertTrue(torch.isfinite(parameter.grad).all())
+        gate_gradient = sum(
+            float(parameter.grad.abs().sum())
+            for parameter in self.operator.gate_head.parameters()
+        )
+        self.assertGreater(gate_gradient, 0.0)
+        for value in (query.grad, boxes.grad, relation_role.grad):
+            self.assertIsNotNone(value)
+            self.assertTrue(torch.isfinite(value).all())
+
+    def test_relation_role_changes_relation_distractor_contrast(self):
+        positive = self._forward()
+        negative = self.operator(
+            self.query, self.boxes, -self.relation_role, self.valid)
+
+        difference = (
+            (positive.query_delta - negative.query_delta).abs().sum()
+            + (positive.box_delta - negative.box_delta).abs().sum()
+            + (positive.score_delta - negative.score_delta).abs().sum()
+        )
+        self.assertGreater(float(difference), 0.0)
+
+    def test_public_boundary_rejects_invalid_shapes_values_and_dtypes(self):
+        cases = (
+            (
+                "query",
+                (self.query[:, :, :-1], self.boxes,
+                 self.relation_role, self.valid),
+            ),
+            (
+                "boxes",
+                (self.query, self.boxes[:, :, :3],
+                 self.relation_role, self.valid),
+            ),
+            (
+                "relation_role",
+                (self.query, self.boxes,
+                 self.relation_role[:, :-1], self.valid),
+            ),
+            (
+                "boolean",
+                (self.query, self.boxes,
+                 self.relation_role, self.valid.float()),
+            ),
+            (
+                "normalized",
+                (self.query, self.boxes + 1.0,
+                 self.relation_role, self.valid),
+            ),
+            (
+                "finite",
+                (
+                    self.query.masked_fill(
+                        torch.zeros_like(self.query, dtype=torch.bool)
+                        .index_fill(2, torch.tensor([0]), True),
+                        float("nan"),
+                    ),
+                    self.boxes,
+                    self.relation_role,
+                    self.valid,
+                ),
+            ),
+            (
+                "dtype",
+                (self.query, self.boxes.double(),
+                 self.relation_role, self.valid),
+            ),
+        )
+        for message, arguments in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    self.operator(*arguments)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            QuerySpatialRelationOperator(d_model=0)
+
+    def test_forward_accepts_only_inference_available_inputs(self):
+        parameter_names = tuple(
+            inspect.signature(
+                QuerySpatialRelationOperator.forward).parameters)
+        self.assertEqual(
+            parameter_names,
+            ("self", "query", "boxes", "relation_role", "valid"),
+        )
+
+        config_root = Path(__file__).resolve().parents[2] / "configs"
+        formal_configs = tuple(config_root.glob("ovha_rod_swin_t_5e_*.py"))
+        self.assertGreater(len(formal_configs), 0)
+        for config in formal_configs:
+            source = config.read_text(encoding="utf-8").lower()
+            self.assertNotIn("qsro", source)
+            self.assertNotIn("queryspatialrelationoperator", source)
+
+
+if __name__ == "__main__":
+    unittest.main()
