@@ -26,7 +26,6 @@ CHECKPOINT_SHA256=""
 MASTER_PORT=""
 LOCKED_CHECKPOINT_SHA256="b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a"
 LOCKED_CHECKPOINT_SIZE=1093815743
-USE_AMP=true
 DRY_RUN=false
 RESUME=false
 ENVIRONMENT_PROFILE="cu121-wheel"
@@ -54,7 +53,7 @@ usage() {
     "  --checkpoint-sha256 HEX Required trusted checkpoint digest" \
     "  --master-port N        Explicit free localhost torchrun port" \
     "  --resume               Resume the matching private epoch checkpoint" \
-    "  --no-amp                Disable AMP" \
+    "  --no-amp                Full FP32 is mandatory; compatibility no-op" \
     "  --dry-run               Validate arguments and print commands only" \
     "  -h, --help              Show this help" \
     "" \
@@ -84,7 +83,7 @@ while [[ $# -gt 0 ]]; do
     --checkpoint-sha256) require_value "$1" "$#"; CHECKPOINT_SHA256="$2"; shift 2 ;;
     --master-port) require_value "$1" "$#"; MASTER_PORT="$2"; shift 2 ;;
     --resume) RESUME=true; shift ;;
-    --no-amp) USE_AMP=false; shift ;;
+    --no-amp) shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -222,14 +221,6 @@ PROJECT_COMMIT="$(git -C "${PROJECT_DIR}" rev-parse HEAD)" || {
 
 set_identity_options() {
   local name="$1"
-  local effective_amp="${USE_AMP}"
-  local effective_amp_dtype="bfloat16"
-  if [[ "${name}" == "phase0_parent" ]]; then
-    effective_amp=false
-  fi
-  if [[ "${effective_amp}" == false ]]; then
-    effective_amp_dtype="none"
-  fi
   IDENTITY_OPTIONS=(
     --expected-identity "dataset=${DATASET}"
     --expected-identity "variant=${name}"
@@ -238,8 +229,8 @@ set_identity_options() {
     --expected-identity "per_device_batch=${PER_DEVICE_BATCH}"
     --expected-identity "accumulative_counts=${ACCUMULATIVE_COUNTS}"
     --expected-identity "global_batch=${TARGET_GLOBAL_BATCH}"
-    --expected-identity "amp=${effective_amp}"
-    --expected-identity "amp_dtype=${effective_amp_dtype}"
+    --expected-identity "amp=false"
+    --expected-identity "amp_dtype=none"
     --expected-identity "physical_cuda_devices=${VISIBLE_DEVICE_IDENTITY}"
     --expected-identity "data_root=${DATA_ROOT_IDENTITY}"
     --expected-identity "bert_root=${BERT_ROOT_IDENTITY}"
@@ -349,13 +340,6 @@ for run_variant in "${VARIANTS[@]}"; do
       "custom_hooks.0.warmup_iters=${WARMUP_ITERS}"
       "optim_wrapper.clip_grad.error_if_nonfinite=True")
   fi
-  if [[ "${USE_AMP}" == true && "${run_variant}" != "phase0_parent" ]]; then
-    CFG_OPTIONS+=(
-      "optim_wrapper.type=AmpOptimWrapper"
-      "optim_wrapper.dtype=bfloat16"
-      "optim_wrapper.loss_scale=1.0")
-  fi
-
   COMMAND=(
     bash "${MMDET_ROOT}/tools/dist_train.sh" "${ACTIVE_CONFIG_PATH}" "${GPUS}"
     --work-dir "${WORK_DIR}"

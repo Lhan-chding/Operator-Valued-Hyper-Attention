@@ -49,8 +49,6 @@ ALLOWED_CFG_OPTIONS = frozenset({
     "train_dataloader.dataset.pipeline.5.tokenizer_name",
     "val_dataloader.dataset.data_root",
     "val_evaluator.ann_file",
-    "optim_wrapper.type",
-    "optim_wrapper.loss_scale",
     "optim_wrapper.accumulative_counts",
     "param_scheduler.0.end",
     "custom_hooks.0.warmup_iters",
@@ -126,9 +124,7 @@ def main() -> int:
     config.train_dataloader.batch_size = args.batch_size
     config.train_dataloader.num_workers = 0
     config.train_dataloader.persistent_workers = False
-    config.optim_wrapper.type = "AmpOptimWrapper"
-    config.optim_wrapper.dtype = "bfloat16"
-    config.optim_wrapper.loss_scale = 1.0
+    config.optim_wrapper.type = "OptimWrapper"
     config.optim_wrapper.clip_grad.error_if_nonfinite = True
     config.optim_wrapper.accumulative_counts = 1
     config.train_cfg = dict(
@@ -192,8 +188,8 @@ def main() -> int:
     summary.update({
         "requested_batch_size": args.batch_size,
         "observed_dataloader_batch_size": observed_batch_size,
-        "amp_dtype": str(config.optim_wrapper.dtype),
-        "amp_loss_scale": float(config.optim_wrapper.loss_scale),
+        "precision": "fp32",
+        "amp_enabled": False,
         "max_memory_allocated_bytes": torch.cuda.max_memory_allocated(),
         "max_memory_reserved_bytes": torch.cuda.max_memory_reserved(),
         "total_memory_bytes": torch.cuda.get_device_properties(0).total_memory,

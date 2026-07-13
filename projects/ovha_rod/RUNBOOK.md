@@ -244,11 +244,10 @@ Then inspect the two batches:
 Abort immediately on NaN/Inf, missing dense tensors, checkpoint base-key
 coverage below 99%, or any model-input leakage.
 
-The locked Phase 1 AMP profile is BF16 autocast with loss scale `1.0`. On the
-A800 this retains the FP32 exponent range while using tensor-core mixed
-precision. Dynamic FP16 scaling is not allowed for the formal run because an
-overflow can make `GradScaler` skip `optimizer.step()` while the scheduler
-continues. The optimizer wrapper also sets
+The locked Phase 1 precision profile is full FP32. Although the A800 supports
+BF16, the locked MMCV 2.1.0 `ms_deform_attn_forward_cuda` extension does not.
+Dynamic FP16 scaling is also excluded because the server run produced
+non-finite gradients and skipped optimizer steps. The optimizer wrapper sets
 `clip_grad.error_if_nonfinite=True`, so the job fails at the first invalid
 full-model gradient instead of continuing with `grad_norm: nan`.
 

@@ -148,11 +148,12 @@ CUDA_VISIBLE_DEVICES=4 python scripts/two_batch_smoke.py \
     train_dataloader.dataset.pipeline.5.tokenizer_name="$BERT_ROOT"
 ```
 
-Phase 1 uses A800-native BF16 autocast with a fixed unit loss scale. This
-avoids the silent optimizer-step skipping observed with dynamic FP16 scaling.
-Gradient clipping is fail-fast: any non-finite full-model gradient aborts the
-run instead of logging `grad_norm: nan` and continuing. Treat such an abort as
-a failed smoke/run, not as a warning to ignore.
+Phase 1 uses full FP32. The locked MMCV 2.1.0 CUDA extension does not implement
+multi-scale deformable attention for BF16, while dynamic FP16 scaling produced
+non-finite gradients and skipped optimizer steps on the server. Gradient
+clipping is fail-fast: any non-finite full-model gradient aborts the run instead
+of logging `grad_norm: nan` and continuing. Treat such an abort as a failed
+smoke/run, not as a warning to ignore.
 
 MMEngine writes a complete `epoch_N.pth` after every epoch and keeps the two
 latest checkpoints. An SSH disconnect is harmless when the command runs in
