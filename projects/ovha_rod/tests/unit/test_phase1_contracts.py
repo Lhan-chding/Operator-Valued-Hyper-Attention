@@ -122,6 +122,12 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertIn('hook.get("type") != "CheckpointProvenanceHook"', smoke)
         self.assertIn("tokenizer root must equal the locked local BERT root", smoke)
 
+    def test_two_batch_smoke_uses_unscaled_bfloat16_amp(self):
+        smoke = (ROOT / "scripts/two_batch_smoke.py").read_text()
+        self.assertIn('config.optim_wrapper.dtype = "bfloat16"', smoke)
+        self.assertIn("config.optim_wrapper.loss_scale = 1.0", smoke)
+        self.assertNotIn('config.optim_wrapper.loss_scale = "dynamic"', smoke)
+
     def test_server_runner_exports_cublas_before_launch_commands(self):
         runner = (ROOT / "scripts/run_phase1_server.sh").read_text()
         export = 'export CUBLAS_WORKSPACE_CONFIG=":4096:8"'
@@ -148,6 +154,18 @@ class StaticIntegrationContractTests(unittest.TestCase):
         )
         self.assertIn("CUDA_VISIBLE_DEVICES", documentation)
         self.assertIn("epoch-boundary resume", documentation.lower())
+
+    def test_server_runner_uses_fail_fast_unscaled_bfloat16_amp(self):
+        runner = (ROOT / "scripts/run_phase1_server.sh").read_text()
+        self.assertIn('"optim_wrapper.dtype=bfloat16"', runner)
+        self.assertIn('"optim_wrapper.loss_scale=1.0"', runner)
+        self.assertIn(
+            '"optim_wrapper.clip_grad.error_if_nonfinite=True"', runner)
+        self.assertNotIn('"optim_wrapper.loss_scale=dynamic"', runner)
+
+    def test_server_resume_identity_locks_amp_dtype(self):
+        runner = (ROOT / "scripts/run_phase1_server.sh").read_text()
+        self.assertIn('--expected-identity "amp_dtype=', runner)
 
     def test_metric_requires_encoder_oracle_for_every_phase1_sample(self):
         source = (
