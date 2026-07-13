@@ -301,7 +301,7 @@ class QuerySpatialRelationOperatorTests(unittest.TestCase):
 
         operator = QuerySpatialRelationOperator(
             d_model=self.d_model,
-            query_chunk_size=2,
+            query_chunk_size=3,
         )
         operator.load_state_dict(self.operator.state_dict())
         with mock.patch.object(
@@ -316,7 +316,7 @@ class QuerySpatialRelationOperatorTests(unittest.TestCase):
                 self.valid,
             )
 
-        self.assertEqual(observed_target_widths, [2, 2])
+        self.assertEqual(observed_target_widths, [3, 1])
         self.assertEqual(tuple(result.query_delta.shape), (2, 4, 16))
 
     def test_chunked_outputs_and_gradients_match_dense_execution(self):
@@ -326,7 +326,7 @@ class QuerySpatialRelationOperatorTests(unittest.TestCase):
         ).double()
         chunked = QuerySpatialRelationOperator(
             d_model=self.d_model,
-            query_chunk_size=2,
+            query_chunk_size=3,
         ).double()
         chunked.load_state_dict(dense.state_dict())
 

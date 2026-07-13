@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
+from typing import Optional
 
 import torch
 from torch import Tensor, nn
@@ -14,6 +16,17 @@ from .decoder_contracts import DecoderOperatorResidual
 _GEOMETRY_DIM = 8
 
 
+@dataclass(frozen=True)
+class _PairwiseEvidence:
+    relation_context: Tensor
+    distractor_context: Tensor
+    geometry_contrast: Tensor
+    contrast_score: Tensor
+    attention_entropy: Tensor
+    has_distractor: Tensor
+    pair_count: Tensor
+
+
 class QuerySpatialRelationOperator(nn.Module):
     """Contrast relation-selected queries with valid distractor queries.
 
@@ -22,11 +35,23 @@ class QuerySpatialRelationOperator(nn.Module):
     boxes are intentionally absent from the public boundary.
     """
 
-    def __init__(self, d_model: int = 256) -> None:
+    def __init__(
+        self,
+        d_model: int = 256,
+        query_chunk_size: Optional[int] = None,
+    ) -> None:
         super().__init__()
         if int(d_model) <= 0:
             raise ValueError("d_model must be positive")
+        if query_chunk_size is not None and (
+            isinstance(query_chunk_size, bool)
+            or not isinstance(query_chunk_size, int)
+            or query_chunk_size <= 0
+        ):
+            raise ValueError(
+                "query_chunk_size must be None or a positive integer")
         self.d_model = int(d_model)
+        self.query_chunk_size = query_chunk_size
         self.query_projection = nn.Linear(self.d_model, self.d_model)
         self.key_projection = nn.Linear(self.d_model, self.d_model)
         self.value_projection = nn.Linear(self.d_model, self.d_model)
@@ -65,26 +90,18 @@ class QuerySpatialRelationOperator(nn.Module):
         key = F.normalize(self.key_projection(safe_query), dim=-1)
         value = self.value_projection(safe_query)
 
-        geometry = _pairwise_box_geometry(safe_boxes)
         geometry_parameters = self.geometry_parameter_head(
             relation_role).tanh()
-        semantic_logits = torch.matmul(relation_query, key.transpose(-1, -2))
-        geometry_logits = torch.einsum(
-            "bqkg,bg->bqk", geometry, geometry_parameters)
-        pair_logits = semantic_logits + geometry_logits / math.sqrt(
-            _GEOMETRY_DIM)
-
-        pair_mask = _directed_pair_mask(valid)
-        relation_weights = _masked_softmax(pair_logits, pair_mask)
-        distractor_weights = _masked_uniform(pair_mask, query.dtype)
-        contrast_weights = relation_weights - distractor_weights
-
-        relation_context = torch.matmul(relation_weights, value)
-        distractor_context = torch.matmul(distractor_weights, value)
-        contrast_context = relation_context - distractor_context
-        geometry_contrast = torch.einsum(
-            "bqk,bqkg->bqg", contrast_weights, geometry)
-        contrast_score = (contrast_weights * pair_logits).sum(-1)
+        evidence = self._pairwise_evidence(
+            relation_query=relation_query,
+            key=key,
+            value=value,
+            boxes=safe_boxes,
+            valid=valid,
+            geometry_parameters=geometry_parameters,
+        )
+        contrast_context = (
+            evidence.relation_context - evidence.distractor_context)
 
         expanded_role = projected_role[:, None].expand_as(safe_query)
         hidden = self.fusion(torch.cat(
@@ -92,13 +109,12 @@ class QuerySpatialRelationOperator(nn.Module):
                 safe_query,
                 contrast_context,
                 expanded_role,
-                geometry_contrast,
-                contrast_score[..., None],
+                evidence.geometry_contrast,
+                evidence.contrast_score[..., None],
             ),
             dim=-1,
         ))
-        has_distractor = pair_mask.any(dim=-1)
-        active = valid & has_distractor
+        active = valid & evidence.has_distractor
         active_feature = active[..., None].to(dtype=query.dtype)
         active_scalar = active.to(dtype=query.dtype)
 
@@ -108,11 +124,13 @@ class QuerySpatialRelationOperator(nn.Module):
         gate_logits = self.gate_head(hidden) * active_feature
 
         diagnostics = {
-            "qsro_attention_entropy": _attention_entropy(
-                relation_weights, active),
+            "qsro_attention_entropy": _masked_mean(
+                evidence.attention_entropy, active),
             "qsro_contrast_abs_mean": _masked_mean(
-                contrast_score.abs(), active),
-            "qsro_pair_density": pair_mask.to(dtype=query.dtype).mean(),
+                evidence.contrast_score.abs(), active),
+            "qsro_pair_density": evidence.pair_count / (
+                valid.shape[0] * valid.shape[1] * valid.shape[1]
+            ),
             "qsro_gate_abs_mean": _masked_mean(
                 gate_logits.abs().mean(-1), valid),
         }
@@ -123,6 +141,52 @@ class QuerySpatialRelationOperator(nn.Module):
             gate_logits=gate_logits,
             valid=valid,
             diagnostics=diagnostics,
+        )
+
+    def _pairwise_evidence(
+        self,
+        *,
+        relation_query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        boxes: Tensor,
+        valid: Tensor,
+        geometry_parameters: Tensor,
+    ) -> _PairwiseEvidence:
+        query_count = relation_query.shape[1]
+        chunk_size = self.query_chunk_size or query_count
+        boundaries = tuple(
+            (start, min(start + chunk_size, query_count))
+            for start in range(0, query_count, chunk_size)
+        )
+        chunks = tuple(
+            _pairwise_evidence_chunk(
+                relation_query=relation_query,
+                key=key,
+                value=value,
+                boxes=boxes,
+                valid=valid,
+                geometry_parameters=geometry_parameters,
+                target_start=start,
+                target_end=end,
+            )
+            for start, end in boundaries
+        )
+        return _PairwiseEvidence(
+            relation_context=torch.cat(tuple(
+                chunk.relation_context for chunk in chunks), dim=1),
+            distractor_context=torch.cat(tuple(
+                chunk.distractor_context for chunk in chunks), dim=1),
+            geometry_contrast=torch.cat(tuple(
+                chunk.geometry_contrast for chunk in chunks), dim=1),
+            contrast_score=torch.cat(tuple(
+                chunk.contrast_score for chunk in chunks), dim=1),
+            attention_entropy=torch.cat(tuple(
+                chunk.attention_entropy for chunk in chunks), dim=1),
+            has_distractor=torch.cat(tuple(
+                chunk.has_distractor for chunk in chunks), dim=1),
+            pair_count=torch.stack(tuple(
+                chunk.pair_count for chunk in chunks)).sum(),
         )
 
     def _validate_inputs(
@@ -164,11 +228,58 @@ class QuerySpatialRelationOperator(nn.Module):
 QSRO = QuerySpatialRelationOperator
 
 
-def _directed_pair_mask(valid: Tensor) -> Tensor:
+def _pairwise_evidence_chunk(
+    *,
+    relation_query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    boxes: Tensor,
+    valid: Tensor,
+    geometry_parameters: Tensor,
+    target_start: int,
+    target_end: int,
+) -> _PairwiseEvidence:
+    geometry = _pairwise_box_geometry(
+        boxes, target_start=target_start, target_end=target_end)
+    semantic_logits = torch.matmul(
+        relation_query[:, target_start:target_end], key.transpose(-1, -2))
+    geometry_logits = torch.einsum(
+        "bqkg,bg->bqk", geometry, geometry_parameters)
+    pair_logits = semantic_logits + geometry_logits / math.sqrt(_GEOMETRY_DIM)
+    pair_mask = _directed_pair_mask(
+        valid, target_start=target_start, target_end=target_end)
+    relation_weights = _masked_softmax(pair_logits, pair_mask)
+    distractor_weights = _masked_uniform(pair_mask, relation_query.dtype)
+    contrast_weights = relation_weights - distractor_weights
+    return _PairwiseEvidence(
+        relation_context=torch.matmul(relation_weights, value),
+        distractor_context=torch.matmul(distractor_weights, value),
+        geometry_contrast=torch.einsum(
+            "bqk,bqkg->bqg", contrast_weights, geometry),
+        contrast_score=(contrast_weights * pair_logits).sum(-1),
+        attention_entropy=_attention_entropy_per_query(relation_weights),
+        has_distractor=pair_mask.any(dim=-1),
+        pair_count=pair_mask.to(dtype=relation_query.dtype).sum(),
+    )
+
+
+def _directed_pair_mask(
+    valid: Tensor,
+    *,
+    target_start: int = 0,
+    target_end: Optional[int] = None,
+) -> Tensor:
     query_count = valid.shape[1]
-    off_diagonal = ~torch.eye(
-        query_count, dtype=torch.bool, device=valid.device)
-    return valid[:, :, None] & valid[:, None, :] & off_diagonal[None]
+    resolved_end = query_count if target_end is None else target_end
+    target_indices = torch.arange(
+        target_start, resolved_end, device=valid.device)
+    other_indices = torch.arange(query_count, device=valid.device)
+    off_diagonal = target_indices[:, None] != other_indices[None]
+    return (
+        valid[:, target_start:resolved_end, None]
+        & valid[:, None, :]
+        & off_diagonal[None]
+    )
 
 
 def _masked_softmax(logits: Tensor, mask: Tensor) -> Tensor:
@@ -185,13 +296,19 @@ def _masked_uniform(mask: Tensor, dtype: torch.dtype) -> Tensor:
     return values / values.sum(dim=-1, keepdim=True).clamp_min(1.0)
 
 
-def _pairwise_box_geometry(boxes: Tensor) -> Tensor:
+def _pairwise_box_geometry(
+    boxes: Tensor,
+    *,
+    target_start: int = 0,
+    target_end: Optional[int] = None,
+) -> Tensor:
     epsilon = torch.finfo(boxes.dtype).eps
+    resolved_end = boxes.shape[1] if target_end is None else target_end
     centers = boxes[..., :2]
     sizes = boxes[..., 2:].clamp_min(epsilon)
-    target_centers = centers[:, :, None]
+    target_centers = centers[:, target_start:resolved_end, None]
     other_centers = centers[:, None, :]
-    target_sizes = sizes[:, :, None]
+    target_sizes = sizes[:, target_start:resolved_end, None]
     other_sizes = sizes[:, None, :]
 
     center_delta = (other_centers - target_centers) / target_sizes
@@ -207,10 +324,9 @@ def _pairwise_box_geometry(boxes: Tensor) -> Tensor:
     )
 
 
-def _attention_entropy(weights: Tensor, active: Tensor) -> Tensor:
+def _attention_entropy_per_query(weights: Tensor) -> Tensor:
     epsilon = torch.finfo(weights.dtype).eps
-    entropy = -(weights * weights.clamp_min(epsilon).log()).sum(-1)
-    return _masked_mean(entropy, active)
+    return -(weights * weights.clamp_min(epsilon).log()).sum(-1)
 
 
 def _masked_mean(values: Tensor, mask: Tensor) -> Tensor:
