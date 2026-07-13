@@ -128,6 +128,17 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertIn("config.optim_wrapper.loss_scale = 1.0", smoke)
         self.assertNotIn('config.optim_wrapper.loss_scale = "dynamic"', smoke)
 
+    def test_two_batch_smoke_disables_validation_loop(self):
+        smoke = (ROOT / "scripts/two_batch_smoke.py").read_text()
+        runner_build = smoke.index("runner = Runner.from_cfg(config)")
+        for assignment in (
+                "config.val_cfg = None",
+                "config.val_dataloader = None",
+                "config.val_evaluator = None"):
+            with self.subTest(assignment=assignment):
+                self.assertIn(assignment, smoke)
+                self.assertLess(smoke.index(assignment), runner_build)
+
     def test_server_runner_exports_cublas_before_launch_commands(self):
         runner = (ROOT / "scripts/run_phase1_server.sh").read_text()
         export = 'export CUBLAS_WORKSPACE_CONFIG=":4096:8"'
