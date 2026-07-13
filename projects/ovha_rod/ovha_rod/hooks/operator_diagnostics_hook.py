@@ -19,7 +19,7 @@ from ..runtime_contracts import collect_scalar_diagnostics
 
 @HOOKS.register_module()
 class OperatorDiagnosticsHook(Hook):
-    """Write finite, machine-readable Phase-1 diagnostics as JSONL."""
+    """Write finite seed and decoder-operator diagnostics as JSONL."""
 
     priority = "LOW"
 
@@ -35,36 +35,54 @@ class OperatorDiagnosticsHook(Hook):
     def before_train(self, runner) -> None:
         model = runner.model.module if hasattr(runner.model, "module") else runner.model
         model._seed_grad_squared = None
+        model._decoder_operator_grad_squared = None
         if getattr(model, "seed_operator", None) is not None:
             for parameter in model.seed_operator.parameters():
                 if parameter.requires_grad:
                     parameter.register_hook(
-                        lambda gradient, target=model: _record_gradient(target, gradient))
+                        lambda gradient, target=model: _record_gradient(
+                            target, gradient, "_seed_grad_squared"))
+        if getattr(model, "decoder_operator", None) is not None:
+            for parameter in model.decoder_operator.parameters():
+                if parameter.requires_grad:
+                    parameter.register_hook(
+                        lambda gradient, target=model: _record_gradient(
+                            target,
+                            gradient,
+                            "_decoder_operator_grad_squared"))
 
     def before_train_iter(self, runner, batch_idx: int,
                           data_batch=None) -> None:
         del batch_idx, data_batch
         model = runner.model.module if hasattr(runner.model, "module") else runner.model
         model._seed_grad_squared = None
+        model._decoder_operator_grad_squared = None
 
     def after_train_iter(self, runner, batch_idx: int,
                          data_batch=None, outputs=None) -> None:
         del batch_idx, data_batch
         model = runner.model.module if hasattr(runner.model, "module") else runner.model
-        gradient_norm = finalize_gradient_norm(
+        seed_gradient_norm = finalize_gradient_norm(
             getattr(model, "_seed_grad_squared", None))
+        decoder_operator_gradient_norm = finalize_gradient_norm(
+            getattr(model, "_decoder_operator_grad_squared", None))
         finite_scalars = {}
         nonfinite_keys = []
         for values, prefix in (
             (getattr(model, "last_seed_diagnostics", {}), ""),
+            (getattr(model, "last_decoder_operator_diagnostics", {}),
+             "decoder_operator/"),
             (getattr(model.bbox_head, "last_seed_metrics", {}), ""),
             (outputs or {}, "loss/"),
         ):
             finite, nonfinite = collect_scalar_diagnostics(values, prefix=prefix)
             finite_scalars.update(finite)
             nonfinite_keys.extend(nonfinite)
-        if not math.isfinite(gradient_norm):
+        if not math.isfinite(seed_gradient_norm):
             nonfinite_keys.append("seed_gradient_norm")
+        if not math.isfinite(decoder_operator_gradient_norm):
+            raise FloatingPointError(
+                "non-finite decoder operator gradient norm")
         if nonfinite_keys:
             raise FloatingPointError(
                 "non-finite Phase 1 diagnostics: "
@@ -75,7 +93,8 @@ class OperatorDiagnosticsHook(Hook):
             "iteration": int(runner.iter + 1),
             "seed_operator": getattr(model, "seed_operator_name", "unknown"),
             "loss_seed_weight": float(getattr(model.bbox_head, "loss_seed_weight", 0.0)),
-            "seed_gradient_norm": gradient_norm,
+            "seed_gradient_norm": seed_gradient_norm,
+            "decoder_operator_gradient_norm": decoder_operator_gradient_norm,
         }
         row.update(finite_scalars)
         row["nonfinite_scalar_count"] = len(nonfinite_keys)
@@ -87,6 +106,15 @@ class OperatorDiagnosticsHook(Hook):
                 row, sort_keys=True, allow_nan=False) + "\n")
 
 
-def _record_gradient(model, gradient: torch.Tensor) -> None:
-    model._seed_grad_squared = accumulate_gradient_square(
-        getattr(model, "_seed_grad_squared", None), gradient)
+def _record_gradient(
+    model, gradient: torch.Tensor, accumulator_name: str
+) -> None:
+    if accumulator_name not in {
+            "_seed_grad_squared", "_decoder_operator_grad_squared"}:
+        raise ValueError("unknown gradient accumulator")
+    setattr(
+        model,
+        accumulator_name,
+        accumulate_gradient_square(
+            getattr(model, accumulator_name, None), gradient),
+    )

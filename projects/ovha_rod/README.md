@@ -4,17 +4,22 @@ This project is the end-to-end Referring Object Detection branch of OVHA. It
 extends the pinned MM-Grounding-DINO Swin-T parent at encoder query selection;
 it does not read the repository's fixed-candidate feature artifacts.
 
-The current implementation intentionally stops at the RQGO server gate:
+Formal experiment activation intentionally stops at the RQGO server gate:
 
 1. reproduce the parent under the official five-epoch RefCOCO-family budget;
 2. compare parent, parent plus referent head, generic dense seed, and RQGO;
 3. verify zero-init equivalence, dense-query coverage, accuracy, and leakage;
-4. implement no decoder operators until that gate passes.
+4. keep the staged decoder operator bank disabled until that gate passes.
+
+The post-RQGO implementation is already staged behind an explicit, default-off
+configuration boundary. This lets operator engineering and CPU contract tests
+finish while the RQGO run is in progress without changing that run's model,
+optimizer, numerical protocol, or checkpoint identity.
 
 ## Layout
 
 ```text
-configs/                 three training plus validation-only configs
+configs/                 Phase 1 configs and post-RQGO experiment configs
 environment/             exact MMDetection and Python dependency contract
 ovha_rod/models/         Phase 1 role, seed, detector, and head modules
 scripts/                 environment setup, preflight, and server runner
@@ -29,7 +34,7 @@ RUNBOOK.md               server procedure and acceptance checklist
 - MM-Grounding-DINO Swin-T pretrained checkpoint: recorded in
   `environment/mmdetection.lock`
 - Main protocol: five epochs, validation-only model selection, global batch 32,
-  500 optimizer-step learning-rate and seed-loss warmup, AdamW, AMP, and no
+  500 optimizer-step learning-rate and seed-loss warmup, AdamW, full FP32, and no
   separate freeze stage
 - Compatibility profile: `cu121-wheel`, using Python 3.10, PyTorch 2.1.0,
   torchvision 0.16.0, and the SHA-256-pinned official prebuilt MMCV 2.1.0
@@ -58,6 +63,33 @@ official optimizer or scheduler. The other three models form the strict
 same-custom-schedule Phase 1 control set. Generic and RQGO consume the same
 dense IoU-quality targets and use the same bounded seed-bias contract. The
 parent token maximum remains the base Top-K score in every Phase 1 variant.
+
+## Post-RQGO decoder operator bank
+
+The staged bank applies structured residuals after each decoder layer to only
+the trailing matching-query block; the denoising prefix is preserved. It
+contains:
+
+- `Q-SRO`: query-to-query spatial and semantic relation reasoning;
+- `TQ-CATO`: masked token-to-query transport with row-normalized softmax;
+- `MS-TLEO`: valid-ratio-aware multi-scale local and context sampling;
+- Router, recurrent operator memory, low-rank hyper-adaptation, and RCEO
+  reliability modulation;
+- independent query, box-logit, and referent-score residual gates initialized
+  to zero so the enabled bank begins at the parent path.
+
+`configs/post_rqgo/` contains one full-bank config, three single-operator
+configs, and four component ablations (`no_router`, `no_memory`,
+`no_hyper_adapter`, and `no_rceo`). The original three formal Phase 1 configs
+contain no `decoder_operator_cfg`, so they remain byte-for-byte on the disabled
+path. `OperatorDiagnosticsHook` records seed and decoder-bank gradient norms
+plus finite scalar diagnostics.
+
+The implementation and pure-Torch contracts are complete locally, but CUDA
+acceptance is pending. Before treating any post-RQGO variant as runnable or
+scientifically accepted, execute the locked A800 two-batch forward/backward
+smoke, verify parent equivalence at zero gates, finite non-zero active gradients,
+DN-prefix preservation, peak memory, and end-to-end MMDetection integration.
 
 `SeedLossWarmupHook` raises the configured seed-loss weight linearly from zero
 over the first 500 optimizer updates. `OperatorDiagnosticsHook` writes finite
@@ -163,5 +195,5 @@ accumulation, AMP dtype, seed, variant, source commit, or environment identity.
 Mid-epoch resume is intentionally rejected because the standard epoch loop
 does not persist the dataloader cursor or worker RNG state.
 
-Do not proceed to TQ-CATO, Q-SRO, or MS-TLEO until the RQGO gate in the
-runbook passes.
+Do not enable the staged post-RQGO bank in a formal experiment until the RQGO
+gate and the CUDA acceptance checklist in the runbook both pass.

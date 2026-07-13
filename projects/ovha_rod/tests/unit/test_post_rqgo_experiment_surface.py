@@ -75,7 +75,27 @@ def _literal_assignment(path: Path, name: str):
         and any(isinstance(target, ast.Name) and target.id == name
                 for target in node.targets)
     )
-    return ast.literal_eval(assignment.value)
+    return _config_literal(assignment.value)
+
+
+def _config_literal(node):
+    """Evaluate only literals and MMEngine-style ``dict(...)`` calls."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "dict" and not node.args):
+        return {
+            keyword.arg: _config_literal(keyword.value)
+            for keyword in node.keywords
+            if keyword.arg is not None
+        }
+    if isinstance(node, ast.Dict):
+        return {
+            _config_literal(key): _config_literal(value)
+            for key, value in zip(node.keys, node.values)
+        }
+    if isinstance(node, (ast.Tuple, ast.List)):
+        values = [_config_literal(value) for value in node.elts]
+        return tuple(values) if isinstance(node, ast.Tuple) else values
+    return ast.literal_eval(node)
 
 
 class PostRQGOExperimentSurfaceTests(unittest.TestCase):

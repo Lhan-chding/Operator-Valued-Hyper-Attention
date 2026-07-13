@@ -3,8 +3,9 @@
 ## 1. Scope and stop condition
 
 This runbook covers parent reproduction and the RQGO-only decision gate. It
-does not authorize later decoder operators. Every command evaluates validation
-data only; held-out splits remain untouched until a final model is frozen.
+does not authorize activating the staged decoder operators in a formal run.
+Every command evaluates validation data only; held-out splits remain untouched
+until a final model is frozen.
 
 The Phase 1 protocol trains all configured parameter groups from the first
 step. There is no separate freeze/unfreeze stage. Parent+referent, generic
@@ -325,5 +326,42 @@ Return these paths after each server run:
 - checkpoint filename and SHA-256
 - GPU peak-memory and batch-1 latency record
 
-The next implementation phase starts only after those artifacts satisfy the
-gate above.
+The staged implementation may be reviewed and tested while this gate is
+running, but formal post-RQGO activation starts only after these artifacts
+satisfy the gate above.
+
+## 12. Post-RQGO CUDA acceptance (pending)
+
+The decoder operator code and experiment configs are staged in
+`configs/post_rqgo/`; every original Phase 1 config leaves the bank disabled.
+Run the following sequence only after the RQGO gate passes:
+
+1. Resolve the full-bank config under the same private source, MMDetection,
+   checkpoint, BERT, and data trust boundaries as Phase 1.
+2. Run exactly two training iterations on one explicitly selected idle A800 in
+   full FP32, including forward, backward, optimizer step, diagnostics, and
+   checkpoint serialization.
+3. Compare the zero-gate full-bank path with the parent path using identical
+   inputs. Matching-query logits and boxes must agree within `1e-5`, and the
+   denoising prefix must be exactly unchanged.
+4. Require finite losses, finite full-model and decoder-bank gradient norms,
+   non-zero gradients for each enabled primitive, no GT/prediction leakage,
+   and enough peak-memory margin for the selected batch size.
+5. Repeat the smoke for each single-operator config before ablations or tuning.
+
+The full and ablation files are:
+
+```text
+configs/post_rqgo/ovha_rod_swin_t_5e_refcoco_bank_full.py
+configs/post_rqgo/ovha_rod_swin_t_5e_refcoco_bank_qsro_only.py
+configs/post_rqgo/ovha_rod_swin_t_5e_refcoco_bank_tq_cato_only.py
+configs/post_rqgo/ovha_rod_swin_t_5e_refcoco_bank_ms_tleo_only.py
+configs/post_rqgo/ovha_rod_swin_t_5e_refcoco_bank_no_router.py
+configs/post_rqgo/ovha_rod_swin_t_5e_refcoco_bank_no_memory.py
+configs/post_rqgo/ovha_rod_swin_t_5e_refcoco_bank_no_hyper_adapter.py
+configs/post_rqgo/ovha_rod_swin_t_5e_refcoco_bank_no_rceo.py
+```
+
+CUDA acceptance is pending until those server checks produce archived logs,
+diagnostics, memory measurements, and a smoke checkpoint. Passing local CPU
+unit tests alone is not a substitute for this gate.
