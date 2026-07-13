@@ -1,4 +1,4 @@
-"""Inference-only composition boundary for post-RQGO decoder operators."""
+"""Trainable post-RQGO operator bank using inference-available inputs only."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ OPERATOR_NAMES = ("qsro", "tq_cato", "ms_tleo")
 
 @dataclass(frozen=True)
 class DecoderOperatorContext:
-    """Frozen inference-time inputs for one decoder-layer bank call."""
+    """Frozen inference-available inputs for one trainable decoder-layer call."""
 
     parent: DecoderResidualState
     boxes: Tensor
@@ -54,13 +54,9 @@ class DecoderOperatorContext:
         if not isinstance(self.layer_index, int) or isinstance(
                 self.layer_index, bool) or self.layer_index < 0:
             raise ValueError("layer_index must be a non-negative integer")
-        _validate_float_like(self.boxes, query, "boxes")
+        _validate_tensor_like(self.boxes, query, "boxes")
         if self.valid.device != query.device:
             raise ValueError("valid and parent query must share a device")
-        if not bool(((self.boxes >= 0.0) & (self.boxes <= 1.0)).all()):
-            raise ValueError("boxes must contain normalized cxcywh values")
-        if self.valid.any() and not (self.boxes[..., 2:][self.valid] > 0).all():
-            raise ValueError("valid boxes must have positive width and height")
 
         self._validate_relation_role(query)
         self._validate_text(query)
@@ -75,7 +71,7 @@ class DecoderOperatorContext:
             return
         if self.relation_role.shape != (query.shape[0], query.shape[-1]):
             raise ValueError("relation_role must have shape [B,D]")
-        _validate_float_like(self.relation_role, query, "relation_role")
+        _validate_tensor_like(self.relation_role, query, "relation_role")
 
     def _validate_text(self, query: Tensor) -> None:
         if (self.text is None) != (self.text_valid is None):
@@ -86,7 +82,7 @@ class DecoderOperatorContext:
                 or self.text.shape[-1] != query.shape[-1]
                 or self.text.shape[1] <= 0):
             raise ValueError("text must have shape [B,T,D] with T > 0")
-        _validate_float_like(self.text, query, "text")
+        _validate_tensor_like(self.text, query, "text")
         if (self.text_valid.shape != self.text.shape[:2]
                 or self.text_valid.dtype != torch.bool):
             raise ValueError("text_valid must be a boolean [B,T] tensor")
@@ -106,16 +102,13 @@ class DecoderOperatorContext:
             if (feature_map.shape[:2] != (query.shape[0], query.shape[-1])
                     or min(feature_map.shape[2:]) <= 0):
                 raise ValueError("feature_maps must match [B,D] and be non-empty")
-            _validate_float_like(feature_map, query, "feature_maps")
+            _validate_tensor_like(feature_map, query, "feature_maps")
         if self.valid_ratios is None:
             raise ValueError("valid_ratios are required with feature_maps")
         expected = (query.shape[0], len(feature_maps), 2)
         if self.valid_ratios.shape != expected:
             raise ValueError("valid_ratios levels must match feature_maps")
-        _validate_float_like(self.valid_ratios, query, "valid_ratios")
-        in_range = (self.valid_ratios > 0.0) & (self.valid_ratios <= 1.0)
-        if not bool(in_range.all()):
-            raise ValueError("valid_ratios must be in the range (0, 1]")
+        _validate_tensor_like(self.valid_ratios, query, "valid_ratios")
 
     def _validate_memory(self, query: Tensor) -> None:
         if self.memory_state is None:
@@ -131,6 +124,8 @@ class DecoderOperatorContext:
     def _validate_availability(self, query: Tensor) -> None:
         if self.operator_available is None:
             return
+        if not isinstance(self.operator_available, Tensor):
+            raise ValueError("operator_available must be a tensor")
         allowed = ((len(OPERATOR_NAMES),), (*query.shape[:2], len(OPERATOR_NAMES)))
         if self.operator_available.shape not in allowed:
             raise ValueError("operator_available has the wrong shape")
@@ -152,6 +147,7 @@ class BankOutput:
     adaptation: HyperAdapterResult
     availability: Tensor
     artifacts: Mapping[str, Tensor] = field(default_factory=dict)
+    debug_contracts: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.fused, DecoderResidualState):
@@ -174,7 +170,7 @@ class BankOutput:
             raise ValueError("memory_state must be an OperatorMemoryState")
         if self.memory_state.value.shape != query.shape:
             raise ValueError("memory_state shape must match fused query")
-        _validate_float_like(self.memory_state.value, query, "memory_state")
+        _validate_tensor_like(self.memory_state.value, query, "memory_state")
         if not isinstance(self.router, OperatorRouterResult):
             raise ValueError("router must be an OperatorRouterResult")
         if not isinstance(self.reliability, RCEOResult):
@@ -225,11 +221,15 @@ class BankOutput:
         for name, value in artifacts.items():
             if not isinstance(value, Tensor):
                 raise ValueError(f"artifact {name!r} must be a tensor")
-            if not value.is_floating_point() or not torch.isfinite(value).all():
-                raise ValueError(f"artifact {name!r} must be finite floating point")
+            if not value.is_floating_point():
+                raise ValueError(f"artifact {name!r} must be floating point")
             if value.device != query.device or value.dtype != query.dtype:
                 raise ValueError(f"artifact {name!r} must match fused state")
         object.__setattr__(self, "artifacts", MappingProxyType(artifacts))
+        if not isinstance(self.debug_contracts, bool):
+            raise ValueError("debug_contracts must be boolean")
+        if self.debug_contracts:
+            _debug_validate_bank_output_values(self)
 
 
 class DecoderOperatorBank(nn.Module):
@@ -246,10 +246,20 @@ class DecoderOperatorBank(nn.Module):
         use_memory: bool = True,
         use_hyper_adapter: bool = True,
         use_rceo: bool = True,
+        debug_contracts: bool = False,
     ) -> None:
         super().__init__()
         if not isinstance(d_model, int) or isinstance(d_model, bool) or d_model <= 0:
             raise ValueError("d_model must be a positive integer")
+        dimensions = {
+            "num_layers": num_layers,
+            "router_hidden_dim": router_hidden_dim,
+            "adapter_rank": adapter_rank,
+        }
+        for name, value in dimensions.items():
+            if (not isinstance(value, int) or isinstance(value, bool)
+                    or value <= 0):
+                raise ValueError(f"{name} must be a positive integer")
         enabled = tuple(enabled_operators)
         if not enabled or any(name not in OPERATOR_NAMES for name in enabled):
             raise ValueError("enabled_operators must name at least one known operator")
@@ -260,6 +270,7 @@ class DecoderOperatorBank(nn.Module):
             "use_memory": use_memory,
             "use_hyper_adapter": use_hyper_adapter,
             "use_rceo": use_rceo,
+            "debug_contracts": debug_contracts,
         }
         for name, value in flags.items():
             if not isinstance(value, bool):
@@ -271,6 +282,7 @@ class DecoderOperatorBank(nn.Module):
         self.use_memory = use_memory
         self.use_hyper_adapter = use_hyper_adapter
         self.use_rceo = use_rceo
+        self.debug_contracts = debug_contracts
         self.qsro = QuerySpatialRelationOperator(d_model=d_model)
         self.tq_cato = TQCATO(d_model=d_model)
         self.ms_tleo = MSTLEO(d_model=d_model)
@@ -305,6 +317,8 @@ class DecoderOperatorBank(nn.Module):
             if self.use_memory else previous
         )
         reliability = (
+            # RCEO consumes decoder evidence available at inference: query,
+            # proposal geometry, and accumulated referent score. No targets.
             self.rceo(
                 context.parent.query,
                 context.boxes,
@@ -386,6 +400,7 @@ class DecoderOperatorBank(nn.Module):
             adaptation=adapter,
             availability=availability,
             artifacts=artifacts,
+            debug_contracts=self.debug_contracts,
         )
 
     def _validate_context(self, context: DecoderOperatorContext) -> None:
@@ -395,6 +410,8 @@ class DecoderOperatorBank(nn.Module):
             raise ValueError("context feature dimension must equal d_model")
         if context.layer_index >= self.num_layers:
             raise ValueError("layer_index is outside the configured decoder")
+        if self.debug_contracts:
+            _debug_validate_context_values(context)
 
     def _effective_availability(self, context: DecoderOperatorContext) -> Tensor:
         query = context.parent.query
@@ -415,8 +432,10 @@ class DecoderOperatorBank(nn.Module):
         )
         available = dynamic & enabled.view(1, 1, -1)
         available = available & context.valid[..., None]
-        if context.valid.any() and not available[context.valid].any(dim=-1).all():
-            raise ValueError("each valid query must have an available operator")
+        availability_invariant = (
+            available.any(dim=-1) | ~context.valid
+        ).all()
+        torch._assert_async(availability_invariant)
         return available
 
     @staticmethod
@@ -462,13 +481,11 @@ class DecoderOperatorBank(nn.Module):
         )
 
 
-def _validate_float_like(value: Tensor, reference: Tensor, name: str) -> None:
+def _validate_tensor_like(value: Tensor, reference: Tensor, name: str) -> None:
     if not isinstance(value, Tensor) or not value.is_floating_point():
         raise ValueError(f"{name} must be a floating-point tensor")
     if value.device != reference.device or value.dtype != reference.dtype:
         raise ValueError(f"{name} must match parent query device and dtype")
-    if not torch.isfinite(value).all():
-        raise ValueError(f"{name} must contain only finite values")
 
 
 def _validate_output_tensor(
@@ -479,7 +496,59 @@ def _validate_output_tensor(
 ) -> None:
     if not isinstance(value, Tensor) or value.shape != expected_shape:
         raise ValueError(f"{name} must have shape {expected_shape}")
-    _validate_float_like(value, reference, name)
+    _validate_tensor_like(value, reference, name)
+
+
+def _debug_validate_context_values(context: DecoderOperatorContext) -> None:
+    values = {
+        "boxes": context.boxes,
+        "relation_role": context.relation_role,
+        "text": context.text,
+        "valid_ratios": context.valid_ratios,
+        "memory_state": (
+            None if context.memory_state is None else context.memory_state.value
+        ),
+    }
+    values.update({
+        f"feature_maps[{index}]": feature_map
+        for index, feature_map in enumerate(context.feature_maps)
+    })
+    for name, value in values.items():
+        if value is not None and not bool(torch.isfinite(value).all()):
+            raise ValueError(f"{name} must contain only finite values")
+    normalized = (context.boxes >= 0.0) & (context.boxes <= 1.0)
+    if not bool(normalized.all()):
+        raise ValueError("boxes must contain normalized cxcywh values")
+    positive_extent = (~context.valid[..., None]) | (
+        context.boxes[..., 2:] > 0
+    )
+    if not bool(positive_extent.all()):
+        raise ValueError("valid boxes must have positive width and height")
+    if context.valid_ratios is not None:
+        in_range = (
+            (context.valid_ratios > 0.0) & (context.valid_ratios <= 1.0)
+        )
+        if not bool(in_range.all()):
+            raise ValueError("valid_ratios must be in the range (0, 1]")
+
+
+def _debug_validate_bank_output_values(output: BankOutput) -> None:
+    values = {
+        "memory_state": output.memory_state.value,
+        "router weights": output.router.weights,
+        "router logits": output.router.logits,
+        "reliability values": output.reliability.reliability,
+        "reliability log_prior": output.reliability.log_prior,
+        "adaptation scale": output.adaptation.scale,
+        "adaptation shift": output.adaptation.shift,
+        "adaptation channel_delta": output.adaptation.channel_delta,
+    }
+    values.update({
+        f"artifact {name!r}": value for name, value in output.artifacts.items()
+    })
+    for name, value in values.items():
+        if not bool(torch.isfinite(value).all()):
+            raise ValueError(f"{name} must contain only finite values")
 
 
 def _neutral_reliability(query: Tensor, valid: Tensor) -> RCEOResult:

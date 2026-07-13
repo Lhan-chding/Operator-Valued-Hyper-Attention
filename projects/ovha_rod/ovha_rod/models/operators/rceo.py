@@ -8,14 +8,18 @@ from torch import Tensor, nn
 
 @dataclass(frozen=True)
 class RCEOResult:
-    """Inference-only reliability and centered router log prior."""
+    """Reliability and centered router prior from inference-available state."""
 
     reliability: Tensor
     log_prior: Tensor
 
 
 class RCEO(nn.Module):
-    """Reliability calibration from decoder state, boxes, and score history."""
+    """Trainable reliability prior from query, proposal geometry, and score history.
+
+    The inputs are all available during inference; targets and ground-truth
+    corruption labels are intentionally excluded from this boundary.
+    """
 
     def __init__(
         self, d_model: int, operator_count: int, prior_cap: float = 2.0
