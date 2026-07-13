@@ -614,6 +614,10 @@ class DecoderOperatorBankTests(unittest.TestCase):
             replace(output, artifacts={"bad": object()})
         with self.assertRaisesRegex(ValueError, "availability"):
             replace(output, availability=torch.ones(2, 4, 2, dtype=torch.bool))
+        with self.assertRaisesRegex(ValueError, "availability"):
+            replace(output, availability=object())
+        with self.assertRaisesRegex(ValueError, "debug_contracts"):
+            replace(output, debug_contracts=1)
 
         wrong_residual = replace(
             output.residuals["qsro"],
