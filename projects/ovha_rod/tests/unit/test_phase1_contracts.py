@@ -44,7 +44,9 @@ class StaticIntegrationContractTests(unittest.TestCase):
             ROOT / "scripts/port_guard.py",
             ROOT / "scripts/prepare_work_dir.py",
             ROOT / "scripts/resume_guard.py",
+            ROOT / "scripts/run_lock.py",
             ROOT / "ovha_rod/runtime_contracts.py",
+            ROOT / "ovha_rod/hooks/checkpoint_provenance_hook.py",
             ROOT / "README.md",
             ROOT / "environment/mmdetection.lock",
         ]
@@ -117,6 +119,7 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertIn('config.train_dataloader.num_workers = 0', smoke)
         self.assertIn('config.train_dataloader.persistent_workers = False', smoke)
         self.assertIn('config.optim_wrapper.type = "AmpOptimWrapper"', smoke)
+        self.assertIn('hook.get("type") != "CheckpointProvenanceHook"', smoke)
         self.assertIn("tokenizer root must equal the locked local BERT root", smoke)
 
     def test_server_runner_exports_cublas_before_launch_commands(self):
@@ -134,7 +137,7 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertIn("--master-port", runner)
         self.assertIn("port_guard.py", runner)
         self.assertIn("--resume", runner)
-        self.assertIn("resume_guard.py", runner)
+        self.assertIn("run_lock.py", runner)
         self.assertIn("default_hooks.checkpoint.by_epoch=True", runner)
         self.assertIn("default_hooks.checkpoint.interval=1", runner)
         self.assertIn("default_hooks.checkpoint.save_last=True", runner)

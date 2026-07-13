@@ -43,7 +43,6 @@ ALLOWED_CFG_OPTIONS = frozenset({
     "model.bbox_head.loss_role_div_weight",
     "load_from",
     "model.language_model.name",
-    "train_dataloader.batch_size",
     "train_dataloader.num_workers",
     "train_dataloader.persistent_workers",
     "train_dataloader.dataset.data_root",
@@ -65,6 +64,10 @@ def parse_args() -> argparse.Namespace:
         description="Two-batch OVHA-ROD train/backward/checkpoint smoke test")
     parser.add_argument("config", type=Path)
     parser.add_argument("--work-dir", type=Path, required=True)
+    parser.add_argument("--batch-size",
+        type=int, required=True,
+        choices=(1, 2, 4, 8, 16, 32),
+        help="Explicit single-GPU capacity-smoke batch size.")
     parser.add_argument("--cfg-options", nargs="+", action=DictAction, default={})
     return parser.parse_args()
 
@@ -120,7 +123,7 @@ def main() -> int:
             "smoke auxiliary loss weights do not match the locked variant: "
             f"{observed_loss_weights} != {expected_loss_weights}")
     config.work_dir = str(work_dir)
-    config.train_dataloader.batch_size = 1
+    config.train_dataloader.batch_size = args.batch_size
     config.train_dataloader.num_workers = 0
     config.train_dataloader.persistent_workers = False
     config.optim_wrapper.type = "AmpOptimWrapper"
@@ -132,6 +135,10 @@ def main() -> int:
     config.default_hooks.logger.interval = 1
     config.default_hooks.checkpoint.interval = 2
     config.default_hooks.checkpoint.by_epoch = False
+    config.custom_hooks = [
+        hook for hook in config.get("custom_hooks", [])
+        if hook.get("type") != "CheckpointProvenanceHook"
+    ]
     for hook in config.get("custom_hooks", []):
         if hook.get("type") == "SeedLossWarmupHook":
             hook["warmup_iters"] = 2
@@ -140,6 +147,14 @@ def main() -> int:
 
     require_selected_gpus_idle(device_ids)
     runner = Runner.from_cfg(config)
+    observed_batch_size = runner.train_dataloader.batch_size
+    if observed_batch_size is None:
+        observed_batch_size = runner.train_dataloader.batch_sampler.batch_size
+    observed_batch_size = int(observed_batch_size)
+    if observed_batch_size != args.batch_size:
+        raise RuntimeError(
+            "runner dataloader batch size does not match the requested smoke "
+            f"capacity: {observed_batch_size} != {args.batch_size}")
     if not isinstance(
             runner.model.positional_encoding,
             DeterministicSinePositionalEncoding):
@@ -164,9 +179,18 @@ def main() -> int:
             f"shape={tuple(positional_probe.shape)}")
     torch.cuda.synchronize()
     print("deterministic positional CUDA probe: ok")
+    torch.cuda.reset_peak_memory_stats()
     runner.train()
+    torch.cuda.synchronize()
     summary = audit_smoke_outputs(
         Path(config.work_dir), expected_operator=expected_operator)
+    summary.update({
+        "requested_batch_size": args.batch_size,
+        "observed_dataloader_batch_size": observed_batch_size,
+        "max_memory_allocated_bytes": torch.cuda.max_memory_allocated(),
+        "max_memory_reserved_bytes": torch.cuda.max_memory_reserved(),
+        "total_memory_bytes": torch.cuda.get_device_properties(0).total_memory,
+    })
     summary_path = Path(config.work_dir) / "smoke_summary.json"
     if summary_path.is_symlink():
         raise ValueError("smoke summary must not be a symlink")

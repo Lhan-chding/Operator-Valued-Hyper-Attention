@@ -18,6 +18,7 @@ from ovha_rod.runtime_contracts import (
     validate_private_epoch_checkpoint,
     validate_local_bert,
     validate_locked_checkpoint,
+    write_checkpoint_provenance,
 )
 
 
@@ -25,6 +26,36 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class RuntimeContractTests(unittest.TestCase):
+    def test_resume_guard_identity_and_frozen_copy_are_fail_closed(self):
+        script = ROOT / "scripts/resume_guard.py"
+        spec = importlib.util.spec_from_file_location("ovha_resume_guard", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            identity = {"dataset": "refcoco", "gpus": "1"}
+            manifest = module.initialize_identity(root, identity)
+            self.assertEqual(manifest.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(module.validate_identity(root, identity), manifest)
+            with self.assertRaisesRegex(ValueError, "identity"):
+                module.validate_identity(root, {"dataset": "refcoco", "gpus": "2"})
+
+            checkpoint = root / "epoch_1.pth"
+            checkpoint.write_bytes(b"complete private checkpoint")
+            checkpoint.chmod(0o600)
+            digest = __import__("hashlib").sha256(
+                checkpoint.read_bytes()).hexdigest()
+            frozen = module.freeze_checkpoint(
+                checkpoint, root / "frozen", expected_sha256=digest)
+            self.assertEqual(frozen.read_bytes(), checkpoint.read_bytes())
+            self.assertEqual(frozen.stat().st_mode & 0o777, 0o400)
+
+            checkpoint.write_bytes(b"tampered checkpoint with same trust path")
+            with self.assertRaisesRegex(ValueError, "digest"):
+                module.freeze_checkpoint(
+                    checkpoint, root / "frozen", expected_sha256=digest)
+
     def test_port_guard_accepts_free_port_and_rejects_bound_port(self):
         script = ROOT / "scripts/port_guard.py"
         spec = importlib.util.spec_from_file_location("ovha_port_guard", script)
@@ -98,8 +129,12 @@ class RuntimeContractTests(unittest.TestCase):
             checkpoint = work_dir / "epoch_1.pth"
             checkpoint.write_bytes(b"trusted private runner checkpoint")
             checkpoint.chmod(0o600)
+            identity = work_dir / "run_identity.json"
+            identity.write_text('{"contract":"test"}\n')
+            identity.chmod(0o600)
+            write_checkpoint_provenance(checkpoint, identity)
             pointer = work_dir / "last_checkpoint"
-            pointer.write_text(str(checkpoint) + "\n")
+            pointer.write_text(str(checkpoint))
             pointer.chmod(0o600)
 
             self.assertEqual(

@@ -5,6 +5,7 @@ import hashlib
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 from typing import Any, Callable, Mapping, Sequence
 
@@ -117,6 +118,146 @@ def prepare_fresh_private_work_dir(path: Path) -> Path:
         lexical.mkdir(parents=True, mode=0o700)
     lexical.chmod(0o700)
     return lexical.resolve(strict=True)
+
+
+def validate_existing_private_work_dir(path: Path) -> Path:
+    root = _resolve_private_input(path, "work directory")
+    info = root.stat()
+    if (
+        not root.is_dir()
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+    ):
+        raise ValueError("work directory must be user-owned and mode 700")
+    return root
+
+
+def validate_private_epoch_checkpoint(work_dir: Path) -> Path:
+    """Resolve a private MMEngine epoch checkpoint without deserializing it."""
+    root = _resolve_private_input(work_dir, "resume work directory")
+    if not root.is_dir():
+        raise ValueError("resume work directory is not a directory")
+    root_stat = root.stat()
+    if root_stat.st_uid != os.getuid() or root_stat.st_mode & 0o077:
+        raise ValueError("resume work directory must be user-owned and private")
+
+    pointer = root / "last_checkpoint"
+    if pointer.is_symlink() or not pointer.is_file():
+        raise ValueError("last_checkpoint must be a regular non-symlink file")
+    pointer_stat = pointer.stat()
+    if pointer_stat.st_uid != os.getuid() or pointer_stat.st_mode & 0o077:
+        raise ValueError("last_checkpoint must be user-owned and private")
+    raw_pointer = pointer.read_bytes()
+    checkpoint_bytes = (
+        raw_pointer[:-1] if raw_pointer.endswith(b"\n") else raw_pointer)
+    if (
+        not checkpoint_bytes
+        or b"\n" in checkpoint_bytes
+        or b"\x00" in checkpoint_bytes
+        or any(byte < 0x20 for byte in checkpoint_bytes)
+    ):
+        raise ValueError("last_checkpoint must contain exactly one safe line")
+    try:
+        checkpoint_text = checkpoint_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("last_checkpoint is not valid UTF-8") from exc
+    if not checkpoint_text:
+        raise ValueError("last_checkpoint is empty")
+
+    candidate = Path(checkpoint_text).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    lexical = Path(os.path.abspath(candidate))
+    if not lexical.is_relative_to(root):
+        raise ValueError("resume checkpoint must stay inside its work directory")
+    if lexical.parent != root:
+        raise ValueError("resume checkpoint must be directly inside its work directory")
+    if not re.fullmatch(r"epoch_[1-9][0-9]*\.pth", lexical.name):
+        raise ValueError("formal resume requires an epoch-boundary checkpoint")
+    if lexical.is_symlink() or not lexical.is_file():
+        raise ValueError("resume checkpoint must be a regular non-symlink file")
+    resolved = lexical.resolve(strict=True)
+    if not resolved.is_relative_to(root):
+        raise ValueError("resume checkpoint must resolve inside its work directory")
+    for parent in lexical.parents:
+        if parent.is_symlink():
+            raise ValueError(f"resume checkpoint parent is symlinked: {parent}")
+        if parent == root:
+            break
+    checkpoint_stat = resolved.stat()
+    if (
+        checkpoint_stat.st_uid != os.getuid()
+        or checkpoint_stat.st_mode & 0o077
+        or checkpoint_stat.st_nlink != 1
+        or checkpoint_stat.st_size <= 0
+    ):
+        raise ValueError(
+            "resume checkpoint must be private, non-empty, and singly linked")
+    if pointer_stat.st_mtime_ns < checkpoint_stat.st_mtime_ns:
+        raise ValueError("last_checkpoint predates the checkpoint target")
+    provenance = resolved.with_name(resolved.name + ".provenance.json")
+    if provenance.is_symlink() or not provenance.is_file():
+        raise ValueError("resume checkpoint provenance is missing")
+    provenance_stat = provenance.stat()
+    if (
+        provenance_stat.st_uid != os.getuid()
+        or provenance_stat.st_mode & 0o077
+        or provenance_stat.st_nlink != 1
+    ):
+        raise ValueError("resume checkpoint provenance must be private")
+    return resolved
+
+
+def write_checkpoint_provenance(
+    checkpoint: Path, identity_path: Path,
+) -> Path:
+    """Atomically bind a completed epoch checkpoint to its run identity."""
+    if checkpoint.is_symlink() or identity_path.is_symlink():
+        raise ValueError("checkpoint provenance inputs must not be symlinks")
+    checkpoint = checkpoint.resolve(strict=True)
+    identity_path = identity_path.resolve(strict=True)
+    if checkpoint.parent != identity_path.parent:
+        raise ValueError("checkpoint and run identity must share a work directory")
+    for path, label in ((checkpoint, "checkpoint"), (identity_path, "identity")):
+        info = path.stat()
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077
+            or info.st_nlink != 1
+            or info.st_size <= 0
+        ):
+            raise ValueError(f"{label} must be a private regular file")
+    payload = {
+        "contract": "ovha_rod_checkpoint_provenance_v1",
+        "checkpoint": checkpoint.name,
+        "checkpoint_sha256": _sha256(checkpoint),
+        "checkpoint_size": checkpoint.stat().st_size,
+        "run_identity_sha256": _sha256(identity_path),
+    }
+    destination = checkpoint.with_name(checkpoint.name + ".provenance.json")
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("checkpoint provenance already exists")
+    temporary = destination.with_name(
+        f".{destination.name}.tmp-{os.getpid()}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        rendered = json.dumps(payload, sort_keys=True, allow_nan=False) + "\n"
+        os.write(descriptor, rendered.encode("utf-8"))
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.replace(temporary, destination)
+    directory_fd = os.open(destination.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    return destination
 
 
 def collect_scalar_diagnostics(

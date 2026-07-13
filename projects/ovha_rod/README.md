@@ -36,7 +36,9 @@ RUNBOOK.md               server procedure and acceptance checklist
   wheel; it neither invokes `nvcc` nor changes the host CUDA toolkit
 - Security exception: PyTorch 2.1.0 is an older compatibility release, so only
   the exact user-private official checkpoint may be loaded after its locked
-  byte size and SHA-256 match; unknown `.pth` files are prohibited
+  byte size and SHA-256 match; resume additionally accepts only an epoch
+  checkpoint created inside the same private run directory with an exactly
+  matching run identity; unknown `.pth` files are prohibited
 
 The three configs inherit the official dataset-specific 5e recipes and replace
 their evaluation surface with validation only. Held-out evaluation is not part
@@ -112,18 +114,19 @@ WORK_ROOT="$PRIVATE_ROOT/runs"
 
 # Set this only after verifying that the selected physical GPUs are idle.
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=4
 
 bash scripts/run_phase1_server.sh \
   --dataset refcoco \
-  --variant all \
+  --variant rqgo \
   --mmdet-root "$PRIVATE_ROOT/mmdetection" \
   --data-root "$DATA_ROOT" \
   --checkpoint "$CHECKPOINT" \
   --checkpoint-sha256 b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a \
   --bert-root "$BERT_ROOT" \
   --work-root "$WORK_ROOT" \
-  --gpus 8 \
+  --gpus 1 \
+  --per-device-batch 8 \
   --master-port 29626
 ```
 
@@ -136,6 +139,7 @@ SMOKE_DIR="$WORK_ROOT/refcoco/rqgo-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
 CUDA_VISIBLE_DEVICES=4 python scripts/two_batch_smoke.py \
   configs/ovha_rod_swin_t_5e_refcoco.py \
   --work-dir "$SMOKE_DIR" \
+  --batch-size 8 \
   --cfg-options \
     model.seed_operator=rqgo \
     load_from="$CHECKPOINT" \
@@ -143,6 +147,14 @@ CUDA_VISIBLE_DEVICES=4 python scripts/two_batch_smoke.py \
     train_dataloader.dataset.data_root="$DATA_ROOT" \
     train_dataloader.dataset.pipeline.5.tokenizer_name="$BERT_ROOT"
 ```
+
+MMEngine writes a complete `epoch_N.pth` after every epoch and keeps the two
+latest checkpoints. An SSH disconnect is harmless when the command runs in
+`tmux`. To perform a guarded epoch-boundary resume, rerun the identical command
+with `--resume`; the runner rejects a changed GPU count, batch size,
+accumulation, seed, variant, source commit, or environment identity. Mid-epoch
+resume is intentionally rejected because the standard epoch loop does not
+persist the dataloader cursor or worker RNG state.
 
 Do not proceed to TQ-CATO, Q-SRO, or MS-TLEO until the RQGO gate in the
 runbook passes.

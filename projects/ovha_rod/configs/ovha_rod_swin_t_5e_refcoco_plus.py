@@ -79,4 +79,5 @@ randomness = dict(seed=2026, deterministic=True)
 custom_hooks = [
     dict(type='SeedLossWarmupHook', warmup_iters=500),
     dict(type='OperatorDiagnosticsHook', interval=50),
+    dict(type='CheckpointProvenanceHook', identity_path=None),
 ]

@@ -28,6 +28,9 @@ LOCKED_CHECKPOINT_SHA256="b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6
 LOCKED_CHECKPOINT_SIZE=1093815743
 USE_AMP=true
 DRY_RUN=false
+RESUME=false
+ENVIRONMENT_PROFILE="cu121-wheel"
+MMDET_COMMIT="cfd5d3a985b0249de009b67d04f37263e11cdf3d"
 
 usage() {
   printf '%s\n' \
@@ -50,6 +53,7 @@ usage() {
     "  --python PATH           Python in the locked environment" \
     "  --checkpoint-sha256 HEX Required trusted checkpoint digest" \
     "  --master-port N        Explicit free localhost torchrun port" \
+    "  --resume               Resume the matching private epoch checkpoint" \
     "  --no-amp                Disable AMP" \
     "  --dry-run               Validate arguments and print commands only" \
     "  -h, --help              Show this help" \
@@ -79,6 +83,7 @@ while [[ $# -gt 0 ]]; do
     --python) require_value "$1" "$#"; PYTHON_BIN="$2"; shift 2 ;;
     --checkpoint-sha256) require_value "$1" "$#"; CHECKPOINT_SHA256="$2"; shift 2 ;;
     --master-port) require_value "$1" "$#"; MASTER_PORT="$2"; shift 2 ;;
+    --resume) RESUME=true; shift ;;
     --no-amp) USE_AMP=false; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -188,6 +193,17 @@ if [[ "${DRY_RUN}" == false ]]; then
   }
   PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
     "${PYTHON_BIN}" "${SCRIPT_DIR}/gpu_guard.py" --expected-count "${GPUS}"
+  VISIBLE_DEVICE_IDENTITY="$(printf '%s' "${CUDA_VISIBLE_DEVICES}" | tr -d '[:space:]')"
+  [[ "${VISIBLE_DEVICE_IDENTITY}" =~ ^[0-9]+(,[0-9]+)*$ ]] || {
+    printf 'CUDA_VISIBLE_DEVICES cannot be normalized safely\n' >&2
+    exit 2
+  }
+  DATA_ROOT_IDENTITY="$(realpath -e "${DATA_ROOT}")"
+  BERT_ROOT_IDENTITY="$(realpath -e "${BERT_ROOT}")"
+else
+  VISIBLE_DEVICE_IDENTITY="dry-run"
+  DATA_ROOT_IDENTITY="${DATA_ROOT}"
+  BERT_ROOT_IDENTITY="${BERT_ROOT}"
 fi
 
 DENOMINATOR=$((GPUS * PER_DEVICE_BATCH))
@@ -199,6 +215,34 @@ fi
 ACCUMULATIVE_COUNTS=$((TARGET_GLOBAL_BATCH / DENOMINATOR))
 WARMUP_ITERS=$((500 * ACCUMULATIVE_COUNTS))
 CONFIG_PATH="${PROJECT_DIR}/configs/${CONFIG_NAME}"
+PROJECT_COMMIT="$(git -C "${PROJECT_DIR}" rev-parse HEAD)" || {
+  printf 'cannot resolve reviewed project commit\n' >&2
+  exit 2
+}
+
+set_identity_options() {
+  local name="$1"
+  local effective_amp="${USE_AMP}"
+  if [[ "${name}" == "phase0_parent" ]]; then
+    effective_amp=false
+  fi
+  IDENTITY_OPTIONS=(
+    --expected-identity "dataset=${DATASET}"
+    --expected-identity "variant=${name}"
+    --expected-identity "seed=${SEED}"
+    --expected-identity "gpus=${GPUS}"
+    --expected-identity "per_device_batch=${PER_DEVICE_BATCH}"
+    --expected-identity "accumulative_counts=${ACCUMULATIVE_COUNTS}"
+    --expected-identity "global_batch=${TARGET_GLOBAL_BATCH}"
+    --expected-identity "amp=${effective_amp}"
+    --expected-identity "physical_cuda_devices=${VISIBLE_DEVICE_IDENTITY}"
+    --expected-identity "data_root=${DATA_ROOT_IDENTITY}"
+    --expected-identity "bert_root=${BERT_ROOT_IDENTITY}"
+    --expected-identity "initial_checkpoint_sha256=${LOCKED_CHECKPOINT_SHA256}"
+    --expected-identity "project_commit=${PROJECT_COMMIT}"
+    --expected-identity "mmdetection_commit=${MMDET_COMMIT}"
+    --expected-identity "environment_profile=${ENVIRONMENT_PROFILE}")
+}
 
 set_variant_options() {
   local name="$1"
@@ -232,11 +276,6 @@ set_variant_options() {
 }
 
 if [[ "${DRY_RUN}" == false ]]; then
-  for run_variant in "${VARIANTS[@]}"; do
-    WORK_DIR="${WORK_ROOT}/${DATASET}/${run_variant}/seed_${SEED}"
-    PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
-      "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_work_dir.py" "${WORK_DIR}"
-  done
   PREFLIGHT_DIR="${WORK_ROOT}/${DATASET}/preflight/seed_${SEED}_$(date -u +%Y%m%dT%H%M%SZ)"
   PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
     "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_work_dir.py" "${PREFLIGHT_DIR}"
@@ -257,6 +296,19 @@ fi
 for run_variant in "${VARIANTS[@]}"; do
   WORK_DIR="${WORK_ROOT}/${DATASET}/${run_variant}/seed_${SEED}"
   set_variant_options "${run_variant}"
+  set_identity_options "${run_variant}"
+  RESUME_CHECKPOINT=""
+  if [[ "${DRY_RUN}" == false ]]; then
+    if [[ "${RESUME}" == false ]]; then
+      PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
+        "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_work_dir.py" "${WORK_DIR}"
+    fi
+  fi
+  if [[ "${RESUME}" == true ]]; then
+    if [[ "${DRY_RUN}" == true ]]; then
+      RESUME_CHECKPOINT="${WORK_DIR}/epoch_N.pth"
+    fi
+  fi
   ACTIVE_CONFIG_PATH="${CONFIG_PATH}"
   if [[ "${run_variant}" == "phase0_parent" ]]; then
     ACTIVE_CONFIG_PATH="${PROJECT_DIR}/configs/${PHASE0_CONFIG_NAME}"
@@ -276,7 +328,16 @@ for run_variant in "${VARIANTS[@]}"; do
     "optim_wrapper.accumulative_counts=${ACCUMULATIVE_COUNTS}"
     "randomness.seed=${SEED}"
     "randomness.deterministic=True"
+    "default_hooks.checkpoint.by_epoch=True"
+    "default_hooks.checkpoint.interval=1"
+    "default_hooks.checkpoint.max_keep_ckpts=2"
+    "default_hooks.checkpoint.save_last=True"
   )
+  if [[ "${run_variant}" == "phase0_parent" ]]; then
+    CFG_OPTIONS+=("custom_hooks.1.identity_path=${WORK_DIR}/run_identity.json")
+  else
+    CFG_OPTIONS+=("custom_hooks.2.identity_path=${WORK_DIR}/run_identity.json")
+  fi
   if [[ "${run_variant}" != "phase0_parent" ]]; then
     CFG_OPTIONS+=(
       "param_scheduler.0.end=${WARMUP_ITERS}"
@@ -291,6 +352,9 @@ for run_variant in "${VARIANTS[@]}"; do
     --work-dir "${WORK_DIR}"
     --cfg-options "${CFG_OPTIONS[@]}"
   )
+  if [[ "${RESUME}" == true && "${DRY_RUN}" == true ]]; then
+    COMMAND+=(--resume "${RESUME_CHECKPOINT}")
+  fi
   printf 'Variant %s, effective global batch %d, accumulation %d, warmup iterations %d\n' \
     "${run_variant}" "${TARGET_GLOBAL_BATCH}" "${ACCUMULATIVE_COUNTS}" "${WARMUP_ITERS}"
   printf 'Command:'
@@ -306,25 +370,13 @@ for run_variant in "${VARIANTS[@]}"; do
     PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
       "${PYTHON_BIN}" "${SCRIPT_DIR}/gpu_guard.py" --expected-count "${GPUS}"
     "${PYTHON_BIN}" "${SCRIPT_DIR}/port_guard.py" --port "${MASTER_PORT}"
-    if [[ -L "${WORK_DIR}/command.txt" ]]; then
-      printf 'refusing symlink command log: %s\n' "${WORK_DIR}/command.txt" >&2
-      exit 2
-    fi
-    {
-      printf 'CUDA_DEVICE_ORDER=%q\n' "${CUDA_DEVICE_ORDER}"
-      printf 'CUDA_VISIBLE_DEVICES=%q\n' "${CUDA_VISIBLE_DEVICES}"
-      printf 'MASTER_ADDR=%q\n' "127.0.0.1"
-      printf 'PORT=%q\n' "${MASTER_PORT}"
-      printf 'TRANSFORMERS_OFFLINE=%q\n' "${TRANSFORMERS_OFFLINE}"
-      printf 'COMMAND='
-      printf '%q ' "${COMMAND[@]}"
-      printf '\n'
-    } > "${WORK_DIR}/command.txt"
-    (
-      cd "${MMDET_ROOT}"
-      PORT="${MASTER_PORT}" MASTER_ADDR="127.0.0.1" \
-        PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
-        "${COMMAND[@]}"
-    )
+    LOCK_MODE="fresh"
+    [[ "${RESUME}" == false ]] || LOCK_MODE="resume"
+    PORT="${MASTER_PORT}" MASTER_ADDR="127.0.0.1" \
+      PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
+      "${PYTHON_BIN}" "${SCRIPT_DIR}/run_lock.py" \
+      --work-dir "${WORK_DIR}" --mode "${LOCK_MODE}" \
+      --freeze-dir "${HOME}/.local/share/ovha-rod/trusted_resume_inputs" \
+      --cwd "${MMDET_ROOT}" "${IDENTITY_OPTIONS[@]}" -- "${COMMAND[@]}"
   fi
 done

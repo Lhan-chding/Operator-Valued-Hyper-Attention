@@ -79,8 +79,10 @@ exact locked commit, installs it editable, and verifies the prebuilt
 deformable-attention import plus the CUDA 12.1 runtime. It also writes a
 mode-600 environment manifest inside the venv.
 
-Unverified resume is intentionally disabled for this older-Torch compatibility
-profile. Start each preregistered run in a new private work directory.
+Unknown or cross-run resume remains disabled for this older-Torch compatibility
+profile. A guarded epoch-boundary resume is allowed only from the same private
+work directory and exact recorded run identity. The guard freezes the selected
+checkpoint into a private read-only copy before MMEngine deserializes it.
 
 ## 4. Download immutable model inputs
 
@@ -219,6 +221,7 @@ SMOKE_DIR="$PRIVATE_ROOT/runs/refcoco/rqgo-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
 CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=4 \
 python scripts/two_batch_smoke.py configs/ovha_rod_swin_t_5e_refcoco.py \
   --work-dir "$SMOKE_DIR" \
+  --batch-size 8 \
   --cfg-options \
     model.seed_operator=rqgo \
     load_from="$CHECKPOINT" \
@@ -240,7 +243,47 @@ Then inspect the two batches:
 Abort immediately on NaN/Inf, missing dense tensors, checkpoint base-key
 coverage below 99%, or any model-input leakage.
 
-## 9. RQGO Go/No-Go gate
+## 9. Checkpoints, disconnects, and safe resume
+
+Run formal training inside `tmux`. Closing the laptop, losing SSH, or detaching
+from tmux does not stop the server process and therefore does not require a
+resume. The formal runner saves model, optimizer, scheduler, runner state, and
+AMP scaler as `epoch_N.pth` after every epoch and keeps the latest two.
+
+The original run command can be resumed by adding one flag:
+
+```bash
+bash scripts/run_phase1_server.sh \
+  --dataset refcoco \
+  --variant rqgo \
+  --mmdet-root "$PRIVATE_ROOT/mmdetection" \
+  --data-root "$DATA_ROOT" \
+  --checkpoint "$CHECKPOINT" \
+  --checkpoint-sha256 b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a \
+  --bert-root "$BERT_ROOT" \
+  --work-root "$PRIVATE_ROOT/runs" \
+  --gpus 1 \
+  --per-device-batch 8 \
+  --master-port 29626 \
+  --seed 2026 \
+  --resume
+```
+
+Resume fails closed unless `last_checkpoint` names a non-empty private
+`epoch_N.pth` inside the same work directory and `run_identity.json` exactly
+matches dataset, variant, seed, GPU count, per-device batch, accumulation,
+global batch, AMP mode, project commit, MMDetection commit, and environment
+profile. Never edit `last_checkpoint`, copy a `.pth` from another run, or use a
+downloaded checkpoint as resume input. PyTorch checkpoints are pickle trust
+boundaries.
+
+Mid-epoch resume is deliberately rejected. MMEngine's standard epoch loop does
+not persist the dataloader cursor, worker RNG, or prefetch queue, so treating an
+`iter_N.pth` as exact formal continuation can repeat or omit samples. If a job
+is intentionally stopped before the epoch checkpoint is complete, restart from
+the preceding complete epoch.
+
+## 10. RQGO Go/No-Go gate
 
 All conditions are required before later operators are considered:
 
@@ -260,7 +303,7 @@ If Query Oracle does not improve, stop and audit seed targets, relation-field
 orientation, masks, and the Top-K insertion point. Do not compensate by adding
 decoder modules.
 
-## 10. Artifact handoff
+## 11. Artifact handoff
 
 Return these paths after each server run:
 

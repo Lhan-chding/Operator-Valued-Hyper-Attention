@@ -41,6 +41,7 @@ class HookContractTests(unittest.TestCase):
         for relative in (
             "ovha_rod/hooks/seed_loss_warmup_hook.py",
             "ovha_rod/hooks/operator_diagnostics_hook.py",
+            "ovha_rod/hooks/checkpoint_provenance_hook.py",
         ):
             path = ROOT / relative
             with self.subTest(path=path):

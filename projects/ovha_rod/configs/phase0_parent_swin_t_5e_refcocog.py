@@ -4,7 +4,10 @@ model = dict(
     type='DeterministicGroundingDINO',
     backbone=dict(init_cfg=None))
 custom_imports = dict(imports=['ovha_rod'], allow_failed_imports=False)
-custom_hooks = [dict(type='OperatorDiagnosticsHook', interval=50)]
+custom_hooks = [
+    dict(type='OperatorDiagnosticsHook', interval=50),
+    dict(type='CheckpointProvenanceHook', identity_path=None),
+]
 
 data_root = 'data/coco/'
 val_ann_file = 'mdetr_annotations/finetune_refcocog_val.json'
