@@ -15,6 +15,7 @@ from ovha_rod.runtime_contracts import (
     prepare_fresh_private_work_dir,
     require_selected_gpus_idle,
     require_visible_device_ids,
+    validate_private_epoch_checkpoint,
     validate_local_bert,
     validate_locked_checkpoint,
 )
@@ -89,6 +90,40 @@ class RuntimeContractTests(unittest.TestCase):
             link.symlink_to(target, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "symlink"):
                 prepare_fresh_private_work_dir(link)
+
+    def test_resume_checkpoint_requires_private_epoch_boundary_artifact(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            work_dir = Path(directory)
+            work_dir.chmod(0o700)
+            checkpoint = work_dir / "epoch_1.pth"
+            checkpoint.write_bytes(b"trusted private runner checkpoint")
+            checkpoint.chmod(0o600)
+            pointer = work_dir / "last_checkpoint"
+            pointer.write_text(str(checkpoint) + "\n")
+            pointer.chmod(0o600)
+
+            self.assertEqual(
+                validate_private_epoch_checkpoint(work_dir), checkpoint.resolve())
+
+            checkpoint.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, "private"):
+                validate_private_epoch_checkpoint(work_dir)
+            checkpoint.chmod(0o600)
+
+            outside = work_dir.parent / "epoch_999.pth"
+            outside.write_bytes(b"outside")
+            outside.chmod(0o600)
+            pointer.write_text(str(outside) + "\n")
+            with self.assertRaisesRegex(ValueError, "inside"):
+                validate_private_epoch_checkpoint(work_dir)
+            outside.unlink()
+
+            mid_epoch = work_dir / "iter_500.pth"
+            mid_epoch.write_bytes(b"not a safe formal resume boundary")
+            mid_epoch.chmod(0o600)
+            pointer.write_text(str(mid_epoch) + "\n")
+            with self.assertRaisesRegex(ValueError, "epoch"):
+                validate_private_epoch_checkpoint(work_dir)
 
     def test_scalar_diagnostics_preserve_nonfinite_failures(self):
         finite, nonfinite = collect_scalar_diagnostics({

@@ -43,6 +43,7 @@ class StaticIntegrationContractTests(unittest.TestCase):
             ROOT / "scripts/gpu_guard.py",
             ROOT / "scripts/port_guard.py",
             ROOT / "scripts/prepare_work_dir.py",
+            ROOT / "scripts/resume_guard.py",
             ROOT / "ovha_rod/runtime_contracts.py",
             ROOT / "README.md",
             ROOT / "environment/mmdetection.lock",
@@ -105,7 +106,14 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertGreaterEqual(smoke.count("require_selected_gpus_idle"), 3)
         self.assertIn('os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"', smoke)
         self.assertIn('os.environ["TRANSFORMERS_OFFLINE"] = "1"', smoke)
-        self.assertIn('config.train_dataloader.batch_size = 1', smoke)
+        self.assertIn(
+            'parser.add_argument("--batch-size",', smoke)
+        self.assertIn("choices=(1, 2, 4, 8, 16, 32)", smoke)
+        self.assertIn(
+            'config.train_dataloader.batch_size = args.batch_size', smoke)
+        self.assertNotIn('"train_dataloader.batch_size",', smoke)
+        self.assertIn("runner.train_dataloader.batch_size", smoke)
+        self.assertIn('"max_memory_reserved_bytes"', smoke)
         self.assertIn('config.train_dataloader.num_workers = 0', smoke)
         self.assertIn('config.train_dataloader.persistent_workers = False', smoke)
         self.assertIn('config.optim_wrapper.type = "AmpOptimWrapper"', smoke)
@@ -125,12 +133,18 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertGreaterEqual(runner.count("gpu_guard.py"), 2)
         self.assertIn("--master-port", runner)
         self.assertIn("port_guard.py", runner)
+        self.assertIn("--resume", runner)
+        self.assertIn("resume_guard.py", runner)
+        self.assertIn("default_hooks.checkpoint.by_epoch=True", runner)
+        self.assertIn("default_hooks.checkpoint.interval=1", runner)
+        self.assertIn("default_hooks.checkpoint.save_last=True", runner)
 
         documentation = (
             (ROOT / "README.md").read_text()
             + (ROOT / "RUNBOOK.md").read_text()
         )
         self.assertIn("CUDA_VISIBLE_DEVICES", documentation)
+        self.assertIn("epoch-boundary resume", documentation.lower())
 
     def test_metric_requires_encoder_oracle_for_every_phase1_sample(self):
         source = (

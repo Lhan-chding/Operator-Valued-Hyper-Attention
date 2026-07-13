@@ -194,9 +194,14 @@ class Cu121EnvironmentContractTests(unittest.TestCase):
                 preflight.EXPECTED_CHECKPOINT_SIZE = old_size
                 preflight.EXPECTED_CHECKPOINT_SHA256 = old_digest
 
-    def test_runner_disables_unverified_resume(self):
+    def test_runner_only_resumes_private_guarded_checkpoints(self):
         source = (ROOT / "scripts/run_phase1_server.sh").read_text()
-        self.assertNotIn("--resume", source)
+        self.assertIn("--resume", source)
+        self.assertIn("resume_guard.py", source)
+        self.assertIn('RESUME_CHECKPOINT=', source)
+        self.assertIn('COMMAND+=(--resume "${RESUME_CHECKPOINT}")', source)
+        self.assertIn("run_identity.json", source)
+        self.assertIn("--expected-identity", source)
         self.assertIn("/trusted_inputs", source)
         self.assertIn("LOCKED_CHECKPOINT_SIZE=1093815743", source)
 
