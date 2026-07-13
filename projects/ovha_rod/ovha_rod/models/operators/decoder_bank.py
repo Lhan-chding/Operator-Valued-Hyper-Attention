@@ -353,10 +353,17 @@ class DecoderOperatorBank(nn.Module):
                 safe_query_valid,
                 safe_text_valid,
             )
-            residuals["tq_cato"] = self._adapt(
-                result.residual, 1, availability, router, adapter)
-            artifacts["tq_cato_transport"] = result.transport * active_samples[
+            transport = result.transport * active_samples[
                 :, None, None].to(dtype=result.transport.dtype)
+            residual = _with_tq_diagnostics(
+                result.residual,
+                transport,
+                context.text_valid,
+                active_samples,
+            )
+            residuals["tq_cato"] = self._adapt(
+                residual, 1, availability, router, adapter)
+            artifacts["tq_cato_transport"] = transport
         if "ms_tleo" in active:
             operator_valid = availability[..., 2]
             raw = self.ms_tleo(
@@ -521,6 +528,40 @@ def _safe_tq_masks(
         torch.where(active_samples[:, None], operator_valid, query_fallback),
         torch.where(active_samples[:, None], text_valid, text_fallback),
         active_samples,
+    )
+
+
+def _with_tq_diagnostics(
+    residual: DecoderOperatorResidual,
+    transport: Tensor,
+    text_valid: Tensor,
+    active_samples: Tensor,
+) -> DecoderOperatorResidual:
+    active_tokens = text_valid & active_samples[:, None]
+    row_error = (
+        transport.sum(dim=-1) - active_tokens.to(dtype=transport.dtype)
+    ).abs()
+    entropy = -(
+        transport
+        * transport.clamp_min(torch.finfo(transport.dtype).tiny).log()
+    ).sum(dim=-1)
+    denominator = active_tokens.sum().clamp_min(1).to(dtype=transport.dtype)
+    diagnostics = dict(residual.diagnostics)
+    diagnostics.update({
+        "transport_row_error": row_error.amax(),
+        "transport_entropy": torch.where(
+            active_tokens,
+            entropy,
+            torch.zeros_like(entropy),
+        ).sum() / denominator,
+    })
+    return DecoderOperatorResidual(
+        query_delta=residual.query_delta,
+        box_delta=residual.box_delta,
+        score_delta=residual.score_delta,
+        gate_logits=residual.gate_logits,
+        valid=residual.valid,
+        diagnostics=diagnostics,
     )
 
 
