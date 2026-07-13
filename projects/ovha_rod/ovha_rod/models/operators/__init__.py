@@ -13,7 +13,7 @@ from .relation_fields import RELATION_TYPES, RelationFieldBank
 from .rceo import RCEO, RCEOResult
 from .rqgo import RQGO, RQGOResult
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover - static imports only.
     from .qsro import QSRO, QuerySpatialRelationOperator
 
 _LAZY_QSRO_EXPORTS = frozenset({"QSRO", "QuerySpatialRelationOperator"})
