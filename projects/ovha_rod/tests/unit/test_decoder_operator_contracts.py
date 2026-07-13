@@ -201,6 +201,7 @@ class StructuredResidualFusionTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
         self.assertTrue(all(gradient is not None for gradient in gradients))
         self.assertTrue(all(torch.isfinite(gradient).all() for gradient in gradients))
+        self.assertGreater(float(first.gate_logits.grad.abs().sum()), 0.0)
 
     def test_empty_operator_sequence_returns_new_parent_state(self):
         parent = self._parent()

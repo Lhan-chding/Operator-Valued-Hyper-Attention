@@ -15,7 +15,8 @@ This blueprint has two independent tracks:
 
 - The current RQGO gate remains the prerequisite for decoder integration.
 - Post-RQGO modules must not be imported by the formal RefCOCO configs yet.
-- A new module must initially return an exactly zero structured residual.
+- A new module may propose non-zero residuals, but its zero-initialized gate
+  must make the fused contribution exactly zero.
 - No ground-truth boxes, candidate crops, or annotations may enter inference.
 - A speed experiment must use its own work directory and run identity.
 - FP16 and BF16 are excluded by observed runtime failures in the locked stack.
@@ -27,8 +28,9 @@ This blueprint has two independent tracks:
 The current run is compute-bound: data time is about 0.05 seconds while a
 training step is several seconds. The current diagnostics hook also performs a
 host synchronization for every seed-operator parameter gradient. First replace
-that observational path with on-device accumulation and one synchronization at
-the logging interval. The inherited Grounding DINO base additionally enables
+that observational path with on-device accumulation and one synchronization
+per iteration. This preserves the existing per-step non-finite fail-fast check.
+The inherited Grounding DINO base additionally enables
 Swin checkpointing (`backbone.with_cp=True`) and checkpoints all six encoder
 layers (`encoder.num_cp=6`). Benchmark the following cells after the low-sync
 diagnostics change:
@@ -84,8 +86,8 @@ Purpose: relation-versus-distractor contrast for each decoder query.
 Inputs: query features, normalized boxes, relation role vector, and valid query
 mask. The primitive computes relation-conditioned pairwise evidence and emits
 only a structured result. It must be permutation equivariant over queries,
-mask padding exactly, stay finite for one valid query, and begin as an exact
-zero residual.
+mask padding exactly, stay finite for one valid query, and begin with an exact
+zero fused contribution through its gate logits.
 
 ### Phase B2: TQ-CATO
 
