@@ -438,6 +438,42 @@ def _project_checks(project_root: Path, dataset: str, data_root: Path,
         checks.append(CheckResult(
             "no_remote_model_weights", True,
             "resolved model init and load sources are local-only"))
+        positional_type = type(model.positional_encoding).__name__
+        positional_ok = (
+            positional_type == "DeterministicSinePositionalEncoding")
+        checks.append(CheckResult(
+            "deterministic_positional_encoding",
+            positional_ok,
+            "padded feature masks must avoid floating CUDA cumsum",
+            positional_type,
+        ))
+        try:
+            positional_mask = torch.tensor([
+                [[False, False, True],
+                 [False, True, True]],
+            ])
+            with torch.no_grad():
+                positional_probe = model.positional_encoding(positional_mask)
+            positional_probe_ok = (
+                positional_type == "DeterministicSinePositionalEncoding"
+                and tuple(positional_probe.shape) == (
+                    1, int(model.embed_dims), 2, 3)
+                and bool(torch.isfinite(positional_probe).all())
+            )
+        except Exception as exc:
+            checks.append(CheckResult(
+                "deterministic_positional_encoding_probe", False, str(exc)))
+        else:
+            checks.append(CheckResult(
+                "deterministic_positional_encoding_probe",
+                positional_probe_ok,
+                "irregular padded mask produces finite parent-shaped encoding",
+                {
+                    "type": positional_type,
+                    "shape": list(positional_probe.shape),
+                    "finite": bool(torch.isfinite(positional_probe).all()),
+                },
+            ))
         zero_tensors = [
             model.bbox_head.referent_head[-1].weight,
             model.bbox_head.referent_head[-1].bias,

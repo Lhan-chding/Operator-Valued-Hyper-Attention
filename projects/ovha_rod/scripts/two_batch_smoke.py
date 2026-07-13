@@ -27,6 +27,9 @@ from ovha_rod.runtime_contracts import (
     validate_local_bert,
     validate_locked_checkpoint,
 )
+from ovha_rod.models.positional_encoding import (
+    DeterministicSinePositionalEncoding,
+)
 from mmengine.config import Config, DictAction
 from mmengine.runner import Runner
 
@@ -135,6 +138,11 @@ def main() -> int:
 
     require_selected_gpus_idle(device_ids)
     runner = Runner.from_cfg(config)
+    if not isinstance(
+            runner.model.positional_encoding,
+            DeterministicSinePositionalEncoding):
+        raise TypeError(
+            "smoke requires DeterministicSinePositionalEncoding")
     runner.train()
     summary = audit_smoke_outputs(
         Path(config.work_dir), expected_operator=expected_operator)

@@ -169,7 +169,7 @@ class StaticIntegrationContractTests(unittest.TestCase):
                 self.assertNotIn("optim_wrapper", source)
                 self.assertNotIn("param_scheduler", source)
                 self.assertIn(
-                    "model=dict(backbone=dict(init_cfg=None))",
+                    "backbone=dict(init_cfg=None)",
                     source.replace(" ", ""),
                 )
                 self.assertIn("OperatorDiagnosticsHook", source)

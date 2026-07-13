@@ -1,6 +1,8 @@
 _base_ = 'mmdet::mm_grounding_dino/refcoco/grounding_dino_swin-t_finetune_8xb4_5e_refcocog.py'
 load_from = None
-model = dict(backbone=dict(init_cfg=None))
+model = dict(
+    type='DeterministicGroundingDINO',
+    backbone=dict(init_cfg=None))
 custom_imports = dict(imports=['ovha_rod'], allow_failed_imports=False)
 custom_hooks = [dict(type='OperatorDiagnosticsHook', interval=50)]
 

@@ -5,7 +5,6 @@ from typing import Dict, Optional, Tuple
 import torch
 from torch import Tensor, nn
 
-from mmdet.models.detectors.grounding_dino import GroundingDINO
 from mmdet.registry import MODELS
 from mmdet.structures import OptSampleList
 
@@ -14,10 +13,11 @@ from ..operators.generic_seed import (
 from ..operators.base import SeedResult, memory_valid_mask
 from ..operators.rqgo import RQGO
 from ..role_encoder import LatentRoleEncoder
+from .deterministic_grounding_dino import DeterministicGroundingDINO
 
 
 @MODELS.register_module()
-class OVHAGroundingDINO(GroundingDINO):
+class OVHAGroundingDINO(DeterministicGroundingDINO):
     """MM-Grounding-DINO with a Phase-1 dense seed operator.
 
     The parent token-maximum selection score remains the sole base score.  A
