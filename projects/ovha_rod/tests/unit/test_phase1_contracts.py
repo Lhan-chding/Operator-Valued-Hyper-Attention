@@ -118,15 +118,17 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertIn('"max_memory_reserved_bytes"', smoke)
         self.assertIn('config.train_dataloader.num_workers = 0', smoke)
         self.assertIn('config.train_dataloader.persistent_workers = False', smoke)
-        self.assertIn('config.optim_wrapper.type = "AmpOptimWrapper"', smoke)
+        self.assertIn('config.optim_wrapper.type = "OptimWrapper"', smoke)
         self.assertIn('hook.get("type") != "CheckpointProvenanceHook"', smoke)
         self.assertIn("tokenizer root must equal the locked local BERT root", smoke)
 
-    def test_two_batch_smoke_uses_unscaled_bfloat16_amp(self):
+    def test_two_batch_smoke_uses_full_precision(self):
         smoke = (ROOT / "scripts/two_batch_smoke.py").read_text()
-        self.assertIn('config.optim_wrapper.dtype = "bfloat16"', smoke)
-        self.assertIn("config.optim_wrapper.loss_scale = 1.0", smoke)
-        self.assertNotIn('config.optim_wrapper.loss_scale = "dynamic"', smoke)
+        self.assertNotIn("AmpOptimWrapper", smoke)
+        self.assertNotIn("bfloat16", smoke)
+        self.assertNotIn('"optim_wrapper.loss_scale",', smoke)
+        self.assertIn('"precision": "fp32"', smoke)
+        self.assertIn('"amp_enabled": False', smoke)
 
     def test_two_batch_smoke_disables_validation_loop(self):
         smoke = (ROOT / "scripts/two_batch_smoke.py").read_text()
@@ -166,13 +168,15 @@ class StaticIntegrationContractTests(unittest.TestCase):
         self.assertIn("CUDA_VISIBLE_DEVICES", documentation)
         self.assertIn("epoch-boundary resume", documentation.lower())
 
-    def test_server_runner_uses_fail_fast_unscaled_bfloat16_amp(self):
+    def test_server_runner_uses_fail_fast_full_precision(self):
         runner = (ROOT / "scripts/run_phase1_server.sh").read_text()
-        self.assertIn('"optim_wrapper.dtype=bfloat16"', runner)
-        self.assertIn('"optim_wrapper.loss_scale=1.0"', runner)
+        self.assertNotIn("AmpOptimWrapper", runner)
+        self.assertNotIn("bfloat16", runner)
+        self.assertNotIn("optim_wrapper.loss_scale", runner)
         self.assertIn(
             '"optim_wrapper.clip_grad.error_if_nonfinite=True"', runner)
-        self.assertNotIn('"optim_wrapper.loss_scale=dynamic"', runner)
+        self.assertIn('--expected-identity "amp=false"', runner)
+        self.assertIn('--expected-identity "amp_dtype=none"', runner)
 
     def test_server_resume_identity_locks_amp_dtype(self):
         runner = (ROOT / "scripts/run_phase1_server.sh").read_text()
