@@ -9,15 +9,18 @@ not imported by any formal training config.
 Coordinates use normalized continuous image edges: 0 and 1 are the left/top
 and right/bottom image edges. They are converted to ``grid_sample`` space as
 ``2 * coordinate - 1`` and sampled with ``align_corners=False``. Samples
-outside the image use zero padding. Degenerate boxes are rejected for valid
-queries but tolerated for masked queries, whose outputs are exactly zero.
+outside the image use zero padding. Optional per-level valid width/height
+ratios map valid-region-normalized boxes into padded feature-map coordinates;
+omitting them preserves the full-map convention. Degenerate boxes are rejected
+for valid queries but tolerated for masked queries, whose outputs are exactly
+zero.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Sequence
+from typing import Optional, Sequence
 
 import torch
 from torch import Tensor, nn
@@ -88,8 +91,14 @@ class MSTLEO(nn.Module):
         feature_maps: tuple[Tensor, ...],
         boxes: Tensor,
         valid: Tensor,
+        valid_ratios: Optional[Tensor] = None,
     ) -> DecoderOperatorResidual:
-        evidence = self.extract_evidence(feature_maps, boxes, valid)
+        evidence = self.extract_evidence(
+            feature_maps,
+            boxes,
+            valid,
+            valid_ratios=valid_ratios,
+        )
         if evidence.interior.shape[-1] != self.d_model:
             raise ValueError("feature map channels must equal d_model")
 
@@ -130,20 +139,60 @@ class MSTLEO(nn.Module):
         feature_maps: tuple[Tensor, ...],
         boxes: Tensor,
         valid: Tensor,
+        valid_ratios: Optional[Tensor] = None,
     ) -> MSTLEOEvidence:
-        """Sample fixed layouts and equally average descriptors over levels."""
+        """Sample layouts after optional per-level valid-region scaling.
+
+        ``valid_ratios`` has shape ``[B,L,2]`` in ``(width, height)``
+        order. It maps boxes normalized to each image's valid region into the
+        corresponding padded feature-map coordinates. Omitting it preserves
+        the original full-map coordinate convention.
+        """
 
         feature_maps = _validate_inputs(feature_maps, boxes, valid)
+        valid_ratios = _validate_valid_ratios(
+            valid_ratios,
+            feature_maps=feature_maps,
+            boxes=boxes,
+        )
         safe_boxes = torch.where(valid[..., None], boxes, torch.zeros_like(boxes))
-        grid = self._sampling_grid(safe_boxes)
+        level_boxes = _boxes_for_feature_levels(
+            safe_boxes,
+            valid_ratios,
+            level_count=len(feature_maps),
+        )
+        interior, boundary, context = self._sample_feature_levels(
+            feature_maps, level_boxes)
+        mask = valid[..., None].to(dtype=boxes.dtype)
+        return MSTLEOEvidence(
+            interior=interior * mask,
+            boundary=boundary * mask,
+            context=context * mask,
+        )
+
+    def _sample_feature_levels(
+        self,
+        feature_maps: tuple[Tensor, ...],
+        level_boxes: tuple[Tensor, ...],
+    ) -> tuple[Tensor, Tensor, Tensor]:
         point_counts = (
             self._INTERIOR_POINT_COUNT,
             self._BOUNDARY_POINT_COUNT,
             self._CONTEXT_POINT_COUNT,
         )
-        per_level = _sample_level(feature_maps[0], grid, point_counts)
-        for feature_map in feature_maps[1:]:
-            current_level = _sample_level(feature_map, grid, point_counts)
+        per_level = _sample_level(
+            feature_maps[0],
+            self._sampling_grid(level_boxes[0]),
+            point_counts,
+        )
+        for feature_map, current_boxes in zip(
+            feature_maps[1:], level_boxes[1:]
+        ):
+            current_level = _sample_level(
+                feature_map,
+                self._sampling_grid(current_boxes),
+                point_counts,
+            )
             per_level = tuple(
                 accumulated + current
                 for accumulated, current in zip(per_level, current_level)
@@ -151,12 +200,7 @@ class MSTLEO(nn.Module):
         interior, boundary, context = (
             descriptor / len(feature_maps) for descriptor in per_level
         )
-        mask = valid[..., None].to(dtype=boxes.dtype)
-        return MSTLEOEvidence(
-            interior=interior * mask,
-            boundary=boundary * mask,
-            context=context * mask,
-        )
+        return interior, boundary, context
 
     def _sampling_grid(self, boxes: Tensor) -> Tensor:
         offsets = torch.cat(
@@ -237,6 +281,49 @@ def _validate_inputs(
     if valid.any() and not (boxes[..., 2:][valid] > 0).all():
         raise ValueError("valid boxes must have positive width and height")
     return feature_maps
+
+
+def _validate_valid_ratios(
+    valid_ratios: Optional[Tensor],
+    *,
+    feature_maps: tuple[Tensor, ...],
+    boxes: Tensor,
+) -> Optional[Tensor]:
+    if valid_ratios is None:
+        return None
+    expected_shape = (boxes.shape[0], len(feature_maps), 2)
+    if valid_ratios.shape != expected_shape:
+        raise ValueError(
+            "valid_ratios must have shape [B,L,2] matching feature_maps"
+        )
+    if not valid_ratios.is_floating_point():
+        raise ValueError("valid_ratios must be floating point")
+    if valid_ratios.device != boxes.device:
+        raise ValueError("valid_ratios and boxes must share the same device")
+    if valid_ratios.dtype != boxes.dtype:
+        raise ValueError("valid_ratios and boxes must share the same dtype")
+    if not torch.isfinite(valid_ratios).all():
+        raise ValueError("valid_ratios must contain only finite values")
+    if not (valid_ratios > 0).all():
+        raise ValueError("valid_ratios must be greater than zero")
+    if not (valid_ratios <= 1).all():
+        raise ValueError("valid_ratios must be at most one")
+    return valid_ratios
+
+
+def _boxes_for_feature_levels(
+    boxes: Tensor,
+    valid_ratios: Optional[Tensor],
+    *,
+    level_count: int,
+) -> tuple[Tensor, ...]:
+    if valid_ratios is None:
+        return (boxes,) * level_count
+    scales = torch.cat((valid_ratios, valid_ratios), dim=-1)
+    return tuple(
+        boxes * scales[:, level_index, None, :]
+        for level_index in range(level_count)
+    )
 
 
 def _sample_level(
