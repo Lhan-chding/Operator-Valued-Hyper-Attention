@@ -116,7 +116,7 @@ class RCEOTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "text_valid"):
             self._forward(text_valid=self.text_valid.float())
         with self.assertRaisesRegex(ValueError, "valid_ratios"):
-            self._forward(valid_ratios=self.valid_ratios[:, :2])
+            self._forward(valid_ratios=self.valid_ratios[..., :1])
         bad = self.valid_ratios.detach().clone()
         bad[0, 0, 0] = float("inf")
         with self.assertRaisesRegex(ValueError, "finite"):
