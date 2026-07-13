@@ -58,6 +58,33 @@ class OperatorMemoryTests(unittest.TestCase):
             OperatorMemoryState(
                 value=torch.full((1, 2, 8), float("inf")), step=0)
 
+    def test_constructor_initialization_and_state_boundaries_fail_fast(self):
+        with self.assertRaisesRegex(ValueError, "d_model"):
+            OperatorMemory(d_model=0)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            self.memory.initialize(0, 2, self.query.device, self.query.dtype)
+        with self.assertRaisesRegex(ValueError, "floating"):
+            self.memory.initialize(1, 2, self.query.device, torch.int64)
+        with self.assertRaisesRegex(ValueError, "shape"):
+            OperatorMemoryState(value=torch.zeros(2, 8), step=0)
+        with self.assertRaisesRegex(ValueError, "floating"):
+            OperatorMemoryState(
+                value=torch.zeros(1, 2, 8, dtype=torch.int64), step=0)
+        with self.assertRaisesRegex(ValueError, "step"):
+            OperatorMemoryState(value=torch.zeros(1, 2, 8), step=-1)
+
+        state = self.memory.initialize_like(self.query)
+        with self.assertRaisesRegex(ValueError, "device and dtype"):
+            self.memory(state, self.query.double(), self.valid)
+        with self.assertRaisesRegex(ValueError, "shape"):
+            self.memory.initialize_like(torch.zeros(2, 4, 7))
+        with self.assertRaisesRegex(ValueError, "floating"):
+            self.memory.initialize_like(torch.zeros(2, 4, 8, dtype=torch.int64))
+        bad = self.query.detach().clone()
+        bad[0, 0, 0] = float("nan")
+        with self.assertRaisesRegex(ValueError, "finite"):
+            self.memory.initialize_like(bad)
+
 
 if __name__ == "__main__":
     unittest.main()
