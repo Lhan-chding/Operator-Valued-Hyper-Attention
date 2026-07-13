@@ -8,7 +8,6 @@ from typing import Mapping, Optional, Sequence
 
 import torch
 from torch import Tensor, nn
-from torch.nn import functional as F
 
 from .decoder_contracts import (
     DecoderOperatorResidual,
@@ -150,6 +149,7 @@ class BankOutput:
     memory_state: OperatorMemoryState
     router: OperatorRouterResult
     reliability: RCEOResult
+    adaptation: HyperAdapterResult
     availability: Tensor
     artifacts: Mapping[str, Tensor] = field(default_factory=dict)
 
@@ -169,6 +169,8 @@ class BankOutput:
             raise ValueError("router must be an OperatorRouterResult")
         if not isinstance(self.reliability, RCEOResult):
             raise ValueError("reliability must be an RCEOResult")
+        if not isinstance(self.adaptation, HyperAdapterResult):
+            raise ValueError("adaptation must be a HyperAdapterResult")
         expected = (*self.fused.query.shape[:2], len(OPERATOR_NAMES))
         if self.availability.shape != expected or self.availability.dtype != torch.bool:
             raise ValueError("availability must be a boolean [B,Q,O] tensor")
@@ -195,6 +197,10 @@ class DecoderOperatorBank(nn.Module):
         router_hidden_dim: int,
         adapter_rank: int,
         enabled_operators: Sequence[str] = OPERATOR_NAMES,
+        use_router: bool = True,
+        use_memory: bool = True,
+        use_hyper_adapter: bool = True,
+        use_rceo: bool = True,
     ) -> None:
         super().__init__()
         if not isinstance(d_model, int) or isinstance(d_model, bool) or d_model <= 0:
@@ -204,9 +210,22 @@ class DecoderOperatorBank(nn.Module):
             raise ValueError("enabled_operators must name at least one known operator")
         if len(set(enabled)) != len(enabled):
             raise ValueError("enabled_operators must not contain duplicate names")
+        flags = {
+            "use_router": use_router,
+            "use_memory": use_memory,
+            "use_hyper_adapter": use_hyper_adapter,
+            "use_rceo": use_rceo,
+        }
+        for name, value in flags.items():
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be boolean")
         self.d_model = d_model
         self.num_layers = int(num_layers)
         self.enabled_operators = enabled
+        self.use_router = use_router
+        self.use_memory = use_memory
+        self.use_hyper_adapter = use_hyper_adapter
+        self.use_rceo = use_rceo
         self.qsro = QuerySpatialRelationOperator(d_model=d_model)
         self.tq_cato = TQCATO(d_model=d_model)
         self.ms_tleo = MSTLEO(d_model=d_model)
@@ -235,25 +254,39 @@ class DecoderOperatorBank(nn.Module):
         self._require_active_inputs(context, active)
 
         previous = context.memory_state
-        if previous is None:
+        if previous is None or not self.use_memory:
             previous = self.memory.initialize_like(context.parent.query)
-        memory_state = self.memory(previous, context.parent.query, context.valid)
-        reliability = self.rceo(
-            context.parent.query,
-            context.boxes,
-            context.parent.referent_score,
-            context.valid,
+        memory_state = (
+            self.memory(previous, context.parent.query, context.valid)
+            if self.use_memory else previous
         )
-        router = self.router(
-            context.parent.query,
-            memory_state.value,
-            context.layer_index,
-            context.valid,
-            reliability_log_prior=reliability.log_prior,
-            operator_available=availability,
+        reliability = (
+            self.rceo(
+                context.parent.query,
+                context.boxes,
+                context.parent.referent_score,
+                context.valid,
+            )
+            if self.use_rceo else _neutral_reliability(
+                context.parent.query, context.valid)
         )
-        adapter = self.adapter(
-            context.parent.query, memory_state.value, context.valid)
+        router = (
+            self.router(
+                context.parent.query,
+                memory_state.value,
+                context.layer_index,
+                context.valid,
+                reliability_log_prior=reliability.log_prior,
+                operator_available=availability,
+            )
+            if self.use_router else _uniform_router(
+                context.parent.query, availability)
+        )
+        adapter = (
+            self.adapter(context.parent.query, memory_state.value, context.valid)
+            if self.use_hyper_adapter else _neutral_adapter(
+                context.parent.query)
+        )
 
         residuals: dict[str, DecoderOperatorResidual] = {}
         artifacts: dict[str, Tensor] = {}
@@ -276,9 +309,12 @@ class DecoderOperatorBank(nn.Module):
                 result.residual, 1, availability, router, adapter)
             artifacts["tq_cato_transport"] = result.transport
         if "ms_tleo" in active:
-            normalized_maps = _normalize_valid_feature_regions(
-                context.feature_maps, context.valid_ratios)
-            raw = self.ms_tleo(normalized_maps, context.boxes, context.valid)
+            raw = self.ms_tleo(
+                context.feature_maps,
+                context.boxes,
+                context.valid,
+                valid_ratios=context.valid_ratios,
+            )
             residuals["ms_tleo"] = self._adapt(
                 raw, 2, availability, router, adapter)
             artifacts["valid_ratio_mean"] = context.valid_ratios.mean()
@@ -290,6 +326,7 @@ class DecoderOperatorBank(nn.Module):
             memory_state=memory_state,
             router=router,
             reliability=reliability,
+            adaptation=adapter,
             availability=availability,
             artifacts=artifacts,
         )
@@ -377,31 +414,35 @@ def _validate_float_like(value: Tensor, reference: Tensor, name: str) -> None:
         raise ValueError(f"{name} must contain only finite values")
 
 
-def _normalize_valid_feature_regions(
-    feature_maps: Sequence[Tensor], valid_ratios: Tensor
-) -> tuple[Tensor, ...]:
-    if torch.equal(valid_ratios, torch.ones_like(valid_ratios)):
-        return tuple(feature_maps)
-    normalized = []
-    for level, feature_map in enumerate(feature_maps):
-        height, width = feature_map.shape[-2:]
-        y = (torch.arange(height, device=feature_map.device,
-                          dtype=feature_map.dtype) + 0.5) / height
-        x = (torch.arange(width, device=feature_map.device,
-                          dtype=feature_map.dtype) + 0.5) / width
-        y_grid, x_grid = torch.meshgrid(y, x, indexing="ij")
-        ratios = valid_ratios[:, level]
-        source_x = x_grid[None] * ratios[:, None, None, 0]
-        source_y = y_grid[None] * ratios[:, None, None, 1]
-        grid = torch.stack((source_x * 2.0 - 1.0, source_y * 2.0 - 1.0), dim=-1)
-        normalized.append(F.grid_sample(
-            feature_map,
-            grid,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=False,
-        ))
-    return tuple(normalized)
+def _neutral_reliability(query: Tensor, valid: Tensor) -> RCEOResult:
+    shape = (*query.shape[:2], len(OPERATOR_NAMES))
+    reliability = query.new_full(shape, 0.5)
+    reliability = torch.where(
+        valid[..., None], reliability, torch.zeros_like(reliability))
+    return RCEOResult(
+        reliability=reliability,
+        log_prior=query.new_zeros(shape),
+    )
+
+
+def _uniform_router(
+    query: Tensor, availability: Tensor
+) -> OperatorRouterResult:
+    available = availability.to(dtype=query.dtype)
+    denominator = available.sum(dim=-1, keepdim=True).clamp_min(1.0)
+    return OperatorRouterResult(
+        weights=available / denominator,
+        logits=torch.zeros_like(available),
+    )
+
+
+def _neutral_adapter(query: Tensor) -> HyperAdapterResult:
+    base = (*query.shape[:2], len(OPERATOR_NAMES))
+    return HyperAdapterResult(
+        scale=query.new_zeros((*base, query.shape[-1])),
+        shift=query.new_zeros((*base, query.shape[-1])),
+        channel_delta=query.new_zeros((*base, 3)),
+    )
 
 
 def _masked_mean(values: Tensor, valid: Tensor) -> Tensor:
