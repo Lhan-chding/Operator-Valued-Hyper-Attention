@@ -107,7 +107,7 @@ class DecoderOperatorBankTests(unittest.TestCase):
         self.assertEqual(tuple(output.router.weights.shape), (2, 4, 3))
         self.assertTrue(torch.allclose(
             output.router.weights[self.valid].sum(-1),
-            torch.ones_like(output.router.weights[self.valid, 0]),
+            torch.ones_like(output.router.weights[self.valid].sum(-1)),
         ))
         self.assertIn("tq_cato_transport", output.artifacts)
         self.assertTrue(torch.equal(output.fused.query, context.parent.query))
