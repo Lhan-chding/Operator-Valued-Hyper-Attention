@@ -3,6 +3,7 @@ import unittest
 
 import torch
 
+from ovha_rod.models import operators as operator_package
 from ovha_rod.models.operators.decoder_contracts import (
     DecoderResidualState,
     StructuredResidualFusion,
@@ -49,7 +50,7 @@ class MSTLEOTests(unittest.TestCase):
         boxes = torch.tensor([[[0.375, 0.500, 0.200, 0.200]]])
         valid = torch.ones(1, 1, dtype=torch.bool)
 
-        evidence = self.operator.extract_evidence(
+        evidence = MSTLEO(d_model=1, context_scale=1.5).extract_evidence(
             (x_coordinates,), boxes, valid)
 
         expected = torch.tensor([[[0.375]]])
@@ -66,13 +67,30 @@ class MSTLEOTests(unittest.TestCase):
         boxes = torch.tensor([[[0.375, 0.500, 0.200, 0.200]]])
         valid = torch.ones(1, 1, dtype=torch.bool)
 
-        evidence = self.operator.extract_evidence(
+        evidence = MSTLEO(d_model=1, context_scale=1.5).extract_evidence(
             (affine_map(4, 0.0), affine_map(8, 2.0)), boxes, valid)
 
         expected = torch.tensor([[[1.375]]])
         self.assertTrue(torch.allclose(evidence.interior, expected, atol=1e-6))
         self.assertTrue(torch.allclose(evidence.boundary, expected, atol=1e-6))
         self.assertTrue(torch.allclose(evidence.context, expected, atol=1e-6))
+
+    def test_context_ring_expands_beyond_boundary_and_interior_layouts(self):
+        size = 64
+        centres = (torch.arange(size, dtype=torch.float32) + 0.5) / size
+        y_coordinate, x_coordinate = torch.meshgrid(
+            centres, centres, indexing="ij")
+        radius_squared = (
+            (x_coordinate - 0.5).square() + (y_coordinate - 0.5).square()
+        ).view(1, 1, size, size)
+        boxes = torch.tensor([[[0.5, 0.5, 0.4, 0.4]]])
+        valid = torch.ones(1, 1, dtype=torch.bool)
+
+        evidence = MSTLEO(d_model=1).extract_evidence(
+            (radius_squared,), boxes, valid)
+
+        self.assertLess(float(evidence.interior), float(evidence.boundary))
+        self.assertLess(float(evidence.boundary), float(evidence.context))
 
     def test_masking_is_strict_and_zero_gate_is_exact_fusion_noop(self):
         valid = torch.tensor([[True, False], [False, True]])
@@ -137,6 +155,9 @@ class MSTLEOTests(unittest.TestCase):
                 self._boxes(),
                 valid,
             )
+        with self.assertRaisesRegex(ValueError, "positive channel and spatial"):
+            self.operator(
+                (torch.zeros(2, 4, 0, 4),), self._boxes(), valid)
         with self.assertRaisesRegex(ValueError, "boolean"):
             self.operator(self._features(), self._boxes(), valid.float())
 
@@ -187,6 +208,7 @@ class MSTLEOTests(unittest.TestCase):
             text = config.read_text(encoding="utf-8")
             self.assertNotIn("MSTLEO", text)
             self.assertNotIn("ms_tleo", text)
+        self.assertFalse(hasattr(operator_package, "MSTLEO"))
 
 
 if __name__ == "__main__":

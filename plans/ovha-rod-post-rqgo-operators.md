@@ -110,6 +110,17 @@ pure PyTorch `grid_sample` in the isolated implementation so CPU tests remain
 possible. Interior, boundary, and context sampling layouts require an explicit
 coordinate convention test before CUDA integration.
 
+The isolated primitive uses nine interior samples, eight perimeter samples,
+and eight context-ring samples per query and level. Normalized image-edge
+coordinates are mapped with `2 * coordinate - 1` and
+`align_corners=False`; out-of-bounds locations use zero padding. Valid boxes
+must have positive width and height, while masked boxes may be degenerate and
+remain exact zeros. Level descriptors use an equal arithmetic mean. The
+sampler does not materialize query-pair tensors or repeat feature maps: with
+25 fixed points it costs `O(L * B * D * Q * 25)` sampling time and
+`O(B * D * Q * 25)` peak sampling workspace, followed by
+`O(B * Q * D^2)` residual heads.
+
 ### Phase B4: router and memory
 
 Only after B1-B3 contracts are stable, add the router, operator memory,
