@@ -180,6 +180,80 @@ class DecoderOperatorBankTests(unittest.TestCase):
             torch.zeros(4),
         ))
 
+    def test_unavailable_queries_cannot_pollute_primitive_competition(self):
+        bank = self._bank(
+            enabled_operators=("qsro", "tq_cato"),
+            use_router=False,
+            use_memory=False,
+            use_hyper_adapter=False,
+            use_rceo=False,
+        )
+        available = torch.ones(2, 4, 3, dtype=torch.bool)
+        available[..., 2] = False
+        available[0, 1, 0] = False
+        available[0, 2, 1] = False
+        context = self._context(
+            feature_maps=(),
+            valid_ratios=None,
+            operator_available=available,
+        )
+        reference = bank(context)
+
+        qsro_mutation = context.parent.query.clone()
+        qsro_mutation[0, 1] = 1e4
+        qsro_parent = replace(context.parent, query=qsro_mutation)
+        qsro_changed = bank(replace(context, parent=qsro_parent))
+        qsro_valid = reference.residuals["qsro"].valid
+        self.assertTrue(torch.allclose(
+            qsro_changed.residuals["qsro"].query_delta[qsro_valid],
+            reference.residuals["qsro"].query_delta[qsro_valid],
+            atol=1e-6,
+            rtol=1e-6,
+        ))
+
+        tq_mutation = context.parent.query.clone()
+        tq_mutation[0, 2] = -1e4
+        tq_parent = replace(context.parent, query=tq_mutation)
+        tq_changed = bank(replace(context, parent=tq_parent))
+        tq_valid = reference.residuals["tq_cato"].valid
+        self.assertTrue(torch.allclose(
+            tq_changed.residuals["tq_cato"].query_delta[tq_valid],
+            reference.residuals["tq_cato"].query_delta[tq_valid],
+            atol=1e-6,
+            rtol=1e-6,
+        ))
+        invalid_tq_columns = ~available[..., 1]
+        transport = reference.artifacts["tq_cato_transport"]
+        self.assertTrue(torch.equal(
+            transport.transpose(1, 2)[invalid_tq_columns],
+            torch.zeros_like(transport.transpose(1, 2)[invalid_tq_columns]),
+        ))
+
+    def test_hyper_adapter_modulation_preserves_zero_primitive_gates(self):
+        bank = self._bank()
+        with torch.no_grad():
+            bank.adapter.coefficients.weight.zero_()
+            bank.adapter.coefficients.bias.fill_(1.0)
+            bank.adapter.scale_basis.fill_(0.2)
+            bank.adapter.shift_basis.fill_(0.2)
+            bank.adapter.channel_basis.fill_(0.2)
+
+        output = bank(self._context())
+
+        self.assertGreater(
+            output.adaptation.channel_delta[
+                self.valid].abs().sum().detach().item(),
+            0.0,
+        )
+        for residual in output.residuals.values():
+            self.assertTrue(torch.equal(
+                residual.gate_logits, torch.zeros_like(residual.gate_logits)))
+        self.assertTrue(torch.equal(output.fused.query, self.parent.query))
+        self.assertTrue(torch.equal(
+            output.fused.box_logits, self.parent.box_logits))
+        self.assertTrue(torch.equal(
+            output.fused.referent_score, self.parent.referent_score))
+
     def test_valid_ratios_change_only_multiscale_evidence_path(self):
         bank = self._bank()
         context = self._context()
