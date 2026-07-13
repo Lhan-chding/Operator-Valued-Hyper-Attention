@@ -162,9 +162,19 @@ class BankOutput:
         if any(not isinstance(value, DecoderOperatorResidual)
                for value in residuals.values()):
             raise ValueError("residual values must be DecoderOperatorResidual objects")
+        query = self.fused.query
+        for value in residuals.values():
+            if value.query_delta.shape != query.shape:
+                raise ValueError("residual query shape must match fused state")
+            if (value.query_delta.device != query.device
+                    or value.query_delta.dtype != query.dtype):
+                raise ValueError("residual tensors must match fused state")
         object.__setattr__(self, "residuals", MappingProxyType(residuals))
         if not isinstance(self.memory_state, OperatorMemoryState):
             raise ValueError("memory_state must be an OperatorMemoryState")
+        if self.memory_state.value.shape != query.shape:
+            raise ValueError("memory_state shape must match fused query")
+        _validate_float_like(self.memory_state.value, query, "memory_state")
         if not isinstance(self.router, OperatorRouterResult):
             raise ValueError("router must be an OperatorRouterResult")
         if not isinstance(self.reliability, RCEOResult):
@@ -176,14 +186,49 @@ class BankOutput:
             raise ValueError("availability must be a boolean [B,Q,O] tensor")
         if self.availability.device != self.fused.query.device:
             raise ValueError("availability must share the fused state device")
-        if self.router.weights.shape != expected:
-            raise ValueError("router output must match availability")
+        _validate_output_tensor(
+            self.router.weights, expected, query, "router weights")
+        _validate_output_tensor(
+            self.router.logits, expected, query, "router logits")
+        _validate_output_tensor(
+            self.reliability.reliability,
+            expected,
+            query,
+            "reliability values",
+        )
+        _validate_output_tensor(
+            self.reliability.log_prior,
+            expected,
+            query,
+            "reliability log_prior",
+        )
+        adaptation_shape = (*expected, query.shape[-1])
+        _validate_output_tensor(
+            self.adaptation.scale,
+            adaptation_shape,
+            query,
+            "adaptation scale",
+        )
+        _validate_output_tensor(
+            self.adaptation.shift,
+            adaptation_shape,
+            query,
+            "adaptation shift",
+        )
+        _validate_output_tensor(
+            self.adaptation.channel_delta,
+            (*expected, 3),
+            query,
+            "adaptation channel_delta",
+        )
         artifacts = dict(self.artifacts)
         for name, value in artifacts.items():
             if not isinstance(value, Tensor):
                 raise ValueError(f"artifact {name!r} must be a tensor")
             if not value.is_floating_point() or not torch.isfinite(value).all():
                 raise ValueError(f"artifact {name!r} must be finite floating point")
+            if value.device != query.device or value.dtype != query.dtype:
+                raise ValueError(f"artifact {name!r} must match fused state")
         object.__setattr__(self, "artifacts", MappingProxyType(artifacts))
 
 
@@ -248,8 +293,7 @@ class DecoderOperatorBank(nn.Module):
         self._validate_context(context)
         availability = self._effective_availability(context)
         active = tuple(
-            name for index, name in enumerate(OPERATOR_NAMES)
-            if bool(availability[..., index].any())
+            name for name in OPERATOR_NAMES if name in self.enabled_operators
         )
         self._require_active_inputs(context, active)
 
@@ -418,6 +462,17 @@ def _validate_float_like(value: Tensor, reference: Tensor, name: str) -> None:
         raise ValueError(f"{name} must match parent query device and dtype")
     if not torch.isfinite(value).all():
         raise ValueError(f"{name} must contain only finite values")
+
+
+def _validate_output_tensor(
+    value: Tensor,
+    expected_shape: tuple[int, ...],
+    reference: Tensor,
+    name: str,
+) -> None:
+    if not isinstance(value, Tensor) or value.shape != expected_shape:
+        raise ValueError(f"{name} must have shape {expected_shape}")
+    _validate_float_like(value, reference, name)
 
 
 def _neutral_reliability(query: Tensor, valid: Tensor) -> RCEOResult:
