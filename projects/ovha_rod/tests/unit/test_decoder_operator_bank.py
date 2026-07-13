@@ -361,6 +361,50 @@ class DecoderOperatorBankTests(unittest.TestCase):
         self.assertEqual(tuple(output.residuals), OPERATOR_NAMES)
         self.assertFalse(output.residuals["qsro"].valid.any())
 
+    def test_inactive_tq_samples_do_not_dilute_scalar_diagnostics(self):
+        bank = self._bank(
+            enabled_operators=("tq_cato",),
+            use_router=False,
+            use_memory=False,
+            use_hyper_adapter=False,
+            use_rceo=False,
+        )
+        mixed_valid = self.valid.clone()
+        mixed_valid[1] = False
+        availability = torch.zeros(2, 4, 3, dtype=torch.bool)
+        availability[0, :, 1] = mixed_valid[0]
+        mixed = bank(self._context(
+            valid=mixed_valid,
+            relation_role=None,
+            feature_maps=(),
+            valid_ratios=None,
+            operator_available=availability,
+        ))
+        single_parent = DecoderResidualState(
+            query=self.parent.query[:1],
+            box_logits=self.parent.box_logits[:1],
+            referent_score=self.parent.referent_score[:1],
+        )
+        single = bank(self._context(
+            parent=single_parent,
+            boxes=self.boxes[:1],
+            valid=mixed_valid[:1],
+            relation_role=None,
+            text=self.text[:1],
+            text_valid=self.text_valid[:1],
+            feature_maps=(),
+            valid_ratios=None,
+            operator_available=availability[:1],
+        ))
+
+        for name in ("transport_entropy", "transport_row_error"):
+            self.assertTrue(torch.allclose(
+                mixed.residuals["tq_cato"].diagnostics[name],
+                single.residuals["tq_cato"].diagnostics[name],
+                atol=1e-6,
+                rtol=1e-6,
+            ))
+
     def test_each_disabled_infrastructure_module_is_not_executed(self):
         cases = (
             ("use_router", "router"),
