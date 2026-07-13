@@ -174,6 +174,16 @@ class ObserverResumeCompatibilityTests(unittest.TestCase):
                     transition={"changed_paths": ["observer.py"]},
                 )
 
+    def test_server_observer_resume_is_explicit_and_separate(self):
+        runner = (ROOT / "scripts/run_phase1_server.sh").read_text()
+        lock = (ROOT / "scripts/run_lock.py").read_text()
+        self.assertIn("--observer-resume-from", runner)
+        self.assertIn('LOCK_MODE="observer-resume"', runner)
+        self.assertIn('--source-work-dir "${OBSERVER_RESUME_FROM}"', runner)
+        self.assertIn('choices=("fresh", "resume", "observer-resume")', lock)
+        self.assertIn("prepare_observer_compatible_resume", lock)
+        self.assertIn("observer_continuation.json", lock)
+
 
 if __name__ == "__main__":
     unittest.main()
