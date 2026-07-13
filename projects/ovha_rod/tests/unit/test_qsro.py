@@ -7,6 +7,7 @@ from pathlib import Path
 
 import torch
 
+import ovha_rod.models.operators as operator_exports
 from ovha_rod.models.operators.decoder_contracts import (
     DecoderResidualState,
     StructuredResidualFusion,
@@ -304,6 +305,15 @@ assert 'ovha_rod.models.operators.qsro' in sys.modules
             0,
             msg=f"stdout={completed.stdout}\nstderr={completed.stderr}",
         )
+
+    def test_lazy_public_exports_resolve_and_unknown_names_fail(self):
+        self.assertIs(operator_exports.QSRO, QuerySpatialRelationOperator)
+        self.assertIs(
+            operator_exports.QuerySpatialRelationOperator,
+            QuerySpatialRelationOperator,
+        )
+        with self.assertRaisesRegex(AttributeError, "missing_qsro_export"):
+            getattr(operator_exports, "missing_qsro_export")
 
 
 if __name__ == "__main__":
