@@ -29,15 +29,16 @@ class OperatorRouterTests(unittest.TestCase):
         )
 
         self.assertEqual(tuple(neutral.weights.shape), (2, 4, 3))
+        valid_weight_sums = neutral.weights[self.valid].sum(-1)
         self.assertTrue(torch.allclose(
-            neutral.weights[self.valid].sum(-1),
-            torch.ones_like(neutral.weights[self.valid, 0]),
+            valid_weight_sums,
+            torch.ones_like(valid_weight_sums),
         ))
         self.assertTrue(torch.equal(
             neutral.weights[~self.valid], torch.zeros_like(neutral.weights[~self.valid])))
         self.assertGreater(
-            float(conditioned.weights[self.valid, 1].mean()),
-            float(neutral.weights[self.valid, 1].mean()),
+            conditioned.weights[self.valid][:, 1].mean().item(),
+            neutral.weights[self.valid][:, 1].mean().item(),
         )
 
     def test_availability_mask_and_all_unavailable_fail_fast(self):

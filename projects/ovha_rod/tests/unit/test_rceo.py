@@ -38,7 +38,7 @@ class RCEOTests(unittest.TestCase):
             result.reliability[self.valid],
             torch.full_like(result.reliability[self.valid], 0.5),
         ))
-        self.assertLessEqual(float(result.log_prior.abs().max()), 2.0)
+        self.assertLessEqual(result.log_prior.abs().max().item(), 2.0)
 
     def test_uses_only_inference_available_inputs_and_is_equivariant(self):
         parameters = set(inspect.signature(self.rceo.forward).parameters)

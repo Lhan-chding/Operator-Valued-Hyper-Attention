@@ -32,7 +32,7 @@ class OperatorMemoryTests(unittest.TestCase):
         self.assertTrue(torch.equal(state.value, before))
         self.assertTrue(torch.equal(
             updated.value[~self.valid], state.value[~self.valid]))
-        self.assertGreater(float(updated.value[self.valid].abs().sum()), 0.0)
+        self.assertGreater(updated.value[self.valid].abs().sum().item(), 0.0)
         with self.assertRaisesRegex(Exception, "cannot assign"):
             state.step = 9
 
