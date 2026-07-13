@@ -25,9 +25,13 @@ This blueprint has two independent tracks:
 ## Track A: single-A800 throughput benchmark
 
 The current run is compute-bound: data time is about 0.05 seconds while a
-training step is several seconds. The inherited Grounding DINO base enables
+training step is several seconds. The current diagnostics hook also performs a
+host synchronization for every seed-operator parameter gradient. First replace
+that observational path with on-device accumulation and one synchronization at
+the logging interval. The inherited Grounding DINO base additionally enables
 Swin checkpointing (`backbone.with_cp=True`) and checkpoints all six encoder
-layers (`encoder.num_cp=6`). The two useful benchmark factors are therefore:
+layers (`encoder.num_cp=6`). Benchmark the following cells after the low-sync
+diagnostics change:
 
 | Cell | TF32 matmul | Backbone checkpoint | Encoder checkpoint | Purpose |
 |---|---:|---:|---:|---|

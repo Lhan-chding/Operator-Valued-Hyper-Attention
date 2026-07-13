@@ -68,6 +68,53 @@ class DecoderOperatorResidualTests(unittest.TestCase):
                 valid=torch.ones(1, 2),
             )
 
+    def test_diagnostics_mapping_is_copied_and_read_only(self):
+        diagnostics = {"mass": torch.tensor(1.0)}
+        residual = DecoderOperatorResidual(
+            query_delta=torch.zeros(1, 2, 4),
+            box_delta=torch.zeros(1, 2, 4),
+            score_delta=torch.zeros(1, 2),
+            gate_logits=torch.zeros(1, 2, 3),
+            valid=torch.ones(1, 2, dtype=torch.bool),
+            diagnostics=diagnostics,
+        )
+        diagnostics["late"] = torch.tensor(2.0)
+
+        self.assertNotIn("late", residual.diagnostics)
+        with self.assertRaises(TypeError):
+            residual.diagnostics["other"] = torch.tensor(3.0)
+
+    def test_state_and_residual_reject_shape_dtype_and_diagnostic_errors(self):
+        with self.assertRaisesRegex(ValueError, "box_logits"):
+            DecoderResidualState(
+                query=torch.zeros(1, 2, 4),
+                box_logits=torch.zeros(1, 3, 4),
+                referent_score=torch.zeros(1, 2),
+            )
+        with self.assertRaisesRegex(ValueError, "finite"):
+            DecoderResidualState(
+                query=torch.full((1, 2, 4), float("inf")),
+                box_logits=torch.zeros(1, 2, 4),
+                referent_score=torch.zeros(1, 2),
+            )
+        with self.assertRaisesRegex(ValueError, "dtype"):
+            DecoderOperatorResidual(
+                query_delta=torch.zeros(1, 2, 4),
+                box_delta=torch.zeros(1, 2, 4, dtype=torch.float64),
+                score_delta=torch.zeros(1, 2),
+                gate_logits=torch.zeros(1, 2, 3),
+                valid=torch.ones(1, 2, dtype=torch.bool),
+            )
+        with self.assertRaisesRegex(ValueError, "scalar"):
+            DecoderOperatorResidual(
+                query_delta=torch.zeros(1, 2, 4),
+                box_delta=torch.zeros(1, 2, 4),
+                score_delta=torch.zeros(1, 2),
+                gate_logits=torch.zeros(1, 2, 3),
+                valid=torch.ones(1, 2, dtype=torch.bool),
+                diagnostics={"not_scalar": torch.zeros(2)},
+            )
+
 
 class StructuredResidualFusionTests(unittest.TestCase):
     def _parent(self):
@@ -163,6 +210,26 @@ class StructuredResidualFusionTests(unittest.TestCase):
         self.assertTrue(torch.equal(fused.query, parent.query))
         self.assertTrue(torch.equal(fused.box_logits, parent.box_logits))
         self.assertTrue(torch.equal(fused.referent_score, parent.referent_score))
+
+    def test_gate_extremes_are_finite_and_shape_mismatch_fails_fast(self):
+        parent = self._parent()
+        for value in (-1e6, 1e6):
+            with self.subTest(value=value):
+                fused = StructuredResidualFusion()(
+                    parent, (self._residual(value),))
+                self.assertTrue(torch.isfinite(fused.query).all())
+                self.assertTrue(torch.isfinite(fused.box_logits).all())
+                self.assertTrue(torch.isfinite(fused.referent_score).all())
+
+        wrong = DecoderOperatorResidual(
+            query_delta=torch.zeros(2, 4, 8),
+            box_delta=torch.zeros(2, 4, 4),
+            score_delta=torch.zeros(2, 4),
+            gate_logits=torch.zeros(2, 4, 3),
+            valid=torch.ones(2, 4, dtype=torch.bool),
+        )
+        with self.assertRaisesRegex(ValueError, "parent query"):
+            StructuredResidualFusion()(parent, (wrong,))
 
 
 if __name__ == "__main__":
