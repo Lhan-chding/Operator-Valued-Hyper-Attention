@@ -1,4 +1,7 @@
 import inspect
+import os
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -245,6 +248,20 @@ class QuerySpatialRelationOperatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "positive"):
             QuerySpatialRelationOperator(d_model=0)
 
+        for query, boxes, role, valid in (
+            (
+                self.query[:0], self.boxes[:0],
+                self.relation_role[:0], self.valid[:0],
+            ),
+            (
+                self.query[:, :0], self.boxes[:, :0],
+                self.relation_role, self.valid[:, :0],
+            ),
+        ):
+            with self.subTest(shape=tuple(query.shape)):
+                with self.assertRaisesRegex(ValueError, "non-empty"):
+                    self.operator(query, boxes, role, valid)
+
     def test_forward_accepts_only_inference_available_inputs(self):
         parameter_names = tuple(
             inspect.signature(
@@ -261,6 +278,32 @@ class QuerySpatialRelationOperatorTests(unittest.TestCase):
             source = config.read_text(encoding="utf-8").lower()
             self.assertNotIn("qsro", source)
             self.assertNotIn("queryspatialrelationoperator", source)
+
+    def test_formal_package_import_does_not_eagerly_load_qsro(self):
+        project_root = Path(__file__).resolve().parents[2]
+        environment = dict(os.environ)
+        environment["PYTHONPATH"] = str(project_root)
+        command = """
+import sys
+import ovha_rod
+assert 'ovha_rod.models.operators.qsro' not in sys.modules
+from ovha_rod.models.operators import QSRO, QuerySpatialRelationOperator
+assert QSRO is QuerySpatialRelationOperator
+assert 'ovha_rod.models.operators.qsro' in sys.modules
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", command],
+            cwd=project_root,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            msg=f"stdout={completed.stdout}\nstderr={completed.stderr}",
+        )
 
 
 if __name__ == "__main__":
