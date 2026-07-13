@@ -6,6 +6,7 @@ from .decoder_contracts import (
 from .generic_seed import GenericDenseSeedPredictor, matched_generic_hidden_dim
 from .relation_fields import RELATION_TYPES, RelationFieldBank
 from .rqgo import RQGO, RQGOResult
+from .tq_cato import TQCATO, TQCATOResult
 
 __all__ = [
     "DecoderOperatorResidual",
@@ -17,4 +18,6 @@ __all__ = [
     "RQGO",
     "RQGOResult",
     "StructuredResidualFusion",
+    "TQCATO",
+    "TQCATOResult",
 ]
