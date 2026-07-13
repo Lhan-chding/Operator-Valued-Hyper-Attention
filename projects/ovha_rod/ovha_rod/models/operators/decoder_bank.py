@@ -178,7 +178,9 @@ class BankOutput:
         if not isinstance(self.adaptation, HyperAdapterResult):
             raise ValueError("adaptation must be a HyperAdapterResult")
         expected = (*self.fused.query.shape[:2], len(OPERATOR_NAMES))
-        if self.availability.shape != expected or self.availability.dtype != torch.bool:
+        if (not isinstance(self.availability, Tensor)
+                or self.availability.shape != expected
+                or self.availability.dtype != torch.bool):
             raise ValueError("availability must be a boolean [B,Q,O] tensor")
         if self.availability.device != self.fused.query.device:
             raise ValueError("availability must share the fused state device")
