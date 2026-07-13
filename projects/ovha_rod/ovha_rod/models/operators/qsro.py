@@ -133,6 +133,8 @@ class QuerySpatialRelationOperator(nn.Module):
         if query.ndim != 3 or query.shape[-1] != self.d_model:
             raise ValueError(
                 f"query must have shape [B,Q,{self.d_model}]")
+        if query.shape[0] == 0 or query.shape[1] == 0:
+            raise ValueError("query batch and query dimensions must be non-empty")
         if boxes.shape != (*query.shape[:2], 4):
             raise ValueError("boxes must have shape [B,Q,4]")
         if relation_role.shape != (query.shape[0], self.d_model):
