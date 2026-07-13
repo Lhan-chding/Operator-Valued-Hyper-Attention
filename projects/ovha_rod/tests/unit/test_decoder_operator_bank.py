@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 import torch
 
@@ -16,6 +17,7 @@ from ovha_rod.models.operators.decoder_bank import (
     DecoderOperatorContext,
 )
 from ovha_rod.models.operators.decoder_contracts import DecoderResidualState
+from ovha_rod.models.operators.operator_memory import OperatorMemoryState
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -183,7 +185,10 @@ class DecoderOperatorBankTests(unittest.TestCase):
         context = self._context()
         full_ratios = torch.ones_like(self.valid_ratios)
         full = bank(replace(context, valid_ratios=full_ratios))
-        cropped = bank(context)
+        with mock.patch.object(
+            bank.ms_tleo, "forward", wraps=bank.ms_tleo.forward
+        ) as ms_tleo_forward:
+            cropped = bank(context)
 
         self.assertFalse(torch.allclose(
             full.residuals["ms_tleo"].query_delta,
@@ -195,6 +200,84 @@ class DecoderOperatorBankTests(unittest.TestCase):
         ))
         self.assertTrue(torch.isfinite(
             cropped.artifacts["valid_ratio_mean"]))
+        self.assertIs(
+            ms_tleo_forward.call_args.kwargs["valid_ratios"],
+            context.valid_ratios,
+        )
+
+    def test_infrastructure_ablation_flags_have_neutral_outputs(self):
+        bank = self._bank(
+            use_router=False,
+            use_memory=False,
+            use_hyper_adapter=False,
+            use_rceo=False,
+        )
+        previous = OperatorMemoryState(
+            value=torch.randn_like(self.parent.query),
+            step=5,
+        )
+        output = bank(self._context(memory_state=previous))
+
+        expected_weights = torch.full_like(output.router.weights, 1.0 / 3.0)
+        expected_weights = torch.where(
+            self.valid[..., None], expected_weights, torch.zeros_like(expected_weights))
+        self.assertTrue(torch.equal(output.router.weights, expected_weights))
+        self.assertTrue(torch.equal(
+            output.router.logits, torch.zeros_like(output.router.logits)))
+        self.assertEqual(output.memory_state.step, 0)
+        self.assertTrue(torch.equal(
+            output.memory_state.value, torch.zeros_like(output.memory_state.value)))
+        self.assertTrue(torch.equal(
+            output.adaptation.scale, torch.zeros_like(output.adaptation.scale)))
+        self.assertTrue(torch.equal(
+            output.adaptation.shift, torch.zeros_like(output.adaptation.shift)))
+        self.assertTrue(torch.equal(
+            output.adaptation.channel_delta,
+            torch.zeros_like(output.adaptation.channel_delta),
+        ))
+        self.assertTrue(torch.equal(
+            output.reliability.log_prior,
+            torch.zeros_like(output.reliability.log_prior),
+        ))
+        self.assertTrue(torch.equal(
+            output.reliability.reliability[self.valid],
+            torch.full_like(output.reliability.reliability[self.valid], 0.5),
+        ))
+        self.assertTrue(torch.equal(
+            output.reliability.reliability[~self.valid],
+            torch.zeros_like(output.reliability.reliability[~self.valid]),
+        ))
+
+    def test_uniform_router_respects_dynamic_operator_availability(self):
+        available = torch.tensor([True, False, True])
+        output = self._bank(use_router=False)(self._context(
+            operator_available=available))
+
+        expected = torch.tensor([0.5, 0.0, 0.5]).expand_as(
+            output.router.weights)
+        expected = torch.where(
+            self.valid[..., None], expected, torch.zeros_like(expected))
+        self.assertTrue(torch.equal(output.router.weights, expected))
+        self.assertNotIn("tq_cato", output.residuals)
+
+    def test_each_disabled_infrastructure_module_is_not_executed(self):
+        cases = (
+            ("use_router", "router"),
+            ("use_memory", "memory"),
+            ("use_hyper_adapter", "adapter"),
+            ("use_rceo", "rceo"),
+        )
+        for flag, module_name in cases:
+            with self.subTest(flag=flag):
+                bank = self._bank(**{flag: False})
+                with mock.patch.object(
+                    getattr(bank, module_name),
+                    "forward",
+                    side_effect=AssertionError(f"{module_name} must stay disabled"),
+                ):
+                    output = bank(self._context())
+                self.assertTrue(torch.equal(
+                    output.fused.query, self.parent.query))
 
     def test_query_permutation_is_equivariant_across_complete_bank(self):
         bank = self._bank()
@@ -300,6 +383,12 @@ class DecoderOperatorBankTests(unittest.TestCase):
                 "memory_state", "operator_available",
             },
         )
+        constructor = inspect.signature(DecoderOperatorBank).parameters
+        for flag in (
+            "use_router", "use_memory", "use_hyper_adapter", "use_rceo"
+        ):
+            self.assertIn(flag, constructor)
+            self.assertIs(constructor[flag].default, True)
 
         bad_boxes = self.boxes.clone()
         bad_boxes[0, 0, 0] = float("nan")
@@ -317,6 +406,12 @@ class DecoderOperatorBankTests(unittest.TestCase):
             self._bank(enabled_operators=("unknown",))
         with self.assertRaisesRegex(ValueError, "duplicate"):
             self._bank(enabled_operators=("qsro", "qsro"))
+        for flag in (
+            "use_router", "use_memory", "use_hyper_adapter", "use_rceo"
+        ):
+            with self.subTest(flag=flag):
+                with self.assertRaisesRegex(ValueError, flag):
+                    self._bank(**{flag: 1})
 
     def test_result_contract_rejects_invalid_mapping_payloads(self):
         output = self._bank()(self._context())
