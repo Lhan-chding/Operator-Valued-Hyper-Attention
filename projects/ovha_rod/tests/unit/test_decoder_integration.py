@@ -3,15 +3,21 @@ import unittest
 import torch
 
 from ovha_rod.models.operators.decoder_contracts import DecoderOperatorResidual
+from ovha_rod.models.operators.decoder_contracts import DecoderResidualState
 
 
 def _integration_api():
     from ovha_rod.models.operators.decoder_integration import (
         apply_matching_query_residual,
+        integrate_matching_query_state,
         stack_decoder_operator_outputs,
     )
 
-    return apply_matching_query_residual, stack_decoder_operator_outputs
+    return (
+        apply_matching_query_residual,
+        integrate_matching_query_state,
+        stack_decoder_operator_outputs,
+    )
 
 
 class DecoderIntegrationTests(unittest.TestCase):
@@ -43,7 +49,7 @@ class DecoderIntegrationTests(unittest.TestCase):
         return query, box_logits, residual
 
     def test_training_dn_prefix_is_exact_and_invalid_tail_is_masked(self):
-        apply_residual, _ = _integration_api()
+        apply_residual, _, _ = _integration_api()
         query, box_logits, residual = self._inputs()
         result = apply_residual(
             query=query,
@@ -72,7 +78,7 @@ class DecoderIntegrationTests(unittest.TestCase):
         ))
 
     def test_eval_empty_dn_and_reference_detach_contract(self):
-        apply_residual, _ = _integration_api()
+        apply_residual, _, _ = _integration_api()
         query, box_logits, residual = self._inputs(dn_queries=0)
         result = apply_residual(
             query=query,
@@ -90,7 +96,7 @@ class DecoderIntegrationTests(unittest.TestCase):
             result.next_reference_points, result.reference_points.detach()))
 
     def test_final_layer_all_three_residual_channels_receive_gradients(self):
-        apply_residual, _ = _integration_api()
+        apply_residual, _, _ = _integration_api()
         query, box_logits, residual = self._inputs(dn_queries=0)
         result = apply_residual(
             query=query,
@@ -118,7 +124,7 @@ class DecoderIntegrationTests(unittest.TestCase):
         self.assertGreater(float(residual.gate_logits.grad.abs().sum()), 0.0)
 
     def test_shape_mask_and_matching_count_errors_fail_fast(self):
-        apply_residual, _ = _integration_api()
+        apply_residual, _, _ = _integration_api()
         query, box_logits, residual = self._inputs()
         cases = (
             ({"query": query[:, :, :7]}, "query_delta"),
@@ -147,7 +153,7 @@ class DecoderIntegrationTests(unittest.TestCase):
             )
 
     def test_optional_operator_stacks_are_none_or_layer_major(self):
-        apply_residual, stack_outputs = _integration_api()
+        apply_residual, _, stack_outputs = _integration_api()
         self.assertEqual(stack_outputs(()), (None, None))
 
         query, box_logits, residual = self._inputs(dn_queries=0)
@@ -170,6 +176,32 @@ class DecoderIntegrationTests(unittest.TestCase):
         self.assertTrue(torch.equal(box_deltas[0], first.operator_box_delta))
         self.assertTrue(torch.equal(
             referent_scores[1], second.operator_referent_score))
+
+    def test_pre_fused_bank_state_is_spliced_without_second_fusion(self):
+        _, integrate_state, _ = _integration_api()
+        query, box_logits, residual = self._inputs()
+        matching_query = query[:, -3:, :]
+        matching_box_logits = box_logits[:, -3:, :]
+        fused_state = DecoderResidualState(
+            query=matching_query + residual.query_delta,
+            box_logits=matching_box_logits + residual.box_delta,
+            referent_score=residual.score_delta,
+        )
+
+        result = integrate_state(
+            query=query,
+            parent_box_logits=box_logits,
+            fused_matching_state=fused_state,
+            matching_query_count=3,
+        )
+
+        self.assertTrue(torch.equal(result.query[:, :2], query[:, :2]))
+        self.assertTrue(torch.equal(
+            result.query[:, -3:], fused_state.query))
+        self.assertTrue(torch.equal(
+            result.operator_box_delta, residual.box_delta))
+        self.assertTrue(torch.equal(
+            result.operator_referent_score, residual.score_delta))
 
 
 if __name__ == "__main__":

@@ -26,6 +26,36 @@ def _method_source(path: Path, class_name: str, method_name: str) -> str:
 
 
 class DecoderDetectorStaticContractTests(unittest.TestCase):
+    def test_bank_context_carries_raw_multimodal_and_recurrent_state(self):
+        file_source = DETECTOR.read_text(encoding="utf-8")
+        forward_transformer = _method_source(
+            DETECTOR, "OVHAGroundingDINO", "forward_transformer")
+        forward_decoder = _method_source(
+            DETECTOR, "OVHAGroundingDINO", "forward_decoder")
+        for snippet in (
+            "DecoderOperatorBank(**decoder_cfg)",
+            "DecoderOperatorContext(",
+            "DecoderResidualState(",
+            "feature_maps=feature_maps",
+            "valid_ratios=valid_ratios",
+            "relation_role=relation_role",
+            "text=memory_text",
+            "text_valid=text_valid",
+            "memory_state=memory_state",
+            "memory_state = bank_output.memory_state",
+            "bank_output = self.decoder_operator(decoder_context)",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, file_source)
+        self.assertIn("feature_maps=tuple(img_feats)", forward_transformer)
+        self.assertNotIn("self.decoder_operator(\n                query=", forward_decoder)
+
+    def test_forward_transformer_disabled_path_is_direct_parent_call(self):
+        source = _method_source(
+            DETECTOR, "OVHAGroundingDINO", "forward_transformer")
+        self.assertIn("if self.decoder_operator is None:", source)
+        self.assertIn("return super().forward_transformer(", source)
+
     def test_disabled_path_is_direct_parent_call_and_has_no_operator_state(self):
         source = _method_source(
             DETECTOR, "OVHAGroundingDINO", "forward_decoder")
