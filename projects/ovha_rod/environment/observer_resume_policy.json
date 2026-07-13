@@ -1,0 +1,16 @@
+{
+  "contract": "ovha_rod_observer_compatibility_policy_v1",
+  "policy_path": "projects/ovha_rod/environment/observer_resume_policy.json",
+  "source_commit": "d93d2db25c6156b4ca5ebc352a3c89a4c6d06c96",
+  "target_blobs": {
+    "projects/ovha_rod/RUNBOOK.md": "636494456a5713571ee638f2c5fd629b0069df74df06a785dff96703cad17408",
+    "projects/ovha_rod/ovha_rod/gradient_accumulator.py": "8b9b6b5d260355f3933ed3916090e1f3e6f54620b3df608f916debace2483ebd",
+    "projects/ovha_rod/ovha_rod/hooks/operator_diagnostics_hook.py": "6d1ea9f5d7f8e35052a33f6849229d0db1717ae75b419b9b2cecd08fb040cebe",
+    "projects/ovha_rod/scripts/resume_guard.py": "1cc2114bb24bc679f561463eaeae137611dbbff60588022a38f385eb96104013",
+    "projects/ovha_rod/scripts/run_lock.py": "fe599ccf8cee28fa56355e7cc0790cad12f3e373aa20a142372172f66760e6af",
+    "projects/ovha_rod/scripts/run_phase1_server.sh": "0998bfea7a383c2c3c078900f68d6089d78742127a0193b6f5c35c9566086535",
+    "projects/ovha_rod/tests/unit/test_gradient_diagnostics.py": "ad76d76b7bec258d3ecb78f9b402b1907ef38da8ea8a7ee406d25557012dd953",
+    "projects/ovha_rod/tests/unit/test_observer_resume_compatibility.py": "730c3186d2b6f33c7ceb0524b7f96a3b4915aa2096d483f16dc651e859af8347",
+    "projects/ovha_rod/tests/unit/test_runtime_contracts.py": "b17e010e13cea26fdc31f93dbae2e7af783874ba5931047b149d7730cb1b4493"
+  }
+}

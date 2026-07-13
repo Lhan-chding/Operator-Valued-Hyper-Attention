@@ -14,10 +14,13 @@ import sys
 
 from ovha_rod.runtime_contracts import validate_existing_private_work_dir
 from resume_guard import (
+    OBSERVER_CONTINUATION_FILE,
     _parse_identity,
     _validated_provenance,
     freeze_checkpoint,
     initialize_identity,
+    load_observer_compatibility_policy,
+    prepare_observer_compatible_resume,
     validate_identity,
 )
 from ovha_rod.runtime_contracts import validate_private_epoch_checkpoint
@@ -49,9 +52,14 @@ def open_run_lock(work_dir: Path) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--work-dir", type=Path, required=True)
-    parser.add_argument("--mode", choices=("fresh", "resume"), required=True)
+    parser.add_argument(
+        "--mode", choices=("fresh", "resume", "observer-resume"),
+        required=True)
     parser.add_argument("--freeze-dir", type=Path, required=True)
     parser.add_argument("--cwd", type=Path, required=True)
+    parser.add_argument("--source-work-dir", type=Path)
+    parser.add_argument("--project-root", type=Path)
+    parser.add_argument("--observer-policy", type=Path)
     parser.add_argument(
         "--expected-identity", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -79,6 +87,8 @@ def _write_command_log(work_dir: Path, command: list[str], mode: str) -> None:
         lines = []
         if mode == "resume":
             lines.append("\n# guarded epoch-boundary resume\n")
+        elif mode == "observer-resume":
+            lines.append("\n# guarded observer-compatible epoch continuation\n")
         for key in (
             "CUDA_DEVICE_ORDER", "CUDA_VISIBLE_DEVICES", "MASTER_ADDR",
             "PORT", "TRANSFORMERS_OFFLINE",
@@ -101,10 +111,11 @@ def main() -> int:
         raise ValueError("locked training command is required")
     expected = _parse_identity(args.expected_identity)
     descriptor = open_run_lock(args.work_dir)
+    source_descriptor = None
     try:
         if args.mode == "fresh":
             initialize_identity(args.work_dir, expected)
-        else:
+        elif args.mode == "resume":
             identity_path = validate_identity(args.work_dir, expected)
             checkpoint = validate_private_epoch_checkpoint(args.work_dir)
             expected_digest, _ = _validated_provenance(
@@ -113,10 +124,37 @@ def main() -> int:
                 checkpoint, args.freeze_dir,
                 expected_sha256=expected_digest)
             command.extend(("--resume", str(frozen)))
+        else:
+            if (
+                args.source_work_dir is None
+                or args.project_root is None
+                or args.observer_policy is None
+            ):
+                raise ValueError(
+                    "observer-resume requires source workdir, project root, "
+                    "and observer policy")
+            if args.source_work_dir.resolve() == args.work_dir.resolve():
+                raise ValueError(
+                    "observer continuation requires a separate target workdir")
+            source_descriptor = open_run_lock(args.source_work_dir)
+            policy = load_observer_compatibility_policy(args.observer_policy)
+            frozen, manifest = prepare_observer_compatible_resume(
+                source_work_dir=args.source_work_dir,
+                target_work_dir=args.work_dir,
+                target_identity=expected,
+                repository=args.project_root,
+                freeze_dir=args.freeze_dir,
+                policy=policy,
+            )
+            if manifest.name != OBSERVER_CONTINUATION_FILE:
+                raise RuntimeError("observer_continuation.json was not sealed")
+            command.extend(("--resume", str(frozen)))
         _write_command_log(args.work_dir, command, args.mode)
         result = subprocess.run(command, cwd=args.cwd, check=False)
         return int(result.returncode)
     finally:
+        if source_descriptor is not None:
+            os.close(source_descriptor)
         os.close(descriptor)
 
 

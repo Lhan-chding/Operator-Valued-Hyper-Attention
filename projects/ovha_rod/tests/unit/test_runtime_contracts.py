@@ -1,5 +1,6 @@
 import json
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,7 +31,15 @@ class RuntimeContractTests(unittest.TestCase):
         script = ROOT / "scripts/resume_guard.py"
         spec = importlib.util.spec_from_file_location("ovha_resume_guard", script)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        previous = sys.modules.get(spec.name)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            if previous is None:
+                sys.modules.pop(spec.name, None)
+            else:
+                sys.modules[spec.name] = previous
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             root = Path(directory)
             root.chmod(0o700)

@@ -28,6 +28,7 @@ LOCKED_CHECKPOINT_SHA256="b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6
 LOCKED_CHECKPOINT_SIZE=1093815743
 DRY_RUN=false
 RESUME=false
+OBSERVER_RESUME_FROM=""
 ENVIRONMENT_PROFILE="cu121-wheel"
 MMDET_COMMIT="cfd5d3a985b0249de009b67d04f37263e11cdf3d"
 
@@ -53,6 +54,7 @@ usage() {
     "  --checkpoint-sha256 HEX Required trusted checkpoint digest" \
     "  --master-port N        Explicit free localhost torchrun port" \
     "  --resume               Resume the matching private epoch checkpoint" \
+    "  --observer-resume-from PATH  Continue an audited source run in a new work root" \
     "  --no-amp                Full FP32 is mandatory; compatibility no-op" \
     "  --dry-run               Validate arguments and print commands only" \
     "  -h, --help              Show this help" \
@@ -83,6 +85,7 @@ while [[ $# -gt 0 ]]; do
     --checkpoint-sha256) require_value "$1" "$#"; CHECKPOINT_SHA256="$2"; shift 2 ;;
     --master-port) require_value "$1" "$#"; MASTER_PORT="$2"; shift 2 ;;
     --resume) RESUME=true; shift ;;
+    --observer-resume-from) require_value "$1" "$#"; OBSERVER_RESUME_FROM="$2"; shift 2 ;;
     --no-amp) shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -96,6 +99,15 @@ case "${DATASET}" in
   refcocog) CONFIG_NAME="ovha_rod_swin_t_5e_refcocog.py"; PHASE0_CONFIG_NAME="phase0_parent_swin_t_5e_refcocog.py"; VAL_ANN="finetune_refcocog_val.json" ;;
   *) printf 'invalid --dataset: %s\n' "${DATASET}" >&2; usage >&2; exit 2 ;;
 esac
+
+if [[ "${RESUME}" == true && -n "${OBSERVER_RESUME_FROM}" ]]; then
+  printf '%s\n' '--resume and --observer-resume-from are mutually exclusive' >&2
+  exit 2
+fi
+if [[ -n "${OBSERVER_RESUME_FROM}" && "${VARIANT}" == "all" ]]; then
+  printf '%s\n' '--observer-resume-from requires one explicit variant' >&2
+  exit 2
+fi
 
 case "${VARIANT}" in
   phase0_parent|parent_ref|generic|rqgo) VARIANTS=("${VARIANT}") ;;
@@ -305,6 +317,18 @@ for run_variant in "${VARIANTS[@]}"; do
       RESUME_CHECKPOINT="${WORK_DIR}/epoch_N.pth"
     fi
   fi
+  if [[ -n "${OBSERVER_RESUME_FROM}" ]]; then
+    if [[ "${DRY_RUN}" == true ]]; then
+      RESUME_CHECKPOINT="${OBSERVER_RESUME_FROM}/epoch_N.pth"
+    else
+      SOURCE_WORK_REAL="$(realpath -e "${OBSERVER_RESUME_FROM}")"
+      TARGET_WORK_REAL="$(realpath -e "${WORK_DIR}")"
+      [[ "${SOURCE_WORK_REAL}" != "${TARGET_WORK_REAL}" ]] || {
+        printf '%s\n' 'observer continuation requires a separate target work root' >&2
+        exit 2
+      }
+    fi
+  fi
   ACTIVE_CONFIG_PATH="${CONFIG_PATH}"
   if [[ "${run_variant}" == "phase0_parent" ]]; then
     ACTIVE_CONFIG_PATH="${PROJECT_DIR}/configs/${PHASE0_CONFIG_NAME}"
@@ -345,7 +369,7 @@ for run_variant in "${VARIANTS[@]}"; do
     --work-dir "${WORK_DIR}"
     --cfg-options "${CFG_OPTIONS[@]}"
   )
-  if [[ "${RESUME}" == true && "${DRY_RUN}" == true ]]; then
+  if [[ ( "${RESUME}" == true || -n "${OBSERVER_RESUME_FROM}" ) && "${DRY_RUN}" == true ]]; then
     COMMAND+=(--resume "${RESUME_CHECKPOINT}")
   fi
   printf 'Variant %s, effective global batch %d, accumulation %d, warmup iterations %d\n' \
@@ -365,11 +389,20 @@ for run_variant in "${VARIANTS[@]}"; do
     "${PYTHON_BIN}" "${SCRIPT_DIR}/port_guard.py" --port "${MASTER_PORT}"
     LOCK_MODE="fresh"
     [[ "${RESUME}" == false ]] || LOCK_MODE="resume"
+    OBSERVER_LOCK_OPTIONS=()
+    if [[ -n "${OBSERVER_RESUME_FROM}" ]]; then
+      LOCK_MODE="observer-resume"
+      OBSERVER_LOCK_OPTIONS=(
+        --source-work-dir "${OBSERVER_RESUME_FROM}"
+        --project-root "${PROJECT_DIR}"
+        --observer-policy "${PROJECT_DIR}/environment/observer_resume_policy.json")
+    fi
     PORT="${MASTER_PORT}" MASTER_ADDR="127.0.0.1" \
       PYTHONPATH="${PROJECT_DIR}:${MMDET_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
       "${PYTHON_BIN}" "${SCRIPT_DIR}/run_lock.py" \
       --work-dir "${WORK_DIR}" --mode "${LOCK_MODE}" \
       --freeze-dir "${HOME}/.local/share/ovha-rod/trusted_resume_inputs" \
-      --cwd "${MMDET_ROOT}" "${IDENTITY_OPTIONS[@]}" -- "${COMMAND[@]}"
+      --cwd "${MMDET_ROOT}" "${OBSERVER_LOCK_OPTIONS[@]}" \
+      "${IDENTITY_OPTIONS[@]}" -- "${COMMAND[@]}"
   fi
 done

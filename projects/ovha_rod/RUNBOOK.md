@@ -291,6 +291,50 @@ not persist the dataloader cursor, worker RNG, or prefetch queue, so treating an
 is intentionally stopped before the epoch checkpoint is complete, restart from
 the preceding complete epoch.
 
+### Reviewed observer-only continuation
+
+One narrow exception exists for the reviewed gradient-diagnostic synchronization
+change from project commit `d93d2db25c6156b4ca5ebc352a3c89a4c6d06c96`.
+It is not a general `--force-resume` switch. The repository-owned
+`environment/observer_resume_policy.json` pins the exact source commit and the
+SHA-256 of every allowed target blob. The guard rejects deletions, renames,
+untracked files, a dirty checkout, or any additional changed path. It also
+requires every run-identity field except `project_commit` to be byte-for-byte
+identical.
+
+Use a new empty work root and the completed source epoch directory:
+
+```bash
+bash scripts/run_phase1_server.sh \
+  --dataset refcoco \
+  --variant rqgo \
+  --mmdet-root "$PRIVATE_ROOT/mmdetection" \
+  --data-root "$DATA_ROOT" \
+  --checkpoint "$CHECKPOINT" \
+  --checkpoint-sha256 b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a \
+  --bert-root "$BERT_ROOT" \
+  --work-root "$PRIVATE_ROOT/runs-observer-continuation" \
+  --gpus 1 \
+  --per-device-batch 8 \
+  --master-port 29626 \
+  --seed 2026 \
+  --observer-resume-from "$PRIVATE_ROOT/runs-fp32-b8/refcoco/rqgo/seed_2026"
+```
+
+The source `run_identity.json`, checkpoint, and provenance sidecar are never
+rewritten. The target receives a new identity plus a mode-600
+`observer_continuation.json` binding their SHA-256 values, the frozen checkpoint,
+both commits, and the audited diff. Before using this exception for scientific
+results, run a matched-batch GPU equivalence check from the same epoch checkpoint
+and require identical losses, parameters, optimizer state, and RNG state over at
+least 20 optimizer updates. Benchmark the diagnostic change separately; the
+exception should only be adopted if it materially reduces iteration time.
+
+This exception does **not** authorize TF32, AMP, activation-checkpoint changes,
+different GPU/batch/accumulation settings, model or config changes, optimizer or
+scheduler changes, data changes, or a decoder-operator update. Those require a
+new experiment identity and cannot continue the old formal run.
+
 ## 10. RQGO Go/No-Go gate
 
 All conditions are required before later operators are considered:

@@ -10,6 +10,10 @@ from mmengine.hooks import Hook
 
 from mmdet.registry import HOOKS
 
+from ..gradient_accumulator import (
+    accumulate_gradient_square,
+    finalize_gradient_norm,
+)
 from ..runtime_contracts import collect_scalar_diagnostics
 
 
@@ -30,7 +34,7 @@ class OperatorDiagnosticsHook(Hook):
 
     def before_train(self, runner) -> None:
         model = runner.model.module if hasattr(runner.model, "module") else runner.model
-        model._seed_grad_squared = 0.0
+        model._seed_grad_squared = None
         if getattr(model, "seed_operator", None) is not None:
             for parameter in model.seed_operator.parameters():
                 if parameter.requires_grad:
@@ -41,14 +45,14 @@ class OperatorDiagnosticsHook(Hook):
                           data_batch=None) -> None:
         del batch_idx, data_batch
         model = runner.model.module if hasattr(runner.model, "module") else runner.model
-        model._seed_grad_squared = 0.0
+        model._seed_grad_squared = None
 
     def after_train_iter(self, runner, batch_idx: int,
                          data_batch=None, outputs=None) -> None:
         del batch_idx, data_batch
         model = runner.model.module if hasattr(runner.model, "module") else runner.model
-        gradient_norm = float(
-            getattr(model, "_seed_grad_squared", 0.0) ** 0.5)
+        gradient_norm = finalize_gradient_norm(
+            getattr(model, "_seed_grad_squared", None))
         finite_scalars = {}
         nonfinite_keys = []
         for values, prefix in (
@@ -84,4 +88,5 @@ class OperatorDiagnosticsHook(Hook):
 
 
 def _record_gradient(model, gradient: torch.Tensor) -> None:
-    model._seed_grad_squared += float(gradient.detach().float().square().sum().cpu())
+    model._seed_grad_squared = accumulate_gradient_square(
+        getattr(model, "_seed_grad_squared", None), gradient)

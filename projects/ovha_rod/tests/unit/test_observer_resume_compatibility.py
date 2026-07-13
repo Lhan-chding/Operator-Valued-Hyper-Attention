@@ -22,8 +22,10 @@ def _load_resume_guard():
     package.runtime_contracts = contracts
     previous_package = sys.modules.get("ovha_rod")
     previous_contracts = sys.modules.get("ovha_rod.runtime_contracts")
+    previous_guard = sys.modules.get(spec.name)
     sys.modules["ovha_rod"] = package
     sys.modules["ovha_rod.runtime_contracts"] = contracts
+    sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
     finally:
@@ -35,6 +37,10 @@ def _load_resume_guard():
             sys.modules.pop("ovha_rod.runtime_contracts", None)
         else:
             sys.modules["ovha_rod.runtime_contracts"] = previous_contracts
+        if previous_guard is None:
+            sys.modules.pop(spec.name, None)
+        else:
+            sys.modules[spec.name] = previous_guard
     return module
 
 
@@ -152,7 +158,13 @@ class ObserverResumeCompatibilityTests(unittest.TestCase):
                 source_checkpoint_sha256="1" * 64,
                 source_commit="a" * 40,
                 target_commit="b" * 40,
-                transition={"changed_paths": ["observer.py"]},
+                transition={
+                    "source_commit": "a" * 40,
+                    "target_commit": "b" * 40,
+                    "changed_paths": ("observer.py",),
+                    "diff_sha256": "2" * 64,
+                    "target_blobs": {"observer.py": "3" * 64},
+                },
             )
 
             self.assertEqual(identity_path.read_bytes(), source_identity)
@@ -171,7 +183,13 @@ class ObserverResumeCompatibilityTests(unittest.TestCase):
                     source_checkpoint_sha256="1" * 64,
                     source_commit="a" * 40,
                     target_commit="b" * 40,
-                    transition={"changed_paths": ["observer.py"]},
+                    transition={
+                        "source_commit": "a" * 40,
+                        "target_commit": "b" * 40,
+                        "changed_paths": ("observer.py",),
+                        "diff_sha256": "2" * 64,
+                        "target_blobs": {"observer.py": "3" * 64},
+                    },
                 )
 
     def test_server_observer_resume_is_explicit_and_separate(self):
@@ -183,6 +201,38 @@ class ObserverResumeCompatibilityTests(unittest.TestCase):
         self.assertIn('choices=("fresh", "resume", "observer-resume")', lock)
         self.assertIn("prepare_observer_compatible_resume", lock)
         self.assertIn("observer_continuation.json", lock)
+
+    def test_repository_policy_pins_every_reviewed_target_blob(self):
+        policy_path = ROOT / "environment/observer_resume_policy.json"
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        expected_paths = {
+            "projects/ovha_rod/RUNBOOK.md",
+            "projects/ovha_rod/ovha_rod/gradient_accumulator.py",
+            "projects/ovha_rod/ovha_rod/hooks/operator_diagnostics_hook.py",
+            "projects/ovha_rod/scripts/resume_guard.py",
+            "projects/ovha_rod/scripts/run_lock.py",
+            "projects/ovha_rod/scripts/run_phase1_server.sh",
+            "projects/ovha_rod/tests/unit/test_gradient_diagnostics.py",
+            "projects/ovha_rod/tests/unit/test_observer_resume_compatibility.py",
+            "projects/ovha_rod/tests/unit/test_runtime_contracts.py",
+        }
+        self.assertEqual(
+            policy["contract"],
+            "ovha_rod_observer_compatibility_policy_v1",
+        )
+        self.assertEqual(
+            policy["source_commit"],
+            "d93d2db25c6156b4ca5ebc352a3c89a4c6d06c96",
+        )
+        self.assertEqual(set(policy["target_blobs"]), expected_paths)
+        self.assertEqual(
+            policy["policy_path"],
+            "projects/ovha_rod/environment/observer_resume_policy.json",
+        )
+        repository = ROOT.parents[1]
+        for relative_path, expected_digest in policy["target_blobs"].items():
+            with self.subTest(path=relative_path):
+                self.assertEqual(_sha256(repository / relative_path), expected_digest)
 
 
 if __name__ == "__main__":
