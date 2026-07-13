@@ -69,14 +69,26 @@ class RCEOTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(self.query.grad).all())
 
     def test_shape_dtype_and_nonfinite_inputs_fail_fast(self):
+        with self.assertRaisesRegex(ValueError, "positive"):
+            RCEO(d_model=0, operator_count=3)
+        with self.assertRaisesRegex(ValueError, "prior_cap"):
+            RCEO(d_model=8, operator_count=3, prior_cap=0.0)
         with self.assertRaisesRegex(ValueError, "boxes"):
             self.rceo(self.query, self.boxes[:, :3], self.score, self.valid)
+        with self.assertRaisesRegex(ValueError, "referent_score"):
+            self.rceo(self.query, self.boxes, self.score[:, :3], self.valid)
         with self.assertRaisesRegex(ValueError, "boolean"):
             self.rceo(self.query, self.boxes, self.score, self.valid.float())
         bad = self.boxes.clone()
         bad[0, 0, 0] = float("inf")
         with self.assertRaisesRegex(ValueError, "finite"):
             self.rceo(self.query, bad, self.score, self.valid)
+        with self.assertRaisesRegex(ValueError, "floating"):
+            self.rceo(
+                self.query.to(torch.int64), self.boxes.to(torch.int64),
+                self.score.to(torch.int64), self.valid)
+        with self.assertRaisesRegex(ValueError, "device and dtype"):
+            self.rceo(self.query, self.boxes.double(), self.score, self.valid)
 
 
 if __name__ == "__main__":

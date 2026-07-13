@@ -92,6 +92,51 @@ class OperatorRouterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "finite"):
             self.router(bad, self.memory, layer_index=0, valid=self.valid)
 
+    def test_constructor_prior_and_mask_boundaries_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "positive"):
+            OperatorRouter(0, 3, 6, 12)
+        with self.assertRaisesRegex(ValueError, "query"):
+            self.router(
+                self.query[..., :7], self.memory[..., :7], 0, self.valid)
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            self.router(self.query, self.memory, 0, self.valid.float())
+        with self.assertRaisesRegex(ValueError, "floating"):
+            self.router(
+                self.query.to(torch.int64), self.memory.to(torch.int64),
+                0, self.valid)
+        with self.assertRaisesRegex(ValueError, "device and dtype"):
+            self.router(self.query, self.memory.double(), 0, self.valid)
+
+        with self.assertRaisesRegex(ValueError, "wrong shape"):
+            self.router(
+                self.query, self.memory, 0, self.valid,
+                reliability_log_prior=torch.zeros(2, 4, 2))
+        with self.assertRaisesRegex(ValueError, "match query"):
+            self.router(
+                self.query, self.memory, 0, self.valid,
+                reliability_log_prior=torch.zeros(2, 4, 3).double())
+        bad_prior = torch.zeros(2, 4, 3)
+        bad_prior[0, 0, 0] = float("inf")
+        with self.assertRaisesRegex(ValueError, "finite"):
+            self.router(
+                self.query, self.memory, 0, self.valid,
+                reliability_log_prior=bad_prior)
+        with self.assertRaisesRegex(ValueError, "wrong shape"):
+            self.router(
+                self.query, self.memory, 0, self.valid,
+                operator_available=torch.ones(2, dtype=torch.bool))
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            self.router(
+                self.query, self.memory, 0, self.valid,
+                operator_available=torch.ones(3))
+
+        per_query = torch.ones(2, 4, 3, dtype=torch.bool)
+        per_query[0, 0, 1] = False
+        result = self.router(
+            self.query, self.memory, 0, self.valid,
+            operator_available=per_query)
+        self.assertEqual(result.weights[0, 0, 1].item(), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

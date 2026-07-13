@@ -53,6 +53,8 @@ class LowRankHyperAdapterTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(self.query.grad).all())
 
     def test_invalid_rank_shapes_and_nonfinite_inputs_fail_fast(self):
+        with self.assertRaisesRegex(ValueError, "positive"):
+            LowRankHyperAdapter(d_model=0, operator_count=3, rank=1)
         with self.assertRaisesRegex(ValueError, "rank"):
             LowRankHyperAdapter(d_model=8, operator_count=3, rank=9)
         with self.assertRaisesRegex(ValueError, "memory"):
@@ -61,6 +63,17 @@ class LowRankHyperAdapterTests(unittest.TestCase):
         bad[0, 0, 0] = float("nan")
         with self.assertRaisesRegex(ValueError, "finite"):
             self.adapter(self.query, bad, self.valid)
+        with self.assertRaisesRegex(ValueError, "query"):
+            self.adapter(
+                self.query[..., :7], self.memory[..., :7], self.valid)
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            self.adapter(self.query, self.memory, self.valid.float())
+        with self.assertRaisesRegex(ValueError, "floating"):
+            self.adapter(
+                self.query.to(torch.int64), self.memory.to(torch.int64),
+                self.valid)
+        with self.assertRaisesRegex(ValueError, "device and dtype"):
+            self.adapter(self.query, self.memory.double(), self.valid)
 
 
 if __name__ == "__main__":
