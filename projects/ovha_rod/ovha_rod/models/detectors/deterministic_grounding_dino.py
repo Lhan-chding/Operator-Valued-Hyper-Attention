@@ -22,4 +22,3 @@ class DeterministicGroundingDINO(
     GroundingDINO,
 ):
     """Official GroundingDINO with deterministic padded-mask coordinates."""
-
