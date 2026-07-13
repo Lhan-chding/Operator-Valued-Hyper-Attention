@@ -18,6 +18,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import torch
+
 from ovha_rod.runtime_contracts import (
     audit_smoke_outputs,
     find_remote_weight_values,
@@ -143,6 +145,25 @@ def main() -> int:
             DeterministicSinePositionalEncoding):
         raise TypeError(
             "smoke requires DeterministicSinePositionalEncoding")
+    if not torch.are_deterministic_algorithms_enabled():
+        raise RuntimeError(
+            "smoke requires torch deterministic algorithms")
+    positional_mask = torch.tensor(
+        [[[False, False, True],
+          [False, True, True]]],
+        dtype=torch.bool,
+        device="cuda",
+    )
+    with torch.no_grad():
+        positional_probe = runner.model.positional_encoding(positional_mask)
+    expected_shape = (1, int(runner.model.embed_dims), 2, 3)
+    if (tuple(positional_probe.shape) != expected_shape
+            or not bool(torch.isfinite(positional_probe).all())):
+        raise RuntimeError(
+            "deterministic positional CUDA probe failed: "
+            f"shape={tuple(positional_probe.shape)}")
+    torch.cuda.synchronize()
+    print("deterministic positional CUDA probe: ok")
     runner.train()
     summary = audit_smoke_outputs(
         Path(config.work_dir), expected_operator=expected_operator)
