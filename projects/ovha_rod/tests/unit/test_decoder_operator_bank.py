@@ -166,7 +166,7 @@ class DecoderOperatorBankTests(unittest.TestCase):
             self._bank()(self._context(text=None, text_valid=None))
         with self.assertRaisesRegex(ValueError, "feature_maps.*ms_tleo"):
             self._bank()(self._context(feature_maps=(), valid_ratios=None))
-        with self.assertRaisesRegex(ValueError, "available operator"):
+        with self.assertRaises(RuntimeError):
             self._bank()(self._context(
                 operator_available=torch.zeros(3, dtype=torch.bool)))
 
@@ -514,7 +514,10 @@ class DecoderOperatorBankTests(unittest.TestCase):
         self.assertTrue(all(gradient.abs().sum().detach().item() > 0
                             for gradient in gradients[-7:]))
 
-    def test_public_boundary_is_inference_only_and_fail_fast(self):
+    def test_trainable_boundary_uses_inference_available_inputs_and_fail_fast(self):
+        module_doc = inspect.getdoc(sys.modules[DecoderOperatorBank.__module__])
+        self.assertIn("trainable", module_doc.lower())
+        self.assertNotIn("inference-only", module_doc.lower())
         self.assertEqual(
             set(inspect.signature(DecoderOperatorBank.forward).parameters),
             {"self", "context"},
@@ -533,29 +536,75 @@ class DecoderOperatorBankTests(unittest.TestCase):
         ):
             self.assertIn(flag, constructor)
             self.assertIs(constructor[flag].default, True)
+        self.assertIs(constructor["debug_contracts"].default, False)
 
         bad_boxes = self.boxes.clone()
         bad_boxes[0, 0, 0] = float("nan")
+        bad_context = self._context(boxes=bad_boxes)
         with self.assertRaisesRegex(ValueError, "boxes.*finite"):
-            self._context(boxes=bad_boxes)
+            self._bank(debug_contracts=True)._validate_context(bad_context)
+        bad_ratios = self._context(
+            valid_ratios=torch.full_like(self.valid_ratios, 1.1))
         with self.assertRaisesRegex(ValueError, "valid_ratios.*range"):
-            self._context(valid_ratios=torch.full_like(self.valid_ratios, 1.1))
+            self._bank(debug_contracts=True)._validate_context(bad_ratios)
         with self.assertRaisesRegex(ValueError, "levels"):
             self._context(valid_ratios=self.valid_ratios[:, :1])
         with self.assertRaisesRegex(ValueError, "text_valid"):
             self._context(text_valid=None)
         with self.assertRaisesRegex(ValueError, "operator_available"):
             self._context(operator_available=torch.ones(2, dtype=torch.bool))
+        with self.assertRaisesRegex(ValueError, "operator_available"):
+            self._context(operator_available=object())
         with self.assertRaisesRegex(ValueError, "enabled_operators"):
             self._bank(enabled_operators=("unknown",))
         with self.assertRaisesRegex(ValueError, "duplicate"):
             self._bank(enabled_operators=("qsro", "qsro"))
+        for name in ("num_layers", "router_hidden_dim", "adapter_rank"):
+            for value in (0, True):
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(ValueError, name):
+                        self._bank(**{name: value})
         for flag in (
-            "use_router", "use_memory", "use_hyper_adapter", "use_rceo"
+            "use_router", "use_memory", "use_hyper_adapter", "use_rceo",
+            "debug_contracts",
         ):
             with self.subTest(flag=flag):
                 with self.assertRaisesRegex(ValueError, flag):
                     self._bank(**{flag: 1})
+
+    def test_formal_bank_contract_path_has_no_tensor_to_host_checks(self):
+        hot_methods = (
+            DecoderOperatorContext.__post_init__,
+            DecoderOperatorContext._validate_feature_maps,
+            BankOutput.__post_init__,
+            DecoderOperatorBank.forward,
+            DecoderOperatorBank._effective_availability,
+        )
+        for method in hot_methods:
+            source = inspect.getsource(method)
+            with self.subTest(method=method.__qualname__):
+                self.assertNotIn(".item(", source)
+                self.assertNotIn("bool(", source)
+                self.assertNotIn("torch.isfinite", source)
+        context_source = inspect.getsource(DecoderOperatorContext)
+        output_source = inspect.getsource(BankOutput)
+        self.assertNotIn("_validate_float_like", context_source)
+        self.assertNotIn("_validate_float_like", output_source)
+
+    def test_numeric_output_checks_are_debug_only(self):
+        output = self._bank()(self._context())
+        bad_router = OperatorRouterResult(
+            weights=torch.full_like(output.router.weights, float("nan")),
+            logits=torch.zeros_like(output.router.logits),
+        )
+        unchecked = replace(output, router=bad_router)
+        self.assertTrue(torch.isnan(unchecked.router.weights).all())
+        with self.assertRaisesRegex(ValueError, "router.*finite"):
+            replace(
+                output,
+                router=bad_router,
+                debug_contracts=True,
+            )
 
     def test_result_contract_rejects_invalid_mapping_payloads(self):
         output = self._bank()(self._context())
@@ -577,12 +626,6 @@ class DecoderOperatorBankTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "residual.*shape"):
             replace(output, residuals={"qsro": wrong_residual})
 
-        bad_router = OperatorRouterResult(
-            weights=torch.full_like(output.router.weights, float("nan")),
-            logits=torch.zeros(2, 4, 3),
-        )
-        with self.assertRaisesRegex(ValueError, "router.*finite"):
-            replace(output, router=bad_router)
         wrong_router = OperatorRouterResult(
             weights=torch.zeros(2, 4, 3), logits=torch.zeros(9))
         with self.assertRaisesRegex(ValueError, "router.*shape"):
