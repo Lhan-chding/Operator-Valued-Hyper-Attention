@@ -133,6 +133,9 @@ def main() -> int:
     config.optim_wrapper.accumulative_counts = 1
     config.train_cfg = dict(
         type="IterBasedTrainLoop", max_iters=2, val_interval=3)
+    config.val_cfg = None
+    config.val_dataloader = None
+    config.val_evaluator = None
     config.param_scheduler = []
     config.default_hooks.logger.interval = 1
     config.default_hooks.checkpoint.interval = 2
