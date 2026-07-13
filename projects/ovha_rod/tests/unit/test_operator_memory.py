@@ -1,0 +1,63 @@
+import unittest
+
+import torch
+
+from ovha_rod.models.operators.operator_memory import (
+    OperatorMemory,
+    OperatorMemoryState,
+)
+
+
+class OperatorMemoryTests(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(43)
+        self.memory = OperatorMemory(d_model=8)
+        self.query = torch.randn(2, 4, 8, requires_grad=True)
+        self.valid = torch.tensor(
+            [[True, True, False, True], [True, False, True, False]])
+
+    def test_initialize_and_update_are_immutable_and_masked(self):
+        state = self.memory.initialize(
+            batch_size=2,
+            query_count=4,
+            device=self.query.device,
+            dtype=self.query.dtype,
+        )
+        before = state.value.clone()
+        updated = self.memory(state, self.query, self.valid)
+
+        self.assertIsInstance(state, OperatorMemoryState)
+        self.assertEqual(state.step, 0)
+        self.assertEqual(updated.step, 1)
+        self.assertTrue(torch.equal(state.value, before))
+        self.assertTrue(torch.equal(
+            updated.value[~self.valid], state.value[~self.valid]))
+        self.assertGreater(float(updated.value[self.valid].abs().sum()), 0.0)
+        with self.assertRaisesRegex(Exception, "cannot assign"):
+            state.step = 9
+
+    def test_sequential_update_is_finite_and_backpropagates(self):
+        state = self.memory.initialize_like(self.query)
+        first = self.memory(state, self.query, self.valid)
+        second = self.memory(first, self.query * 0.5, self.valid)
+        loss = second.value.square().mean()
+        loss.backward()
+
+        self.assertEqual(second.step, 2)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIsNotNone(self.query.grad)
+        self.assertTrue(torch.isfinite(self.query.grad).all())
+
+    def test_shape_mask_and_nonfinite_state_fail_fast(self):
+        state = self.memory.initialize_like(self.query)
+        with self.assertRaisesRegex(ValueError, "query"):
+            self.memory(state, self.query[:, :3], self.valid[:, :3])
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            self.memory(state, self.query, self.valid.float())
+        with self.assertRaisesRegex(ValueError, "finite"):
+            OperatorMemoryState(
+                value=torch.full((1, 2, 8), float("inf")), step=0)
+
+
+if __name__ == "__main__":
+    unittest.main()
