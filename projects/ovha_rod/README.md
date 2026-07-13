@@ -148,13 +148,19 @@ CUDA_VISIBLE_DEVICES=4 python scripts/two_batch_smoke.py \
     train_dataloader.dataset.pipeline.5.tokenizer_name="$BERT_ROOT"
 ```
 
+Phase 1 uses A800-native BF16 autocast with a fixed unit loss scale. This
+avoids the silent optimizer-step skipping observed with dynamic FP16 scaling.
+Gradient clipping is fail-fast: any non-finite full-model gradient aborts the
+run instead of logging `grad_norm: nan` and continuing. Treat such an abort as
+a failed smoke/run, not as a warning to ignore.
+
 MMEngine writes a complete `epoch_N.pth` after every epoch and keeps the two
 latest checkpoints. An SSH disconnect is harmless when the command runs in
 `tmux`. To perform a guarded epoch-boundary resume, rerun the identical command
 with `--resume`; the runner rejects a changed GPU count, batch size,
-accumulation, seed, variant, source commit, or environment identity. Mid-epoch
-resume is intentionally rejected because the standard epoch loop does not
-persist the dataloader cursor or worker RNG state.
+accumulation, AMP dtype, seed, variant, source commit, or environment identity.
+Mid-epoch resume is intentionally rejected because the standard epoch loop
+does not persist the dataloader cursor or worker RNG state.
 
 Do not proceed to TQ-CATO, Q-SRO, or MS-TLEO until the RQGO gate in the
 runbook passes.

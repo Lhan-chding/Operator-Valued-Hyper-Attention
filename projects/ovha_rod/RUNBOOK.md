@@ -233,6 +233,7 @@ python scripts/two_batch_smoke.py configs/ovha_rod_swin_t_5e_refcoco.py \
 Then inspect the two batches:
 
 - all parent and auxiliary losses are finite;
+- `grad_norm` is finite; a non-finite full-model gradient is a hard failure;
 - RQGO/generic seed gradients are finite and non-zero when active;
 - `seed_bias` is bounded by 2.0;
 - invalid encoder positions have zero seed bias;
@@ -242,6 +243,14 @@ Then inspect the two batches:
 
 Abort immediately on NaN/Inf, missing dense tensors, checkpoint base-key
 coverage below 99%, or any model-input leakage.
+
+The locked Phase 1 AMP profile is BF16 autocast with loss scale `1.0`. On the
+A800 this retains the FP32 exponent range while using tensor-core mixed
+precision. Dynamic FP16 scaling is not allowed for the formal run because an
+overflow can make `GradScaler` skip `optimizer.step()` while the scheduler
+continues. The optimizer wrapper also sets
+`clip_grad.error_if_nonfinite=True`, so the job fails at the first invalid
+full-model gradient instead of continuing with `grad_norm: nan`.
 
 ## 9. Checkpoints, disconnects, and safe resume
 
@@ -272,10 +281,10 @@ bash scripts/run_phase1_server.sh \
 Resume fails closed unless `last_checkpoint` names a non-empty private
 `epoch_N.pth` inside the same work directory and `run_identity.json` exactly
 matches dataset, variant, seed, GPU count, per-device batch, accumulation,
-global batch, AMP mode, project commit, MMDetection commit, and environment
-profile. Never edit `last_checkpoint`, copy a `.pth` from another run, or use a
-downloaded checkpoint as resume input. PyTorch checkpoints are pickle trust
-boundaries.
+global batch, AMP mode and dtype, project commit, MMDetection commit, and
+environment profile. Never edit `last_checkpoint`, copy a `.pth` from another
+run, or use a downloaded checkpoint as resume input. PyTorch checkpoints are
+pickle trust boundaries.
 
 Mid-epoch resume is deliberately rejected. MMEngine's standard epoch loop does
 not persist the dataloader cursor, worker RNG, or prefetch queue, so treating an

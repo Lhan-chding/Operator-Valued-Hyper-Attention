@@ -223,8 +223,12 @@ PROJECT_COMMIT="$(git -C "${PROJECT_DIR}" rev-parse HEAD)" || {
 set_identity_options() {
   local name="$1"
   local effective_amp="${USE_AMP}"
+  local effective_amp_dtype="bfloat16"
   if [[ "${name}" == "phase0_parent" ]]; then
     effective_amp=false
+  fi
+  if [[ "${effective_amp}" == false ]]; then
+    effective_amp_dtype="none"
   fi
   IDENTITY_OPTIONS=(
     --expected-identity "dataset=${DATASET}"
@@ -235,6 +239,7 @@ set_identity_options() {
     --expected-identity "accumulative_counts=${ACCUMULATIVE_COUNTS}"
     --expected-identity "global_batch=${TARGET_GLOBAL_BATCH}"
     --expected-identity "amp=${effective_amp}"
+    --expected-identity "amp_dtype=${effective_amp_dtype}"
     --expected-identity "physical_cuda_devices=${VISIBLE_DEVICE_IDENTITY}"
     --expected-identity "data_root=${DATA_ROOT_IDENTITY}"
     --expected-identity "bert_root=${BERT_ROOT_IDENTITY}"
@@ -341,10 +346,14 @@ for run_variant in "${VARIANTS[@]}"; do
   if [[ "${run_variant}" != "phase0_parent" ]]; then
     CFG_OPTIONS+=(
       "param_scheduler.0.end=${WARMUP_ITERS}"
-      "custom_hooks.0.warmup_iters=${WARMUP_ITERS}")
+      "custom_hooks.0.warmup_iters=${WARMUP_ITERS}"
+      "optim_wrapper.clip_grad.error_if_nonfinite=True")
   fi
   if [[ "${USE_AMP}" == true && "${run_variant}" != "phase0_parent" ]]; then
-    CFG_OPTIONS+=("optim_wrapper.type=AmpOptimWrapper" "optim_wrapper.loss_scale=dynamic")
+    CFG_OPTIONS+=(
+      "optim_wrapper.type=AmpOptimWrapper"
+      "optim_wrapper.dtype=bfloat16"
+      "optim_wrapper.loss_scale=1.0")
   fi
 
   COMMAND=(

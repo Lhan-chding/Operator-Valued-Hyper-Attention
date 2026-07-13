@@ -127,7 +127,9 @@ def main() -> int:
     config.train_dataloader.num_workers = 0
     config.train_dataloader.persistent_workers = False
     config.optim_wrapper.type = "AmpOptimWrapper"
-    config.optim_wrapper.loss_scale = "dynamic"
+    config.optim_wrapper.dtype = "bfloat16"
+    config.optim_wrapper.loss_scale = 1.0
+    config.optim_wrapper.clip_grad.error_if_nonfinite = True
     config.optim_wrapper.accumulative_counts = 1
     config.train_cfg = dict(
         type="IterBasedTrainLoop", max_iters=2, val_interval=3)
@@ -187,6 +189,8 @@ def main() -> int:
     summary.update({
         "requested_batch_size": args.batch_size,
         "observed_dataloader_batch_size": observed_batch_size,
+        "amp_dtype": str(config.optim_wrapper.dtype),
+        "amp_loss_scale": float(config.optim_wrapper.loss_scale),
         "max_memory_allocated_bytes": torch.cuda.max_memory_allocated(),
         "max_memory_reserved_bytes": torch.cuda.max_memory_reserved(),
         "total_memory_bytes": torch.cuda.get_device_properties(0).total_memory,

@@ -43,7 +43,8 @@ optim_wrapper = dict(
     _delete_=True,
     type='OptimWrapper',
     optimizer=dict(type='AdamW', lr=2e-4, weight_decay=1e-4),
-    clip_grad=dict(max_norm=0.1, norm_type=2),
+    clip_grad=dict(
+        max_norm=0.1, norm_type=2, error_if_nonfinite=True),
     paramwise_cfg=dict(
         custom_keys={
             'absolute_pos_embed': dict(decay_mult=0.0),
