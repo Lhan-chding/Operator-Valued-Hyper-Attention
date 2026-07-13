@@ -85,6 +85,12 @@ contain no `decoder_operator_cfg`, so they remain byte-for-byte on the disabled
 path. `OperatorDiagnosticsHook` records seed and decoder-bank gradient norms
 plus finite scalar diagnostics.
 
+After the CUDA acceptance gate, the locked runner accepts `bank_full`, the
+seven other `bank_*` names, or `post_all`. A single-GPU launch keeps the locked
+global batch of 32 by adding gradient accumulation, and `--resume` restarts
+only the same variant from its guarded epoch checkpoint. Exact commands are in
+the Post-RQGO section of `RUNBOOK.md`.
+
 The implementation and pure-Torch contracts are complete locally, but CUDA
 acceptance is pending. Before treating any post-RQGO variant as runnable or
 scientifically accepted, execute the locked A800 two-batch forward/backward

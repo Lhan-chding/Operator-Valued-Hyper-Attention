@@ -365,3 +365,39 @@ configs/post_rqgo/ovha_rod_swin_t_5e_refcoco_bank_no_rceo.py
 CUDA acceptance is pending until those server checks produce archived logs,
 diagnostics, memory measurements, and a smoke checkpoint. Passing local CPU
 unit tests alone is not a substitute for this gate.
+
+After that gate passes, generate and inspect the exact single-GPU full-bank
+command without launching it:
+
+```bash
+CUDA_VISIBLE_DEVICES=4 bash scripts/run_phase1_server.sh \
+  --dataset refcoco \
+  --variant bank_full \
+  --mmdet-root "$PRIVATE_ROOT/mmdetection" \
+  --data-root "$DATA_ROOT" \
+  --checkpoint "$CHECKPOINT" \
+  --checkpoint-sha256 b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a \
+  --bert-root "$BERT_ROOT" \
+  --work-root "$PRIVATE_ROOT/runs-post-rqgo" \
+  --gpus 1 \
+  --per-device-batch 8 \
+  --master-port 29628 \
+  --seed 2026 \
+  --python "$PRIVATE_ROOT/env-cu121/bin/python" \
+  --dry-run
+```
+
+Remove `--dry-run` only after checking that GPU 4 is idle. The runner records
+the physical GPU, source commit, config variant, batch and accumulation values,
+precision protocol, input identities, and checkpoint digest. Batch 8 on one
+GPU yields accumulation 4 and preserves the locked global batch of 32.
+
+To resume the same accepted variant after an epoch-boundary stop, repeat the
+identical command with `--resume` in place of `--dry-run`. Do not change the
+variant, seed, device identity, batch, source commit, or input paths.
+
+Once `bank_full` and all three single-operator smokes pass, the complete matrix
+can be generated with `--variant post_all`. This expands to the full model,
+three single operators, and four component ablations in a fixed order. Run it
+only when eight serial five-epoch experiments are intended; it is not a short
+smoke command.

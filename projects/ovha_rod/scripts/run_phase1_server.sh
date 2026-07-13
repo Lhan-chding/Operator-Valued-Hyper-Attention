@@ -44,7 +44,10 @@ usage() {
     "  --bert-root PATH        Local bert-base-uncased directory" \
     "" \
     "Options:" \
-    "  --variant NAME          phase0_parent, parent_ref, generic, rqgo, or all" \
+    "  --variant NAME          phase0_parent, parent_ref, generic, rqgo, all," \
+    "                          bank_{full,qsro_only,tq_cato_only,ms_tleo_only," \
+    "                          no_router,no_memory,no_hyper_adapter,no_rceo}," \
+    "                          or post_all" \
     "  --work-root PATH        Output root" \
     "  --gpus N                Number of visible training GPUs (default: 8)" \
     "  --per-device-batch N    Batch per GPU (default: 4)" \
@@ -100,8 +103,29 @@ esac
 case "${VARIANT}" in
   phase0_parent|parent_ref|generic|rqgo) VARIANTS=("${VARIANT}") ;;
   all) VARIANTS=(phase0_parent parent_ref generic rqgo) ;;
+  bank_full|bank_qsro_only|bank_tq_cato_only|bank_ms_tleo_only|bank_no_router|bank_no_memory|bank_no_hyper_adapter|bank_no_rceo)
+    VARIANTS=("${VARIANT}")
+    ;;
+  post_all)
+    VARIANTS=(
+      bank_full
+      bank_qsro_only
+      bank_tq_cato_only
+      bank_ms_tleo_only
+      bank_no_router
+      bank_no_memory
+      bank_no_hyper_adapter
+      bank_no_rceo)
+    ;;
   *) printf 'invalid --variant: %s\n' "${VARIANT}" >&2; exit 2 ;;
 esac
+
+if [[ "${VARIANT}" == bank_* || "${VARIANT}" == "post_all" ]]; then
+  [[ "${DATASET}" == "refcoco" ]] || {
+    printf 'post-RQGO variants require refcoco; got %s\n' "${DATASET}" >&2
+    exit 2
+  }
+fi
 
 for required in MMDET_ROOT DATA_ROOT CHECKPOINT BERT_ROOT; do
   [[ -n "${!required}" ]] || { printf '%s is required\n' "${required}" >&2; exit 2; }
@@ -268,6 +292,12 @@ set_variant_options() {
         'model.bbox_head.loss_ref_weight=0.5' \
         'model.bbox_head.loss_role_div_weight=0.005')
       ;;
+    bank_full|bank_qsro_only|bank_tq_cato_only|bank_ms_tleo_only|bank_no_router|bank_no_memory|bank_no_hyper_adapter|bank_no_rceo)
+      # Each reviewed post-RQGO config inherits the locked RQGO protocol and
+      # declares its complete bank contract.  No command-line model mutation
+      # is permitted here.
+      VARIANT_OPTIONS=()
+      ;;
   esac
 }
 
@@ -308,11 +338,15 @@ for run_variant in "${VARIANTS[@]}"; do
   ACTIVE_CONFIG_PATH="${CONFIG_PATH}"
   if [[ "${run_variant}" == "phase0_parent" ]]; then
     ACTIVE_CONFIG_PATH="${PROJECT_DIR}/configs/${PHASE0_CONFIG_NAME}"
+  elif [[ "${run_variant}" == bank_* ]]; then
+    POST_VARIANT="${run_variant#bank_}"
+    ACTIVE_CONFIG_PATH="${PROJECT_DIR}/configs/post_rqgo/ovha_rod_swin_t_5e_refcoco_bank_${POST_VARIANT}.py"
   fi
   CFG_OPTIONS=()
-  if [[ "${run_variant}" != "phase0_parent" ]]; then
-    CFG_OPTIONS=("${VARIANT_OPTIONS[@]}")
-  fi
+  case "${run_variant}" in
+    phase0_parent|bank_*) ;;
+    *) CFG_OPTIONS=("${VARIANT_OPTIONS[@]}") ;;
+  esac
   CFG_OPTIONS+=(
     "load_from=${TRAIN_CHECKPOINT}"
     "model.language_model.name=${BERT_ROOT}"

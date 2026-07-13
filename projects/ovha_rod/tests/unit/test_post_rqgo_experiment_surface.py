@@ -1,5 +1,6 @@
 import ast
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -122,6 +123,8 @@ class PostRQGOExperimentSurfaceTests(unittest.TestCase):
                 LOCKED_CHECKPOINT_SHA256,
                 "--bert-root",
                 "/private/bert",
+                "--python",
+                sys.executable,
                 "--gpus",
                 "1",
                 "--per-device-batch",
@@ -131,6 +134,7 @@ class PostRQGOExperimentSurfaceTests(unittest.TestCase):
             cwd=ROOT,
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
 
