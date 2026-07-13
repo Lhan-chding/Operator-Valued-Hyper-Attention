@@ -27,6 +27,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from .decoder_contracts import DecoderOperatorResidual
+from .tensor_validation import tensor_value_checks_enabled
 
 
 @dataclass(frozen=True)
@@ -258,7 +259,9 @@ def _validate_inputs(
         for feature_map in feature_maps
     ):
         raise ValueError("feature_maps must share a device and dtype")
-    if any(not torch.isfinite(feature_map).all() for feature_map in feature_maps):
+    if (tensor_value_checks_enabled(reference)
+            and any(not torch.isfinite(feature_map).all()
+                    for feature_map in feature_maps)):
         raise ValueError("feature_maps must contain only finite values")
 
     if (
@@ -272,13 +275,15 @@ def _validate_inputs(
         raise ValueError("boxes must be floating point")
     if boxes.device != reference.device or boxes.dtype != reference.dtype:
         raise ValueError("boxes and feature_maps must share a device and dtype")
-    if not torch.isfinite(boxes).all():
+    if (tensor_value_checks_enabled(boxes)
+            and not torch.isfinite(boxes).all()):
         raise ValueError("boxes must contain only finite values")
     if valid.shape != boxes.shape[:2] or valid.dtype != torch.bool:
         raise ValueError("valid must be a boolean [B,Q] tensor")
     if valid.device != boxes.device:
         raise ValueError("valid, boxes, and feature_maps must share a device")
-    if valid.any() and not (boxes[..., 2:][valid] > 0).all():
+    if (tensor_value_checks_enabled(boxes) and valid.any()
+            and not (boxes[..., 2:][valid] > 0).all()):
         raise ValueError("valid boxes must have positive width and height")
     return feature_maps
 
@@ -302,12 +307,13 @@ def _validate_valid_ratios(
         raise ValueError("valid_ratios and boxes must share the same device")
     if valid_ratios.dtype != boxes.dtype:
         raise ValueError("valid_ratios and boxes must share the same dtype")
-    if not torch.isfinite(valid_ratios).all():
-        raise ValueError("valid_ratios must contain only finite values")
-    if not (valid_ratios > 0).all():
-        raise ValueError("valid_ratios must be greater than zero")
-    if not (valid_ratios <= 1).all():
-        raise ValueError("valid_ratios must be at most one")
+    if tensor_value_checks_enabled(valid_ratios):
+        if not torch.isfinite(valid_ratios).all():
+            raise ValueError("valid_ratios must contain only finite values")
+        if not (valid_ratios > 0).all():
+            raise ValueError("valid_ratios must be greater than zero")
+        if not (valid_ratios <= 1).all():
+            raise ValueError("valid_ratios must be at most one")
     return valid_ratios
 
 

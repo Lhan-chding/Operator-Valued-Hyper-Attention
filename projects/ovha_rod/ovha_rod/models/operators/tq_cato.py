@@ -7,6 +7,7 @@ import torch
 from torch import Tensor, nn
 
 from .decoder_contracts import DecoderOperatorResidual
+from .tensor_validation import tensor_value_checks_enabled
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,8 @@ class TQCATOResult:
             raise ValueError("transport and residual must share a device")
         if self.transport.dtype != self.residual.query_delta.dtype:
             raise ValueError("transport and residual must share a dtype")
-        if not torch.isfinite(self.transport).all():
+        if (tensor_value_checks_enabled(self.transport)
+                and not torch.isfinite(self.transport).all()):
             raise ValueError("transport must contain only finite values")
 
 
@@ -159,14 +161,21 @@ class TQCATO(nn.Module):
             raise ValueError("query_valid and text_valid must be boolean")
         if query_valid.device != query.device or text_valid.device != text.device:
             raise ValueError("features and masks must share a device")
-        if not torch.isfinite(query).all() or not torch.isfinite(text).all():
-            raise ValueError("query and text must contain only finite values")
+        if tensor_value_checks_enabled(query):
+            if (not torch.isfinite(query).all()
+                    or not torch.isfinite(text).all()):
+                raise ValueError(
+                    "query and text must contain only finite values")
 
-        invalid_query_samples = (~query_valid.any(dim=-1)).nonzero(as_tuple=False)
-        if invalid_query_samples.numel():
-            sample = int(invalid_query_samples[0, 0])
-            raise ValueError(f"sample {sample} must contain at least one valid query")
-        invalid_text_samples = (~text_valid.any(dim=-1)).nonzero(as_tuple=False)
-        if invalid_text_samples.numel():
-            sample = int(invalid_text_samples[0, 0])
-            raise ValueError(f"sample {sample} must contain at least one valid text token")
+            invalid_query_samples = (
+                ~query_valid.any(dim=-1)).nonzero(as_tuple=False)
+            if invalid_query_samples.numel():
+                sample = int(invalid_query_samples[0, 0])
+                raise ValueError(
+                    f"sample {sample} must contain at least one valid query")
+            invalid_text_samples = (
+                ~text_valid.any(dim=-1)).nonzero(as_tuple=False)
+            if invalid_text_samples.numel():
+                sample = int(invalid_text_samples[0, 0])
+                raise ValueError(
+                    f"sample {sample} must contain at least one valid text token")

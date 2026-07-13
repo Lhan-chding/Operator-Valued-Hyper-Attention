@@ -20,6 +20,7 @@ from .operator_memory import OperatorMemory, OperatorMemoryState
 from .operator_router import OperatorRouter, OperatorRouterResult
 from .qsro import QuerySpatialRelationOperator
 from .rceo import RCEO, RCEOResult
+from .tensor_validation import tensor_value_checks_enabled
 from .tq_cato import TQCATO
 
 
@@ -57,10 +58,12 @@ class DecoderOperatorContext:
         _validate_float_like(self.boxes, query, "boxes")
         if self.valid.device != query.device:
             raise ValueError("valid and parent query must share a device")
-        if not bool(((self.boxes >= 0.0) & (self.boxes <= 1.0)).all()):
-            raise ValueError("boxes must contain normalized cxcywh values")
-        if self.valid.any() and not (self.boxes[..., 2:][self.valid] > 0).all():
-            raise ValueError("valid boxes must have positive width and height")
+        if tensor_value_checks_enabled(query):
+            if not bool(((self.boxes >= 0.0) & (self.boxes <= 1.0)).all()):
+                raise ValueError("boxes must contain normalized cxcywh values")
+            if (self.valid.any()
+                    and not (self.boxes[..., 2:][self.valid] > 0).all()):
+                raise ValueError("valid boxes must have positive width and height")
 
         self._validate_relation_role(query)
         self._validate_text(query)
@@ -114,7 +117,7 @@ class DecoderOperatorContext:
             raise ValueError("valid_ratios levels must match feature_maps")
         _validate_float_like(self.valid_ratios, query, "valid_ratios")
         in_range = (self.valid_ratios > 0.0) & (self.valid_ratios <= 1.0)
-        if not bool(in_range.all()):
+        if tensor_value_checks_enabled(query) and not bool(in_range.all()):
             raise ValueError("valid_ratios must be in the range (0, 1]")
 
     def _validate_memory(self, query: Tensor) -> None:
@@ -225,8 +228,11 @@ class BankOutput:
         for name, value in artifacts.items():
             if not isinstance(value, Tensor):
                 raise ValueError(f"artifact {name!r} must be a tensor")
-            if not value.is_floating_point() or not torch.isfinite(value).all():
-                raise ValueError(f"artifact {name!r} must be finite floating point")
+            if not value.is_floating_point():
+                raise ValueError(f"artifact {name!r} must be floating point")
+            if (tensor_value_checks_enabled(query)
+                    and not torch.isfinite(value).all()):
+                raise ValueError(f"artifact {name!r} must be finite")
             if value.device != query.device or value.dtype != query.dtype:
                 raise ValueError(f"artifact {name!r} must match fused state")
         object.__setattr__(self, "artifacts", MappingProxyType(artifacts))
@@ -408,7 +414,8 @@ class DecoderOperatorBank(nn.Module):
         )
         available = dynamic & enabled.view(1, 1, -1)
         available = available & context.valid[..., None]
-        if context.valid.any() and not available[context.valid].any(dim=-1).all():
+        if (tensor_value_checks_enabled(query) and context.valid.any()
+                and not available[context.valid].any(dim=-1).all()):
             raise ValueError("each valid query must have an available operator")
         return available
 
@@ -460,7 +467,8 @@ def _validate_float_like(value: Tensor, reference: Tensor, name: str) -> None:
         raise ValueError(f"{name} must be a floating-point tensor")
     if value.device != reference.device or value.dtype != reference.dtype:
         raise ValueError(f"{name} must match parent query device and dtype")
-    if not torch.isfinite(value).all():
+    if (tensor_value_checks_enabled(reference)
+            and not torch.isfinite(value).all()):
         raise ValueError(f"{name} must contain only finite values")
 
 

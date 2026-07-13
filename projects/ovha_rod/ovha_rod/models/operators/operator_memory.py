@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
+from .tensor_validation import tensor_value_checks_enabled
+
 
 @dataclass(frozen=True)
 class OperatorMemoryState:
@@ -18,7 +20,8 @@ class OperatorMemoryState:
             raise ValueError("memory value must have shape [B,Q,D]")
         if not self.value.is_floating_point():
             raise ValueError("memory value must be floating point")
-        if not torch.isfinite(self.value).all():
+        if (tensor_value_checks_enabled(self.value)
+                and not torch.isfinite(self.value).all()):
             raise ValueError("memory value must contain only finite values")
         if not isinstance(self.step, int) or self.step < 0:
             raise ValueError("memory step must be a non-negative integer")
@@ -93,5 +96,6 @@ class OperatorMemory(nn.Module):
             raise ValueError("query must have shape [B,Q,D]")
         if not query.is_floating_point():
             raise ValueError("query must be floating point")
-        if not torch.isfinite(query).all():
+        if (tensor_value_checks_enabled(query)
+                and not torch.isfinite(query).all()):
             raise ValueError("query must contain only finite values")

@@ -4,6 +4,8 @@ import math
 
 import torch
 from torch import Tensor, nn
+
+from .tensor_validation import tensor_value_checks_enabled
 import torch.nn.functional as F
 
 from .decoder_contracts import DecoderOperatorResidual
@@ -150,10 +152,13 @@ class QuerySpatialRelationOperator(nn.Module):
             raise ValueError("valid and query must share a device")
         if any(value.dtype != query.dtype for value in values[1:]):
             raise ValueError("operator inputs must share a dtype")
-        if not all(torch.isfinite(value).all() for value in values):
-            raise ValueError("operator inputs must contain only finite values")
-        if not bool(((boxes >= 0.0) & (boxes <= 1.0)).all()):
-            raise ValueError("boxes must contain normalized cxcywh values")
+        if tensor_value_checks_enabled(query):
+            if not all(torch.isfinite(value).all() for value in values):
+                raise ValueError(
+                    "operator inputs must contain only finite values")
+            if not bool(((boxes >= 0.0) & (boxes <= 1.0)).all()):
+                raise ValueError(
+                    "boxes must contain normalized cxcywh values")
 
 
 QSRO = QuerySpatialRelationOperator

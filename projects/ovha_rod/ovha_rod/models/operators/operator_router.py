@@ -6,6 +6,8 @@ from typing import Optional
 import torch
 from torch import Tensor, nn
 
+from .tensor_validation import tensor_value_checks_enabled
+
 
 @dataclass(frozen=True)
 class OperatorRouterResult:
@@ -67,7 +69,9 @@ class OperatorRouter(nn.Module):
 
         available = self._expanded_availability(logits, operator_available)
         valid_available = available[valid]
-        if valid_available.numel() and not valid_available.any(dim=-1).all():
+        if (tensor_value_checks_enabled(valid_available)
+                and valid_available.numel()
+                and not valid_available.any(dim=-1).all()):
             raise ValueError("each valid query must have an available operator")
 
         safe_available = torch.where(
@@ -106,7 +110,8 @@ class OperatorRouter(nn.Module):
             raise ValueError("query and memory must share device and dtype")
         if valid.device != query.device:
             raise ValueError("valid must share the query device")
-        if any(not torch.isfinite(value).all() for value in tensors):
+        if (tensor_value_checks_enabled(query)
+                and any(not torch.isfinite(value).all() for value in tensors)):
             raise ValueError("router inputs must contain only finite values")
         expected = (*query.shape[:2], self.operator_count)
         if reliability_log_prior is not None:
@@ -115,7 +120,8 @@ class OperatorRouter(nn.Module):
             if (reliability_log_prior.device != query.device
                     or reliability_log_prior.dtype != query.dtype):
                 raise ValueError("reliability_log_prior must match query")
-            if not torch.isfinite(reliability_log_prior).all():
+            if (tensor_value_checks_enabled(reliability_log_prior)
+                    and not torch.isfinite(reliability_log_prior).all()):
                 raise ValueError("reliability_log_prior must be finite")
         if operator_available is not None:
             allowed_shapes = ((self.operator_count,), expected)

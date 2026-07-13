@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
+from .tensor_validation import tensor_value_checks_enabled
+
 
 @dataclass(frozen=True)
 class RCEOResult:
@@ -87,5 +89,6 @@ class RCEO(nn.Module):
             raise ValueError("RCEO tensors must share device and dtype")
         if valid.device != query.device:
             raise ValueError("valid must share the query device")
-        if any(not torch.isfinite(value).all() for value in tensors):
+        if (tensor_value_checks_enabled(query)
+                and any(not torch.isfinite(value).all() for value in tensors)):
             raise ValueError("RCEO inputs must contain only finite values")

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -16,10 +15,15 @@ from mmdet.models.layers.transformer.utils import (
 from ..operators.generic_seed import (
     GenericDenseSeedPredictor, matched_generic_hidden_dim)
 from ..operators.base import SeedResult, memory_valid_mask
-from ..operators.decoder_contracts import DecoderOperatorResidual
+from ..operators.decoder_bank import (
+    DecoderOperatorBank,
+    DecoderOperatorContext,
+)
+from ..operators.decoder_contracts import DecoderResidualState
 from ..operators.decoder_integration import (
-    apply_matching_query_residual,
+    integrate_matching_query_state,
     stack_decoder_operator_outputs,
+    summarize_decoder_bank_outputs,
 )
 from ..operators.rqgo import RQGO
 from ..role_encoder import LatentRoleEncoder
@@ -133,9 +137,45 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
         else:
             self.role_encoder = None
             self.seed_operator = None
-        self.decoder_operator: Optional[nn.Module] = (
-            None if decoder_cfg is None else MODELS.build(decoder_cfg)
+        if decoder_cfg is not None:
+            decoder_cfg = {
+                "d_model": self.embed_dims,
+                "num_layers": self.decoder.num_layers,
+                **decoder_cfg,
+            }
+        self.decoder_operator: Optional[DecoderOperatorBank] = (
+            None
+            if decoder_cfg is None
+            else DecoderOperatorBank(**decoder_cfg)
         )
+
+    def forward_transformer(
+        self,
+        img_feats: Tuple[Tensor],
+        text_dict: Dict,
+        batch_data_samples: OptSampleList = None,
+    ) -> Dict:
+        """Forward raw neck maps only when the decoder bank is enabled."""
+        if self.decoder_operator is None:
+            return super().forward_transformer(
+                img_feats=img_feats,
+                text_dict=text_dict,
+                batch_data_samples=batch_data_samples,
+            )
+
+        encoder_inputs_dict, decoder_inputs_dict = self.pre_transformer(
+            img_feats, batch_data_samples)
+        encoder_outputs_dict = self.forward_encoder(
+            **encoder_inputs_dict, text_dict=text_dict)
+        tmp_dec_in, head_inputs_dict = self.pre_decoder(
+            **encoder_outputs_dict,
+            batch_data_samples=batch_data_samples,
+        )
+        decoder_inputs_dict.update(tmp_dec_in)
+        decoder_inputs_dict.update(feature_maps=tuple(img_feats))
+        decoder_outputs_dict = self.forward_decoder(**decoder_inputs_dict)
+        head_inputs_dict.update(decoder_outputs_dict)
+        return head_inputs_dict
 
     def forward_decoder(
         self,
@@ -147,9 +187,16 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
         level_start_index: Tensor,
         valid_ratios: Tensor,
         dn_mask: Optional[Tensor] = None,
+        memory_text: Optional[Tensor] = None,
+        text_attention_mask: Optional[Tensor] = None,
+        feature_maps: Tuple[Tensor, ...] = (),
+        relation_role: Optional[Tensor] = None,
+        text_valid: Optional[Tensor] = None,
+        operator_available: Optional[Tensor] = None,
         **kwargs,
     ) -> Dict:
         """Run the pinned DINO loop with optional matching-query operators."""
+        self.last_decoder_operator_diagnostics = {}
         if self.decoder_operator is None:
             return super().forward_decoder(
                 query=query,
@@ -160,12 +207,18 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
                 level_start_index=level_start_index,
                 valid_ratios=valid_ratios,
                 dn_mask=dn_mask,
+                memory_text=memory_text,
+                text_attention_mask=text_attention_mask,
                 **kwargs,
             )
 
         intermediate = []
         intermediate_reference_points = [reference_points]
         operator_outputs = []
+        bank_outputs = []
+        memory_state = None
+        matching_referent_score = query.new_zeros(
+            query.shape[0], self.num_queries)
         reg_branches = self.bbox_head.reg_branches
         for lid, layer in enumerate(self.decoder.layers):
             if reference_points.shape[-1] == 4:
@@ -189,6 +242,8 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
                 level_start_index=level_start_index,
                 valid_ratios=valid_ratios,
                 reference_points=reference_points_input,
+                memory_text=memory_text,
+                text_attention_mask=text_attention_mask,
                 **kwargs,
             )
             tmp = reg_branches[lid](query)
@@ -196,23 +251,49 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
                 raise ValueError(
                     "operator decoder integration requires 4D references")
             parent_box_logits = tmp + inverse_sigmoid(reference_points, eps=1e-3)
-            operator_result = self.decoder_operator(
-                query=query[:, -self.num_queries:, :],
-                reference_points=reference_points[:, -self.num_queries:, :],
-                parent_box_logits=parent_box_logits[:, -self.num_queries:, :],
-                memory=memory,
-                memory_mask=memory_mask,
-                memory_text=kwargs.get("memory_text"),
-                text_attention_mask=kwargs.get("text_attention_mask"),
-                spatial_shapes=spatial_shapes,
-                layer_index=lid,
+            matching_query = query[:, -self.num_queries:, :]
+            matching_parent_logits = parent_box_logits[
+                :, -self.num_queries:, :]
+            matching_valid = torch.ones(
+                matching_query.shape[:2],
+                dtype=torch.bool,
+                device=matching_query.device,
             )
-            residuals = _decoder_operator_residuals(operator_result)
-            integration = apply_matching_query_residual(
+            parent_state = DecoderResidualState(
+                query=matching_query,
+                box_logits=matching_parent_logits,
+                referent_score=matching_referent_score,
+            )
+            decoder_context = DecoderOperatorContext(
+                parent=parent_state,
+                boxes=matching_parent_logits.sigmoid(),
+                valid=matching_valid,
+                layer_index=lid,
+                relation_role=relation_role,
+                text=memory_text,
+                text_valid=text_valid,
+                feature_maps=feature_maps,
+                valid_ratios=valid_ratios,
+                memory_state=memory_state,
+                operator_available=operator_available,
+            )
+            bank_output = self.decoder_operator(decoder_context)
+            bank_outputs.append(bank_output)
+            memory_state = bank_output.memory_state
+            matching_referent_score = bank_output.fused.referent_score
+            prefix_count = query.shape[1] - self.num_queries
+            fused_query = torch.cat(
+                (query[:, :prefix_count, :], bank_output.fused.query), dim=1)
+            fused_query_parent_box_logits = (
+                reg_branches[lid](fused_query)
+                + inverse_sigmoid(reference_points, eps=1e-3)
+            )
+            integration = integrate_matching_query_state(
                 query=query,
                 parent_box_logits=parent_box_logits,
-                residual=residuals,
+                fused_matching_state=bank_output.fused,
                 matching_query_count=self.num_queries,
+                fused_query_parent_box_logits=fused_query_parent_box_logits,
             )
             query = integration.query
             new_reference_points = integration.reference_points
@@ -234,6 +315,8 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
         operator_box_deltas, operator_referent_scores = (
             stack_decoder_operator_outputs(operator_outputs)
         )
+        self.last_decoder_operator_diagnostics = summarize_decoder_bank_outputs(
+            bank_outputs)
         return dict(
             hidden_states=inter_states,
             references=list(references),
@@ -271,13 +354,15 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
         # Keep this expression byte-for-byte recognizable in static audits:
         # zero-init must reproduce the pinned parent's token-max Top-K.
         dense_base_score = enc_outputs_class.max(-1)[0]
-        seed_result, role_attention = self._forward_seed_operator(
-            output_memory=output_memory,
-            dense_boxes=dense_enc_outputs_coord,
-            memory_text=memory_text,
-            text_token_mask=text_token_mask,
-            memory_mask=memory_mask,
-            spatial_shapes=spatial_shapes,
+        seed_result, role_attention, relation_role = (
+            self._forward_seed_operator(
+                output_memory=output_memory,
+                dense_boxes=dense_enc_outputs_coord,
+                memory_text=memory_text,
+                text_token_mask=text_token_mask,
+                memory_mask=memory_mask,
+                spatial_shapes=spatial_shapes,
+            )
         )
         finite_boxes = torch.isfinite(enc_outputs_coord_unact).all(dim=-1)
         seed_valid = seed_result.valid.to(dtype=torch.bool) & finite_boxes
@@ -357,6 +442,11 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
             memory_text=memory_text,
             text_attention_mask=~text_token_mask,
         )
+        if self.decoder_operator is not None:
+            decoder_inputs_dict.update(
+                relation_role=relation_role,
+                text_valid=text_token_mask,
+            )
         head_inputs_dict = (
             dict(
                 enc_outputs_class=topk_score,
@@ -392,7 +482,9 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
         if self.seed_operator_name == "none":
             zeros = output_memory.new_zeros(valid.shape)
             result = SeedResult(zeros, zeros, valid, {})
-            return result, None
+            relation_role = _masked_text_mean(
+                memory_text, text_token_mask)
+            return result, None, relation_role
         if self.seed_operator_name == "rqgo":
             role_state = self.role_encoder(memory_text, text_token_mask)
             result = self.seed_operator(
@@ -402,7 +494,8 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
                 spatial_shapes,
                 memory_mask,
             )
-            return result, role_state.attention
+            relation_role = role_state.vectors[:, -1, :]
+            return result, role_state.attention, relation_role
 
         pooled_text = _masked_text_mean(memory_text, text_token_mask)
         level_ids = _flattened_level_ids(
@@ -415,34 +508,12 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
             level_ids,
             memory_mask,
         )
-        return result, None
+        return result, None, pooled_text
 
 
 def _masked_text_mean(memory_text: Tensor, text_token_mask: Tensor) -> Tensor:
     mask = text_token_mask.to(dtype=memory_text.dtype).unsqueeze(-1)
     return (memory_text * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
-
-
-def _decoder_operator_residuals(output) -> Tuple[DecoderOperatorResidual, ...]:
-    if isinstance(output, DecoderOperatorResidual):
-        return (output,)
-    if hasattr(output, "residual"):
-        return _decoder_operator_residuals(output.residual)
-    if isinstance(output, Mapping):
-        if "residuals" in output:
-            return _decoder_operator_residuals(output["residuals"])
-        if "residual" in output:
-            return _decoder_operator_residuals(output["residual"])
-    if isinstance(output, Sequence) and not isinstance(output, (str, bytes)):
-        residuals = tuple(
-            residual
-            for item in output
-            for residual in _decoder_operator_residuals(item)
-        )
-        if residuals:
-            return residuals
-    raise TypeError(
-        "decoder operator must return DecoderOperatorResidual values")
 
 
 def _flattened_level_ids(

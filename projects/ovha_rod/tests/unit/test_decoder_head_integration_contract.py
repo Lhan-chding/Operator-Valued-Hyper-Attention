@@ -38,6 +38,8 @@ class DecoderDetectorStaticContractTests(unittest.TestCase):
             "DecoderResidualState(",
             "feature_maps=feature_maps",
             "valid_ratios=valid_ratios",
+            "boxes=matching_parent_logits.sigmoid()",
+            "fused_query_parent_box_logits=fused_query_parent_box_logits",
             "relation_role=relation_role",
             "text=memory_text",
             "text_valid=text_valid",
@@ -66,6 +68,45 @@ class DecoderDetectorStaticContractTests(unittest.TestCase):
             source.index("for lid, layer in enumerate(self.decoder.layers):"),
         )
 
+    def test_disabled_pre_decoder_does_not_emit_bank_only_arguments(self):
+        source = _method_source(
+            DETECTOR, "OVHAGroundingDINO", "pre_decoder")
+        self.assertIn("if self.decoder_operator is not None:", source)
+        self.assertIn("decoder_inputs_dict.update(", source)
+        unconditional = source[:source.index("if self.decoder_operator is not None:")]
+        self.assertNotIn("relation_role=relation_role", unconditional)
+        self.assertNotIn("text_valid=text_token_mask", unconditional)
+
+    def test_referent_score_is_recurrent_without_detach(self):
+        source = _method_source(
+            DETECTOR, "OVHAGroundingDINO", "forward_decoder")
+        initialize = source.index("matching_referent_score = query.new_zeros(")
+        parent = source.index("referent_score=matching_referent_score")
+        update = source.index(
+            "matching_referent_score = bank_output.fused.referent_score")
+        self.assertLess(initialize, parent)
+        self.assertLess(parent, update)
+        recurrence = source[parent:update + len(
+            "matching_referent_score = bank_output.fused.referent_score")]
+        self.assertNotIn("detach", recurrence)
+
+    def test_operator_diagnostics_are_collected_and_assigned_once(self):
+        source = _method_source(
+            DETECTOR, "OVHAGroundingDINO", "forward_decoder")
+        self.assertIn("self.last_decoder_operator_diagnostics = {}", source)
+        self.assertIn("bank_outputs.append(bank_output)", source)
+        method = _method(
+            DETECTOR, "OVHAGroundingDINO", "forward_decoder")
+        assignments = [
+            node
+            for node in ast.walk(method)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "summarize_decoder_bank_outputs"
+        ]
+        self.assertEqual(len(assignments), 1)
+
     def test_enabled_path_pins_and_reproduces_decoder_loop_without_wrapper(self):
         file_source = DETECTOR.read_text(encoding="utf-8")
         source = _method_source(
@@ -76,6 +117,7 @@ class DecoderDetectorStaticContractTests(unittest.TestCase):
             "coordinate_to_encoding(reference_points_input[:, :, 0, :])",
             "query_pos = self.decoder.ref_point_head(query_sine_embed)",
             "reg_branches[lid](query)",
+            "reg_branches[lid](fused_query)",
             "inverse_sigmoid(reference_points, eps=1e-3)",
             "reference_points = new_reference_points.detach()",
             "matching_query_count=self.num_queries",

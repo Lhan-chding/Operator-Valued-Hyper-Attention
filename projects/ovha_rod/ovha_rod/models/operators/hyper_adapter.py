@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
+from .tensor_validation import tensor_value_checks_enabled
+
 
 @dataclass(frozen=True)
 class HyperAdapterResult:
@@ -74,5 +76,7 @@ class LowRankHyperAdapter(nn.Module):
             raise ValueError("query and memory must share device and dtype")
         if valid.device != query.device:
             raise ValueError("valid must share the query device")
-        if not torch.isfinite(query).all() or not torch.isfinite(memory).all():
+        if (tensor_value_checks_enabled(query) and (
+                not torch.isfinite(query).all()
+                or not torch.isfinite(memory).all())):
             raise ValueError("adapter inputs must contain only finite values")

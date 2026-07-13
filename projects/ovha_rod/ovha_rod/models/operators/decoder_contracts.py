@@ -7,6 +7,8 @@ from typing import Mapping, Sequence
 import torch
 from torch import Tensor, nn
 
+from .tensor_validation import tensor_value_checks_enabled
+
 
 @dataclass(frozen=True)
 class DecoderResidualState:
@@ -74,7 +76,8 @@ class DecoderOperatorResidual:
         for name, value in diagnostics.items():
             if not isinstance(value, Tensor) or value.numel() != 1:
                 raise ValueError(f"diagnostic {name!r} must be a scalar tensor")
-            if not torch.isfinite(value).all():
+            if (tensor_value_checks_enabled(value)
+                    and not torch.isfinite(value).all()):
                 raise ValueError(f"diagnostic {name!r} must be finite")
         object.__setattr__(self, "diagnostics", MappingProxyType(diagnostics))
 
@@ -138,5 +141,6 @@ def _validate_float_tensors(
             raise ValueError(f"{name} must be floating point")
         if value.device != device or value.dtype != dtype:
             raise ValueError("structured tensors must share a device and dtype")
-        if not torch.isfinite(value).all():
+        if (tensor_value_checks_enabled(value)
+                and not torch.isfinite(value).all()):
             raise ValueError(f"{name} must contain only finite values")

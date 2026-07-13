@@ -8,7 +8,9 @@ from .decoder_contracts import (
 from .decoder_integration import (
     DecoderIntegrationResult,
     apply_matching_query_residual,
+    integrate_matching_query_state,
     stack_decoder_operator_outputs,
+    summarize_decoder_bank_outputs,
 )
 from .generic_seed import GenericDenseSeedPredictor, matched_generic_hidden_dim
 from .hyper_adapter import HyperAdapterResult, LowRankHyperAdapter
@@ -87,7 +89,9 @@ __all__ = [
     "RQGOResult",
     "StructuredResidualFusion",
     "apply_matching_query_residual",
+    "integrate_matching_query_state",
     "stack_decoder_operator_outputs",
+    "summarize_decoder_bank_outputs",
     "TQCATO",
     "TQCATOResult",
 ]
