@@ -20,12 +20,38 @@ from .rqgo import RQGO, RQGOResult
 from .tq_cato import TQCATO, TQCATOResult
 
 if TYPE_CHECKING:  # pragma: no cover - static imports only.
+    from .decoder_bank import (
+        OPERATOR_NAMES,
+        BankOutput,
+        DecoderOperatorBank,
+        DecoderOperatorContext,
+    )
     from .qsro import QSRO, QuerySpatialRelationOperator
 
 _LAZY_QSRO_EXPORTS = frozenset({"QSRO", "QuerySpatialRelationOperator"})
+_LAZY_BANK_EXPORTS = frozenset({
+    "OPERATOR_NAMES",
+    "BankOutput",
+    "DecoderOperatorBank",
+    "DecoderOperatorContext",
+})
 
 
 def __getattr__(name: str):
+    if name in _LAZY_BANK_EXPORTS:
+        from .decoder_bank import (
+            OPERATOR_NAMES,
+            BankOutput,
+            DecoderOperatorBank,
+            DecoderOperatorContext,
+        )
+        exports = {
+            "OPERATOR_NAMES": OPERATOR_NAMES,
+            "BankOutput": BankOutput,
+            "DecoderOperatorBank": DecoderOperatorBank,
+            "DecoderOperatorContext": DecoderOperatorContext,
+        }
+        return exports[name]
     if name in _LAZY_QSRO_EXPORTS:
         from .qsro import QSRO, QuerySpatialRelationOperator
         exports = {
@@ -36,8 +62,11 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
-    "DecoderOperatorResidual",
+    "BankOutput",
     "DecoderIntegrationResult",
+    "DecoderOperatorBank",
+    "DecoderOperatorContext",
+    "DecoderOperatorResidual",
     "DecoderResidualState",
     "GenericDenseSeedPredictor",
     "HyperAdapterResult",
@@ -47,6 +76,7 @@ __all__ = [
     "OperatorMemoryState",
     "OperatorRouter",
     "OperatorRouterResult",
+    "OPERATOR_NAMES",
     "RCEO",
     "RCEOResult",
     "QSRO",
