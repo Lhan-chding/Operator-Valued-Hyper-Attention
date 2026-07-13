@@ -7,6 +7,7 @@ from .generic_seed import GenericDenseSeedPredictor, matched_generic_hidden_dim
 from .hyper_adapter import HyperAdapterResult, LowRankHyperAdapter
 from .operator_memory import OperatorMemory, OperatorMemoryState
 from .operator_router import OperatorRouter, OperatorRouterResult
+from .qsro import QSRO, QuerySpatialRelationOperator
 from .relation_fields import RELATION_TYPES, RelationFieldBank
 from .rceo import RCEO, RCEOResult
 from .rqgo import RQGO, RQGOResult
@@ -24,6 +25,8 @@ __all__ = [
     "OperatorRouterResult",
     "RCEO",
     "RCEOResult",
+    "QSRO",
+    "QuerySpatialRelationOperator",
     "RELATION_TYPES",
     "RelationFieldBank",
     "RQGO",

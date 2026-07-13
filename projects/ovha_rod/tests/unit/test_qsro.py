@@ -98,10 +98,14 @@ class QuerySpatialRelationOperatorTests(unittest.TestCase):
             changed.box_delta[self.valid], baseline.box_delta[self.valid])
         torch.testing.assert_close(
             changed.score_delta[self.valid], baseline.score_delta[self.valid])
-        self.assertEqual(float(changed.query_delta[~self.valid].abs().sum()), 0.0)
-        self.assertEqual(float(changed.box_delta[~self.valid].abs().sum()), 0.0)
-        self.assertEqual(float(changed.score_delta[~self.valid].abs().sum()), 0.0)
-        self.assertEqual(float(changed.gate_logits[~self.valid].abs().sum()), 0.0)
+        self.assertEqual(
+            changed.query_delta[~self.valid].detach().abs().sum().item(), 0.0)
+        self.assertEqual(
+            changed.box_delta[~self.valid].detach().abs().sum().item(), 0.0)
+        self.assertEqual(
+            changed.score_delta[~self.valid].detach().abs().sum().item(), 0.0)
+        self.assertEqual(
+            changed.gate_logits[~self.valid].detach().abs().sum().item(), 0.0)
 
     def test_single_and_zero_valid_query_samples_are_finite_and_masked(self):
         valid = torch.tensor(
@@ -119,10 +123,14 @@ class QuerySpatialRelationOperatorTests(unittest.TestCase):
             *result.diagnostics.values(),
         ):
             self.assertTrue(torch.isfinite(value).all())
-        self.assertEqual(float(result.query_delta[~valid].abs().sum()), 0.0)
-        self.assertEqual(float(result.box_delta[~valid].abs().sum()), 0.0)
-        self.assertEqual(float(result.score_delta[~valid].abs().sum()), 0.0)
-        self.assertEqual(float(result.gate_logits[~valid].abs().sum()), 0.0)
+        self.assertEqual(
+            result.query_delta[~valid].detach().abs().sum().item(), 0.0)
+        self.assertEqual(
+            result.box_delta[~valid].detach().abs().sum().item(), 0.0)
+        self.assertEqual(
+            result.score_delta[~valid].detach().abs().sum().item(), 0.0)
+        self.assertEqual(
+            result.gate_logits[~valid].detach().abs().sum().item(), 0.0)
 
     def test_zero_initialized_gate_is_exact_structured_fusion_noop(self):
         result = self._forward()
@@ -134,7 +142,7 @@ class QuerySpatialRelationOperatorTests(unittest.TestCase):
 
         fused = StructuredResidualFusion()(parent, (result,))
 
-        self.assertEqual(float(result.gate_logits.abs().sum()), 0.0)
+        self.assertEqual(result.gate_logits.detach().abs().sum().item(), 0.0)
         self.assertTrue(torch.equal(fused.query, parent.query))
         self.assertTrue(torch.equal(fused.box_logits, parent.box_logits))
         self.assertTrue(torch.equal(
@@ -182,7 +190,7 @@ class QuerySpatialRelationOperatorTests(unittest.TestCase):
             + (positive.box_delta - negative.box_delta).abs().sum()
             + (positive.score_delta - negative.score_delta).abs().sum()
         )
-        self.assertGreater(float(difference), 0.0)
+        self.assertGreater(difference.detach().item(), 0.0)
 
     def test_public_boundary_rejects_invalid_shapes_values_and_dtypes(self):
         cases = (
