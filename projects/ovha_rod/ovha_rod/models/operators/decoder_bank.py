@@ -291,28 +291,34 @@ class DecoderOperatorBank(nn.Module):
         residuals: dict[str, DecoderOperatorResidual] = {}
         artifacts: dict[str, Tensor] = {}
         if "qsro" in active:
+            operator_valid = availability[..., 0]
             raw = self.qsro(
                 context.parent.query,
                 context.boxes,
                 context.relation_role,
-                context.valid,
+                operator_valid,
             )
             residuals["qsro"] = self._adapt(raw, 0, availability, router, adapter)
         if "tq_cato" in active:
+            operator_valid = availability[..., 1]
+            safe_query_valid, safe_text_valid, active_samples = _safe_tq_masks(
+                operator_valid, context.text_valid)
             result = self.tq_cato(
                 context.parent.query,
                 context.text,
-                context.valid,
-                context.text_valid,
+                safe_query_valid,
+                safe_text_valid,
             )
             residuals["tq_cato"] = self._adapt(
                 result.residual, 1, availability, router, adapter)
-            artifacts["tq_cato_transport"] = result.transport
+            artifacts["tq_cato_transport"] = result.transport * active_samples[
+                :, None, None].to(dtype=result.transport.dtype)
         if "ms_tleo" in active:
+            operator_valid = availability[..., 2]
             raw = self.ms_tleo(
                 context.feature_maps,
                 context.boxes,
-                context.valid,
+                operator_valid,
                 valid_ratios=context.valid_ratios,
             )
             residuals["ms_tleo"] = self._adapt(
@@ -391,8 +397,8 @@ class DecoderOperatorBank(nn.Module):
         ) * weight[..., None]
         box_delta = residual.box_delta * weight[..., None]
         score_delta = residual.score_delta * weight
-        gate_logits = (
-            residual.gate_logits + adapter.channel_delta[..., index, :])
+        gate_logits = residual.gate_logits * (
+            1.0 + adapter.channel_delta[..., index, :])
         diagnostics = dict(residual.diagnostics)
         diagnostics["router_weight_mean"] = _masked_mean(weight, valid)
         return DecoderOperatorResidual(
@@ -442,6 +448,24 @@ def _neutral_adapter(query: Tensor) -> HyperAdapterResult:
         scale=query.new_zeros((*base, query.shape[-1])),
         shift=query.new_zeros((*base, query.shape[-1])),
         channel_delta=query.new_zeros((*base, 3)),
+    )
+
+
+def _safe_tq_masks(
+    operator_valid: Tensor, text_valid: Tensor
+) -> tuple[Tensor, Tensor, Tensor]:
+    active_samples = operator_valid.any(dim=-1)
+    query_fallback = (
+        torch.arange(operator_valid.shape[1], device=operator_valid.device)
+        == 0
+    ).view(1, -1).expand_as(operator_valid)
+    text_fallback = (
+        torch.arange(text_valid.shape[1], device=text_valid.device) == 0
+    ).view(1, -1).expand_as(text_valid)
+    return (
+        torch.where(active_samples[:, None], operator_valid, query_fallback),
+        torch.where(active_samples[:, None], text_valid, text_fallback),
+        active_samples,
     )
 
 
