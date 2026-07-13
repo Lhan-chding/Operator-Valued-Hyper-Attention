@@ -4,10 +4,12 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import torch
 
 import ovha_rod.models.operators as operator_exports
+from ovha_rod.models.operators import qsro as qsro_module
 from ovha_rod.models.operators.decoder_contracts import (
     DecoderResidualState,
     StructuredResidualFusion,
@@ -262,6 +264,152 @@ class QuerySpatialRelationOperatorTests(unittest.TestCase):
             with self.subTest(shape=tuple(query.shape)):
                 with self.assertRaisesRegex(ValueError, "non-empty"):
                     self.operator(query, boxes, role, valid)
+
+    def test_query_chunk_size_accepts_none_or_strictly_positive_integer(self):
+        for chunk_size in (None, 1, 3):
+            with self.subTest(chunk_size=chunk_size):
+                operator = QuerySpatialRelationOperator(
+                    d_model=self.d_model,
+                    query_chunk_size=chunk_size,
+                )
+                self.assertEqual(operator.query_chunk_size, chunk_size)
+
+        for chunk_size in (True, False, 0, -1, 1.0, "2"):
+            with self.subTest(chunk_size=chunk_size):
+                with self.assertRaisesRegex(
+                    ValueError, "query_chunk_size.*positive integer"
+                ):
+                    QuerySpatialRelationOperator(
+                        d_model=self.d_model,
+                        query_chunk_size=chunk_size,
+                    )
+
+    def test_target_query_chunking_bounds_pairwise_geometry_peak(self):
+        observed_target_widths = []
+        dense_geometry = qsro_module._pairwise_box_geometry
+
+        def recording_geometry(
+            boxes, *, target_start=0, target_end=None
+        ):
+            resolved_end = boxes.shape[1] if target_end is None else target_end
+            observed_target_widths.append(resolved_end - target_start)
+            return dense_geometry(
+                boxes,
+                target_start=target_start,
+                target_end=target_end,
+            )
+
+        operator = QuerySpatialRelationOperator(
+            d_model=self.d_model,
+            query_chunk_size=2,
+        )
+        operator.load_state_dict(self.operator.state_dict())
+        with mock.patch.object(
+            qsro_module,
+            "_pairwise_box_geometry",
+            side_effect=recording_geometry,
+        ):
+            result = operator(
+                self.query,
+                self.boxes,
+                self.relation_role,
+                self.valid,
+            )
+
+        self.assertEqual(observed_target_widths, [2, 2])
+        self.assertEqual(tuple(result.query_delta.shape), (2, 4, 16))
+
+    def test_chunked_outputs_and_gradients_match_dense_execution(self):
+        dense = QuerySpatialRelationOperator(
+            d_model=self.d_model,
+            query_chunk_size=None,
+        ).double()
+        chunked = QuerySpatialRelationOperator(
+            d_model=self.d_model,
+            query_chunk_size=2,
+        ).double()
+        chunked.load_state_dict(dense.state_dict())
+
+        dense_inputs = (
+            self.query.double().clone().requires_grad_(True),
+            self.boxes.double().clone().requires_grad_(True),
+            self.relation_role.double().clone().requires_grad_(True),
+        )
+        chunked_inputs = tuple(
+            value.detach().clone().requires_grad_(True)
+            for value in dense_inputs
+        )
+
+        dense_result = dense(*dense_inputs, self.valid)
+        chunked_result = chunked(*chunked_inputs, self.valid)
+        for dense_value, chunked_value in zip(
+            (
+                dense_result.query_delta,
+                dense_result.box_delta,
+                dense_result.score_delta,
+                dense_result.gate_logits,
+            ),
+            (
+                chunked_result.query_delta,
+                chunked_result.box_delta,
+                chunked_result.score_delta,
+                chunked_result.gate_logits,
+            ),
+        ):
+            torch.testing.assert_close(
+                chunked_value, dense_value, rtol=1e-10, atol=1e-12)
+        self.assertEqual(
+            chunked_result.diagnostics.keys(),
+            dense_result.diagnostics.keys(),
+        )
+        for name, dense_value in dense_result.diagnostics.items():
+            torch.testing.assert_close(
+                chunked_result.diagnostics[name],
+                dense_value,
+                rtol=1e-10,
+                atol=1e-12,
+            )
+
+        def objective(result):
+            return (
+                0.7 * result.query_delta.sum()
+                + 0.5 * result.box_delta.sum()
+                + 0.3 * result.score_delta.sum()
+                + 0.2 * result.gate_logits.sum()
+                + 0.1 * result.diagnostics[
+                    "qsro_attention_entropy"
+                ]
+                + 0.05 * result.diagnostics[
+                    "qsro_contrast_abs_mean"
+                ]
+            )
+
+        objective(dense_result).backward()
+        objective(chunked_result).backward()
+
+        for dense_input, chunked_input in zip(dense_inputs, chunked_inputs):
+            self.assertIsNotNone(dense_input.grad)
+            self.assertIsNotNone(chunked_input.grad)
+            torch.testing.assert_close(
+                chunked_input.grad,
+                dense_input.grad,
+                rtol=1e-9,
+                atol=1e-11,
+            )
+        for (dense_name, dense_parameter), (
+            chunked_name,
+            chunked_parameter,
+        ) in zip(dense.named_parameters(), chunked.named_parameters()):
+            self.assertEqual(chunked_name, dense_name)
+            self.assertIsNotNone(dense_parameter.grad, msg=dense_name)
+            self.assertIsNotNone(chunked_parameter.grad, msg=chunked_name)
+            torch.testing.assert_close(
+                chunked_parameter.grad,
+                dense_parameter.grad,
+                rtol=1e-9,
+                atol=1e-11,
+                msg=dense_name,
+            )
 
     def test_forward_accepts_only_inference_available_inputs(self):
         parameter_names = tuple(
