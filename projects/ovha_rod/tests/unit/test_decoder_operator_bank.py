@@ -18,6 +18,9 @@ from ovha_rod.models.operators.decoder_bank import (
 )
 from ovha_rod.models.operators.decoder_contracts import DecoderResidualState
 from ovha_rod.models.operators.operator_memory import OperatorMemoryState
+from ovha_rod.models.operators.operator_router import OperatorRouterResult
+from ovha_rod.models.operators.hyper_adapter import HyperAdapterResult
+from ovha_rod.models.operators.rceo import RCEOResult
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -141,14 +144,20 @@ class DecoderOperatorBankTests(unittest.TestCase):
 
         availability = torch.tensor([False, True, True])
         dynamic = self._bank()(self._context(
-            relation_role=None,
             operator_available=availability,
         ))
-        self.assertNotIn("qsro", dynamic.residuals)
+        self.assertIn("qsro", dynamic.residuals)
+        self.assertFalse(dynamic.residuals["qsro"].valid.any())
         self.assertTrue(torch.equal(
             dynamic.router.weights[..., 0],
             torch.zeros_like(dynamic.router.weights[..., 0]),
         ))
+
+        with self.assertRaisesRegex(ValueError, "relation_role.*qsro"):
+            self._bank()(self._context(
+                relation_role=None,
+                operator_available=availability,
+            ))
 
     def test_requested_operator_without_inputs_and_all_unavailable_fail_fast(self):
         with self.assertRaisesRegex(ValueError, "relation_role.*qsro"):
@@ -332,7 +341,25 @@ class DecoderOperatorBankTests(unittest.TestCase):
         expected = torch.where(
             self.valid[..., None], expected, torch.zeros_like(expected))
         self.assertTrue(torch.equal(output.router.weights, expected))
-        self.assertNotIn("tq_cato", output.residuals)
+        self.assertIn("tq_cato", output.residuals)
+        self.assertFalse(output.residuals["tq_cato"].valid.any())
+        self.assertTrue(torch.equal(
+            output.artifacts["tq_cato_transport"],
+            torch.zeros_like(output.artifacts["tq_cato_transport"]),
+        ))
+
+    def test_dynamic_availability_keeps_static_module_execution_graph(self):
+        bank = self._bank()
+        availability = torch.ones(2, 4, 3, dtype=torch.bool)
+        availability[..., 0] = False
+        with mock.patch.object(
+            bank.qsro, "forward", wraps=bank.qsro.forward
+        ) as qsro_forward:
+            output = bank(self._context(operator_available=availability))
+
+        qsro_forward.assert_called_once()
+        self.assertEqual(tuple(output.residuals), OPERATOR_NAMES)
+        self.assertFalse(output.residuals["qsro"].valid.any())
 
     def test_each_disabled_infrastructure_module_is_not_executed(self):
         cases = (
@@ -420,9 +447,6 @@ class DecoderOperatorBankTests(unittest.TestCase):
             output.fused.query.square().mean()
             + output.fused.box_logits.square().mean()
             + output.fused.referent_score.square().mean()
-            + output.router.weights.square().mean()
-            + output.memory_state.value.square().mean()
-            + output.reliability.log_prior.square().mean()
         )
         loss.backward()
 
@@ -443,6 +467,8 @@ class DecoderOperatorBankTests(unittest.TestCase):
         self.assertTrue(all(gradient is not None for gradient in gradients))
         self.assertTrue(all(torch.isfinite(gradient).all()
                             for gradient in gradients))
+        self.assertTrue(all(gradient.abs().sum().detach().item() > 0
+                            for gradient in gradients[-7:]))
 
     def test_public_boundary_is_inference_only_and_fail_fast(self):
         self.assertEqual(
@@ -495,6 +521,46 @@ class DecoderOperatorBankTests(unittest.TestCase):
             replace(output, artifacts={"bad": object()})
         with self.assertRaisesRegex(ValueError, "availability"):
             replace(output, availability=torch.ones(2, 4, 2, dtype=torch.bool))
+
+        wrong_residual = replace(
+            output.residuals["qsro"],
+            query_delta=torch.zeros(2, 3, self.d_model),
+            box_delta=torch.zeros(2, 3, 4),
+            score_delta=torch.zeros(2, 3),
+            gate_logits=torch.zeros(2, 3, 3),
+            valid=torch.ones(2, 3, dtype=torch.bool),
+        )
+        with self.assertRaisesRegex(ValueError, "residual.*shape"):
+            replace(output, residuals={"qsro": wrong_residual})
+
+        bad_router = OperatorRouterResult(
+            weights=torch.full_like(output.router.weights, float("nan")),
+            logits=torch.zeros(2, 4, 3),
+        )
+        with self.assertRaisesRegex(ValueError, "router.*finite"):
+            replace(output, router=bad_router)
+        wrong_router = OperatorRouterResult(
+            weights=torch.zeros(2, 4, 3), logits=torch.zeros(9))
+        with self.assertRaisesRegex(ValueError, "router.*shape"):
+            replace(output, router=wrong_router)
+
+        bad_reliability = RCEOResult(
+            reliability=torch.zeros(2, 4, 2),
+            log_prior=torch.zeros(2, 4, 2),
+        )
+        with self.assertRaisesRegex(ValueError, "reliability.*shape"):
+            replace(output, reliability=bad_reliability)
+        bad_adaptation = HyperAdapterResult(
+            scale=torch.zeros(2, 4, 3, 7),
+            shift=torch.zeros(2, 4, 3, 7),
+            channel_delta=torch.zeros(2, 4, 3, 3),
+        )
+        with self.assertRaisesRegex(ValueError, "adaptation.*shape"):
+            replace(output, adaptation=bad_adaptation)
+        bad_memory = OperatorMemoryState(
+            value=torch.zeros(2, 3, self.d_model), step=0)
+        with self.assertRaisesRegex(ValueError, "memory_state.*shape"):
+            replace(output, memory_state=bad_memory)
 
     def test_lazy_exports_and_formal_integration_remain_isolated(self):
         self.assertIs(operator_exports.DecoderOperatorBank, DecoderOperatorBank)
