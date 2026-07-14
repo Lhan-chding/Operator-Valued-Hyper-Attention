@@ -94,6 +94,9 @@ class TQCATO(nn.Module):
             transport
             * transport.clamp_min(torch.finfo(query.dtype).tiny).log()
         ).sum(dim=-1)
+        entropy = entropy.masked_fill(~text_valid, 0.0)
+        entropy_mean = entropy.sum() / text_valid.sum().clamp_min(1).to(
+            dtype=entropy.dtype)
         residual = DecoderOperatorResidual(
             query_delta=query_delta,
             box_delta=query.new_zeros((*query.shape[:2], 4)),
@@ -102,7 +105,7 @@ class TQCATO(nn.Module):
             valid=query_valid,
             diagnostics={
                 "transport_row_error": row_error.amax(),
-                "transport_entropy": entropy[text_valid].mean(),
+                "transport_entropy": entropy_mean,
             },
         )
         return TQCATOResult(residual=residual, transport=transport)
@@ -114,14 +117,24 @@ class TQCATO(nn.Module):
         text_valid: Tensor,
     ) -> Tensor:
         query_mask = query_valid[:, None, :]
-        valid_pairs = query_mask & text_valid[..., None]
-        masked_logits = logits.masked_fill(~query_mask, -torch.inf)
+        has_query = query_valid.any(dim=-1, keepdim=True)
+        fallback_query = (
+            torch.arange(query_valid.shape[1], device=query_valid.device) == 0
+        ).view(1, 1, -1)
+        safe_query_mask = query_mask | (
+            ~has_query[:, :, None] & fallback_query)
+        minimum = torch.finfo(logits.dtype).min
+        masked_logits = logits.masked_fill(~safe_query_mask, minimum)
         row_maximum = masked_logits.amax(dim=-1, keepdim=True)
         weights = torch.exp(masked_logits - row_maximum)
+        valid_pairs = query_mask & text_valid[..., None]
         weights = weights * valid_pairs.to(dtype=logits.dtype)
         denominator = weights.sum(dim=-1, keepdim=True)
+        active_rows = text_valid & has_query
         denominator = torch.where(
-            text_valid[..., None], denominator, torch.ones_like(denominator)
+            active_rows[..., None],
+            denominator,
+            torch.ones_like(denominator),
         )
         return weights / denominator
 

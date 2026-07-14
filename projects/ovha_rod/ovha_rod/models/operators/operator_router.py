@@ -74,11 +74,19 @@ class OperatorRouter(nn.Module):
                 and not valid_available.any(dim=-1).all()):
             raise ValueError("each valid query must have an available operator")
 
+        has_available = available.any(dim=-1, keepdim=True)
         safe_available = torch.where(
-            valid[..., None], available, torch.ones_like(available))
+            valid[..., None] & has_available,
+            available,
+            torch.ones_like(available),
+        )
         masked_logits = logits.masked_fill(~safe_available, -torch.inf)
         weights = torch.softmax(masked_logits, dim=-1)
-        weights = torch.where(valid[..., None], weights, torch.zeros_like(weights))
+        weights = torch.where(
+            valid[..., None] & available,
+            weights,
+            torch.zeros_like(weights),
+        )
         visible_logits = torch.where(
             valid[..., None] & available,
             logits,

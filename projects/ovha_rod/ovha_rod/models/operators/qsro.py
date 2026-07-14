@@ -6,11 +6,10 @@ from typing import Optional
 
 import torch
 from torch import Tensor, nn
-
-from .tensor_validation import tensor_value_checks_enabled
 import torch.nn.functional as F
 
 from .decoder_contracts import DecoderOperatorResidual
+from .tensor_validation import tensor_value_checks_enabled
 
 
 _GEOMETRY_DIM = 8
