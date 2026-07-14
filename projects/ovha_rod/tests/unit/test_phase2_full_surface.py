@@ -14,6 +14,9 @@ CONFIG = (
 )
 RUNNER = ROOT / "scripts" / "run_phase2_full_server.sh"
 FREEZER = ROOT / "scripts" / "freeze_phase2_checkpoint.py"
+PREFLIGHT = ROOT / "scripts" / "phase2_preflight.py"
+SOURCE_COMMIT = "d93d2db25c6156b4ca5ebc352a3c89a4c6d06c96"
+TARGET_COMMIT = "a" * 40
 
 
 def _literal_assignment(path: Path, name: str):
@@ -67,6 +70,10 @@ class Phase2FullSurfaceTests(unittest.TestCase):
                 checkpoint,
                 "--bert-root",
                 "/private/bert",
+                "--expected-source-project-commit",
+                SOURCE_COMMIT,
+                "--target-project-commit",
+                TARGET_COMMIT,
                 "--work-root",
                 "/private/runs",
                 "--python",
@@ -87,11 +94,12 @@ class Phase2FullSurfaceTests(unittest.TestCase):
         )
 
     def test_phase2_files_exist_and_parse(self):
-        for path in (CONFIG, RUNNER, FREEZER):
+        for path in (CONFIG, RUNNER, FREEZER, PREFLIGHT):
             with self.subTest(path=path):
                 self.assertTrue(path.is_file())
         ast.parse(CONFIG.read_text(encoding="utf-8"))
         ast.parse(FREEZER.read_text(encoding="utf-8"))
+        ast.parse(PREFLIGHT.read_text(encoding="utf-8"))
         subprocess.run(
             ["bash", "-n", str(RUNNER)],
             check=True,
@@ -179,6 +187,16 @@ class Phase2FullSurfaceTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("epoch_2.pth", result.stderr)
+
+    def test_runner_requires_attested_source_and_runtime_commits(self):
+        source = RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("--expected-source-project-commit", source)
+        self.assertIn("--target-project-commit", source)
+        self.assertIn("phase2_preflight.py", source)
+        self.assertIn("unset PYTHONPATH PYTHONHOME", source)
+        self.assertIn("validate_local_bert", PREFLIGHT.read_text(encoding="utf-8"))
+        self.assertNotIn('WORK_ROOT="${PROJECT_DIR}', source)
 
 
 if __name__ == "__main__":
