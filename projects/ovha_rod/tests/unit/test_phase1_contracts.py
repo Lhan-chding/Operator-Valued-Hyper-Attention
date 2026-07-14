@@ -44,6 +44,7 @@ class StaticIntegrationContractTests(unittest.TestCase):
             ROOT / "scripts/port_guard.py",
             ROOT / "scripts/prepare_work_dir.py",
             ROOT / "scripts/resume_guard.py",
+            ROOT / "scripts/migrate_epoch_resume.py",
             ROOT / "scripts/run_lock.py",
             ROOT / "ovha_rod/runtime_contracts.py",
             ROOT / "ovha_rod/hooks/checkpoint_provenance_hook.py",
