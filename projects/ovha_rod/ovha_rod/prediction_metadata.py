@@ -27,9 +27,11 @@ def with_encoder_query_boxes(
 
 
 def get_encoder_query_boxes(
-    prediction: PredictionMetadataCarrier,
+    prediction: PredictionMetadataCarrier | Mapping[str, Any],
 ) -> Any | None:
-    """Read oracle boxes; consumers must move tensor metainfo explicitly."""
+    """Read oracle boxes from live or evaluator-flattened predictions."""
+    if isinstance(prediction, Mapping):
+        return prediction.get(ENCODER_QUERY_BOXES)
     return prediction.metainfo.get(ENCODER_QUERY_BOXES)
 
 
