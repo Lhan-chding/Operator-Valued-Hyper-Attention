@@ -123,6 +123,16 @@ class DecoderOperatorBankTests(unittest.TestCase):
         self.assertTrue(torch.equal(
             output.fused.query[~self.valid], context.parent.query[~self.valid]))
 
+    def test_qsro_chunk_size_is_forwarded_to_the_primitive(self):
+        bank = self._bank(qsro_query_chunk_size=128)
+
+        self.assertEqual(bank.qsro.query_chunk_size, 128)
+
+        for chunk_size in (0, -1, True, 1.5, "128"):
+            with self.subTest(chunk_size=chunk_size):
+                with self.assertRaisesRegex(ValueError, "query_chunk_size"):
+                    self._bank(qsro_query_chunk_size=chunk_size)
+
     def test_ablation_and_dynamic_availability_skip_unavailable_inputs(self):
         bank = self._bank(enabled_operators=("tq_cato",))
         context = self._context(
