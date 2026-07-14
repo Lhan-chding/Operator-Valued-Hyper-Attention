@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 
 from mmdet.models.dense_heads.grounding_dino_head import GroundingDINOHead
+from mmdet.models.layers import inverse_sigmoid
 from mmdet.registry import MODELS
 from mmdet.structures import SampleList
 from mmdet.utils import InstanceList
@@ -70,6 +71,49 @@ class OVHAGroundingDINOHead(GroundingDINOHead):
         nn.init.zeros_(self.referent_head[-1].weight)
         nn.init.zeros_(self.referent_head[-1].bias)
 
+    def forward(
+        self,
+        hidden_states: Tensor,
+        references: List[Tensor],
+        memory_text: Tensor,
+        text_token_mask: Tensor,
+        operator_box_deltas: Optional[Tensor] = None,
+        operator_referent_scores: Optional[Tensor] = None,
+    ) -> Tuple[Tensor]:
+        if operator_box_deltas is None and operator_referent_scores is None:
+            return super().forward(
+                hidden_states,
+                references,
+                memory_text,
+                text_token_mask,
+            )
+        all_layers_cls_scores, all_layers_bbox_preds = super().forward(
+            hidden_states,
+            references,
+            memory_text,
+            text_token_mask,
+        )
+        matching_count = _validate_operator_stacks(
+            hidden_states,
+            operator_box_deltas,
+            operator_referent_scores,
+        )
+        if operator_box_deltas is not None:
+            prefix_count = all_layers_bbox_preds.shape[2] - matching_count
+            matching_boxes = all_layers_bbox_preds[:, :, prefix_count:, :]
+            adjusted_matching_boxes = (
+                inverse_sigmoid(matching_boxes, eps=1e-3)
+                + operator_box_deltas
+            ).sigmoid()
+            all_layers_bbox_preds = torch.cat(
+                (
+                    all_layers_bbox_preds[:, :, :prefix_count, :],
+                    adjusted_matching_boxes,
+                ),
+                dim=2,
+            )
+        return all_layers_cls_scores, all_layers_bbox_preds
+
     def loss(
         self,
         hidden_states: Tensor,
@@ -86,26 +130,55 @@ class OVHAGroundingDINOHead(GroundingDINOHead):
         seed_valid: Optional[Tensor] = None,
         selected_encoder_coords: Optional[Tensor] = None,
         role_attention: Optional[Tensor] = None,
+        operator_box_deltas: Optional[Tensor] = None,
+        operator_referent_scores: Optional[Tensor] = None,
     ) -> dict:
-        losses = super().loss(
-            hidden_states=hidden_states,
-            references=references,
-            memory_text=memory_text,
-            text_token_mask=text_token_mask,
-            enc_outputs_class=enc_outputs_class,
-            enc_outputs_coord=enc_outputs_coord,
-            batch_data_samples=batch_data_samples,
-            dn_meta=dn_meta,
-        )
-        all_layers_cls_scores, all_layers_bbox_preds = self(
-            hidden_states, references, memory_text, text_token_mask
-        )
+        if operator_box_deltas is None and operator_referent_scores is None:
+            losses = super().loss(
+                hidden_states=hidden_states,
+                references=references,
+                memory_text=memory_text,
+                text_token_mask=text_token_mask,
+                enc_outputs_class=enc_outputs_class,
+                enc_outputs_coord=enc_outputs_coord,
+                batch_data_samples=batch_data_samples,
+                dn_meta=dn_meta,
+            )
+            all_layers_cls_scores, all_layers_bbox_preds = self(
+                hidden_states, references, memory_text, text_token_mask)
+        else:
+            batch_gt_instances = [
+                data_sample.gt_instances
+                for data_sample in batch_data_samples
+            ]
+            batch_img_metas = [
+                data_sample.metainfo for data_sample in batch_data_samples
+            ]
+            all_layers_cls_scores, all_layers_bbox_preds = self(
+                hidden_states,
+                references,
+                memory_text,
+                text_token_mask,
+                operator_box_deltas,
+                operator_referent_scores,
+            )
+            self.text_masks = text_token_mask
+            losses = self.loss_by_feat(
+                all_layers_cls_scores,
+                all_layers_bbox_preds,
+                enc_outputs_class,
+                enc_outputs_coord,
+                batch_gt_instances,
+                batch_img_metas,
+                dn_meta,
+            )
         losses["loss_ref"] = self.loss_ref_weight * self._loss_referent(
             hidden_states=hidden_states,
             final_cls_scores=all_layers_cls_scores[-1],
             final_bbox_preds=all_layers_bbox_preds[-1],
             batch_data_samples=batch_data_samples,
             dn_meta=dn_meta,
+            operator_referent_scores=operator_referent_scores,
         )
         losses["loss_seed"] = self.loss_seed_weight * self._loss_seed(
             dense_enc_outputs_coord=dense_enc_outputs_coord,
@@ -137,6 +210,8 @@ class OVHAGroundingDINOHead(GroundingDINOHead):
         seed_valid: Optional[Tensor] = None,
         selected_encoder_coords: Optional[Tensor] = None,
         role_attention: Optional[Tensor] = None,
+        operator_box_deltas: Optional[Tensor] = None,
+        operator_referent_scores: Optional[Tensor] = None,
     ) -> InstanceList:
         # Dense tensors are deliberately ignored here: inference must depend
         # only on image/text forward state, never ground-truth annotations.
@@ -154,9 +229,25 @@ class OVHAGroundingDINOHead(GroundingDINOHead):
             data_sample.token_positive_map for data_sample in batch_data_samples
         ]
         all_layers_cls_scores, all_layers_bbox_preds = self(
-            hidden_states, references, memory_text, text_token_mask
+            hidden_states,
+            references,
+            memory_text,
+            text_token_mask,
+            operator_box_deltas,
+            operator_referent_scores,
         )
         ref_delta = self.referent_head(hidden_states[-1]).squeeze(-1)
+        if operator_referent_scores is not None:
+            matching_count = operator_referent_scores.shape[2]
+            prefix_count = ref_delta.shape[1] - matching_count
+            ref_delta = torch.cat(
+                (
+                    ref_delta[:, :prefix_count],
+                    ref_delta[:, prefix_count:]
+                    + operator_referent_scores[-1],
+                ),
+                dim=1,
+            )
         final_cls_scores = all_layers_cls_scores[-1]
         adjusted_final_scores = torch.where(
             torch.isfinite(final_cls_scores),
@@ -232,6 +323,7 @@ class OVHAGroundingDINOHead(GroundingDINOHead):
         final_bbox_preds: Tensor,
         batch_data_samples: SampleList,
         dn_meta: Dict[str, int],
+        operator_referent_scores: Optional[Tensor] = None,
     ) -> Tensor:
         dn_count = int((dn_meta or {}).get("num_denoising_queries", 0))
         matching_hidden = hidden_states[-1, :, dn_count:, :]
@@ -241,6 +333,12 @@ class OVHAGroundingDINOHead(GroundingDINOHead):
         ref_score = parent_score + self.referent_head(
             matching_hidden
         ).squeeze(-1)
+        if operator_referent_scores is not None:
+            final_operator_score = operator_referent_scores[-1]
+            if final_operator_score.shape != ref_score.shape:
+                raise ValueError(
+                    "operator referent scores must match matching queries")
+            ref_score = ref_score + final_operator_score
         positive_rows = []
         with torch.no_grad():
             for batch_index, data_sample in enumerate(batch_data_samples):
@@ -261,6 +359,52 @@ class OVHAGroundingDINOHead(GroundingDINOHead):
                 )
         positives = torch.stack(positive_rows, dim=0)
         return referent_focal_loss(ref_score, positives)
+
+
+def _validate_operator_stacks(
+    hidden_states: Tensor,
+    operator_box_deltas: Optional[Tensor],
+    operator_referent_scores: Optional[Tensor],
+) -> int:
+    layers, batch_size, total_queries = hidden_states.shape[:3]
+    matching_count = None
+    if operator_box_deltas is not None:
+        if (
+            operator_box_deltas.ndim != 4
+            or operator_box_deltas.shape[:2] != (layers, batch_size)
+            or operator_box_deltas.shape[-1] != 4
+        ):
+            raise ValueError(
+                "operator_box_deltas must have shape [L,B,Q,4]")
+        matching_count = operator_box_deltas.shape[2]
+        if (
+            operator_box_deltas.device != hidden_states.device
+            or operator_box_deltas.dtype != hidden_states.dtype
+        ):
+            raise ValueError(
+                "operator box deltas must share hidden-state dtype/device")
+    if operator_referent_scores is not None:
+        if (
+            operator_referent_scores.ndim != 3
+            or operator_referent_scores.shape[:2] != (layers, batch_size)
+        ):
+            raise ValueError(
+                "operator_referent_scores must have shape [L,B,Q]")
+        score_count = operator_referent_scores.shape[2]
+        if matching_count is not None and score_count != matching_count:
+            raise ValueError("operator box and score query counts must agree")
+        matching_count = score_count
+        if (
+            operator_referent_scores.device != hidden_states.device
+            or operator_referent_scores.dtype != hidden_states.dtype
+        ):
+            raise ValueError(
+                "operator scores must share hidden-state dtype/device")
+    if matching_count is None or matching_count <= 0:
+        raise ValueError("at least one non-empty operator stack is required")
+    if matching_count > total_queries:
+        raise ValueError("operator matching queries cannot exceed total queries")
+    return matching_count
 
 
 def _normalized_ground_truth(
