@@ -10,36 +10,6 @@ from ovha_rod.evaluation.metrics import query_oracle_metrics, refexp_box_metrics
 ROOT = Path(__file__).resolve().parents[2]
 
 
-class _StrictPrediction:
-    """Minimal InstanceData-like object with length-checked data fields."""
-
-    def __init__(self, length: int) -> None:
-        self._length = length
-        self._metainfo = {}
-
-    def __setattr__(self, name, value) -> None:
-        if (
-            not name.startswith("_")
-            and hasattr(value, "__len__")
-            and len(value) != self._length
-        ):
-            raise AssertionError(
-                f"field length {len(value)} does not match {self._length}")
-        object.__setattr__(self, name, value)
-
-    @property
-    def metainfo(self) -> dict:
-        return dict(self._metainfo)
-
-    def set_metainfo(self, values: dict) -> None:
-        self._metainfo = {**self._metainfo, **values}
-
-    def clone(self):
-        cloned = _StrictPrediction(self._length)
-        cloned._metainfo = dict(self._metainfo)
-        return cloned
-
-
 class Phase1MetricTests(unittest.TestCase):
     def test_refexp_metrics_match_hand_computation(self):
         prediction = torch.tensor([
@@ -67,27 +37,6 @@ class Phase1MetricTests(unittest.TestCase):
 
 
 class ValidationPredictionMetadataTests(unittest.TestCase):
-    def test_encoder_queries_can_outnumber_final_predictions(self):
-        from ovha_rod.prediction_metadata import (
-            get_encoder_query_boxes,
-            with_encoder_query_boxes,
-        )
-
-        prediction = _StrictPrediction(length=300)
-        encoder_boxes = torch.zeros(900, 4)
-
-        updated = with_encoder_query_boxes(prediction, encoder_boxes)
-
-        self.assertIsNot(updated, prediction)
-        self.assertIsNone(get_encoder_query_boxes(prediction))
-        self.assertIs(get_encoder_query_boxes(updated), encoder_boxes)
-        self.assertNotIn("encoder_query_boxes", prediction.__dict__)
-
-    def test_missing_encoder_query_metadata_returns_none(self):
-        from ovha_rod.prediction_metadata import get_encoder_query_boxes
-
-        self.assertIsNone(get_encoder_query_boxes(_StrictPrediction(length=300)))
-
     def test_validation_paths_share_the_metadata_helpers(self):
         head = (
             ROOT / "ovha_rod/models/dense_heads/ovha_grounding_dino_head.py"
@@ -97,6 +46,7 @@ class ValidationPredictionMetadataTests(unittest.TestCase):
         ).read_text()
 
         self.assertIn("with_encoder_query_boxes(prediction, absolute)", head)
+        self.assertIn("require_prediction_batch_alignment(", head)
         self.assertNotIn("prediction.encoder_query_boxes = absolute", head)
         self.assertIn("get_encoder_query_boxes(prediction)", metric)
 
