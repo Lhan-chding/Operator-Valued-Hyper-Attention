@@ -1,11 +1,20 @@
 import copy
+import importlib.util
 import unittest
+from pathlib import Path
 
-from ovha_rod.prediction_metadata import (
-    get_encoder_query_boxes,
-    require_prediction_batch_alignment,
-    with_encoder_query_boxes,
-)
+
+ROOT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location(
+    "ovha_prediction_metadata", ROOT / "ovha_rod/prediction_metadata.py")
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load prediction metadata helpers")
+PREDICTION_METADATA = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(PREDICTION_METADATA)
+get_encoder_query_boxes = PREDICTION_METADATA.get_encoder_query_boxes
+require_prediction_batch_alignment = (
+    PREDICTION_METADATA.require_prediction_batch_alignment)
+with_encoder_query_boxes = PREDICTION_METADATA.with_encoder_query_boxes
 
 
 class _StrictPrediction:
@@ -37,7 +46,7 @@ class _StrictPrediction:
         cloned._metainfo = copy.deepcopy(self._metainfo)
         for name, value in self.__dict__.items():
             if not name.startswith("_"):
-                object.__setattr__(cloned, name, copy.deepcopy(value))
+                object.__setattr__(cloned, name, value)
         return cloned
 
 
@@ -58,7 +67,7 @@ class PredictionMetadataTests(unittest.TestCase):
         self.assertEqual(updated.bboxes, prediction.bboxes)
         self.assertEqual(updated.scores, prediction.scores)
         self.assertEqual(updated.labels, prediction.labels)
-        self.assertIsNot(updated.bboxes, prediction.bboxes)
+        self.assertIs(updated.bboxes, prediction.bboxes)
         self.assertNotIn("encoder_query_boxes", prediction.__dict__)
 
     def test_missing_encoder_query_metadata_returns_none(self):

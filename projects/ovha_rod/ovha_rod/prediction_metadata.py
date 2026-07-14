@@ -1,10 +1,20 @@
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from collections.abc import Mapping, Sized
+from typing import Any, Protocol, TypeVar
 
 
 ENCODER_QUERY_BOXES = "encoder_query_boxes"
-PredictionT = TypeVar("PredictionT")
+PredictionT = TypeVar("PredictionT", bound="PredictionMetadataCarrier")
+
+
+class PredictionMetadataCarrier(Protocol):
+    @property
+    def metainfo(self) -> Mapping[str, Any]: ...
+
+    def clone(self: PredictionT) -> PredictionT: ...
+
+    def set_metainfo(self, values: dict[str, Any]) -> None: ...
 
 
 def with_encoder_query_boxes(
@@ -16,13 +26,15 @@ def with_encoder_query_boxes(
     return updated
 
 
-def get_encoder_query_boxes(prediction: Any) -> Any | None:
-    """Read optional encoder-query boxes without treating them as instances."""
+def get_encoder_query_boxes(
+    prediction: PredictionMetadataCarrier,
+) -> Any | None:
+    """Read oracle boxes; consumers must move tensor metainfo explicitly."""
     return prediction.metainfo.get(ENCODER_QUERY_BOXES)
 
 
 def require_prediction_batch_alignment(
-    *, predictions: Any, encoder_boxes: Any, image_metas: Any,
+    *, predictions: Sized, encoder_boxes: Sized, image_metas: Sized,
 ) -> None:
     """Reject silent truncation when validation batch dimensions diverge."""
     counts = (len(predictions), len(encoder_boxes), len(image_metas))
