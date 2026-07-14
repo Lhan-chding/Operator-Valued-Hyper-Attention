@@ -13,7 +13,10 @@ from mmdet.utils import InstanceList
 from mmdet.structures.bbox import bbox_cxcywh_to_xyxy, bbox_xyxy_to_cxcywh
 
 from ..losses import build_seed_quality_targets, quality_focal_seed_loss
-from ...prediction_metadata import with_encoder_query_boxes
+from ...prediction_metadata import (
+    require_prediction_batch_alignment,
+    with_encoder_query_boxes,
+)
 from ..role_encoder import role_diversity_loss
 from ..scoring import referent_focal_loss
 
@@ -300,6 +303,11 @@ def _attach_encoder_query_boxes(predictions: InstanceList,
                                 normalized_boxes: Tensor,
                                 batch_img_metas: List[dict],
                                 rescale: bool) -> InstanceList:
+    require_prediction_batch_alignment(
+        predictions=predictions,
+        encoder_boxes=normalized_boxes,
+        image_metas=batch_img_metas,
+    )
     updated_predictions = []
     for prediction, boxes, meta in zip(
             predictions, normalized_boxes, batch_img_metas):
