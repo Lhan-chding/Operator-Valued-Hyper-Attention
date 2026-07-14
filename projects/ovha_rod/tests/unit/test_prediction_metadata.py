@@ -75,6 +75,12 @@ class PredictionMetadataTests(unittest.TestCase):
 
         self.assertIsNone(get_encoder_query_boxes(prediction))
 
+    def test_evaluator_mapping_preserves_encoder_query_metadata(self):
+        encoder_boxes = [(0.0, 0.0, 1.0, 1.0)] * 900
+        prediction = {"encoder_query_boxes": encoder_boxes}
+
+        self.assertIs(get_encoder_query_boxes(prediction), encoder_boxes)
+
     def test_mismatched_validation_batch_lengths_fail_fast(self):
         with self.assertRaisesRegex(ValueError, "validation batch lengths"):
             require_prediction_batch_alignment(
