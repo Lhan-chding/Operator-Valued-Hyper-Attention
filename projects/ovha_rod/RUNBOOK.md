@@ -291,6 +291,70 @@ not persist the dataloader cursor, worker RNG, or prefetch queue, so treating an
 is intentionally stopped before the epoch checkpoint is complete, restart from
 the preceding complete epoch.
 
+### Audited migration after a reviewed code fix
+
+Do not edit an old `run_identity.json` when a reviewed bug fix changes the
+project commit after an epoch checkpoint was written. First validate the fixed
+commit on a bounded validation subset. Keep the migration tool in its reviewed
+administrative checkout, prepare a separate standalone runtime clone at the
+exact validated target commit, and migrate into a new work root:
+
+```bash
+SOURCE_RUN="$PRIVATE_ROOT/runs/refcoco/rqgo/seed_2026"
+TARGET_ROOT="$PRIVATE_ROOT/runs-after-fix"
+TARGET_RUN="$TARGET_ROOT/refcoco/rqgo/seed_2026"
+SOURCE_COMMIT=d93d2db25c6156b4ca5ebc352a3c89a4c6d06c96
+TARGET_COMMIT=d3bad6a9dbd731e95946d7fc7251e34d98a6a978
+MIGRATION_PROJECT="$PRIVATE_ROOT/project-migration-admin/projects/ovha_rod"
+RUNTIME_PROJECT="$PRIVATE_ROOT/project-runtime-d3bad6a/projects/ovha_rod"
+
+# Create this as a standalone clone, not a linked Git worktree. Detach it at
+# the validated commit before making the complete clone read-only.
+git clone --no-checkout \
+  https://github.com/Lhan-chding/Operator-Valued-Hyper-Attention.git \
+  "$PRIVATE_ROOT/project-runtime-d3bad6a"
+git -C "$PRIVATE_ROOT/project-runtime-d3bad6a" checkout --detach "$TARGET_COMMIT"
+chmod -R a-w \
+  "$PRIVATE_ROOT/project-runtime-d3bad6a" \
+  "$PRIVATE_ROOT/env-cu121"
+
+PYTHONPATH="$MIGRATION_PROJECT:$PRIVATE_ROOT/mmdetection" \
+python "$MIGRATION_PROJECT/scripts/migrate_epoch_resume.py" \
+  --source-work-dir "$SOURCE_RUN" \
+  --target-work-dir "$TARGET_RUN" \
+  --project-dir "$RUNTIME_PROJECT" \
+  --expected-source-project-commit "$SOURCE_COMMIT" \
+  --target-project-commit "$TARGET_COMMIT"
+
+python "$MIGRATION_PROJECT/scripts/run_migrated_resume.py" \
+  --runtime-project-dir "$RUNTIME_PROJECT" \
+  --target-project-commit "$TARGET_COMMIT" \
+  --python-bin "$PRIVATE_ROOT/env-cu121/bin/python" -- \
+  --dataset refcoco \
+  --variant rqgo \
+  --mmdet-root "$PRIVATE_ROOT/mmdetection" \
+  --data-root "$DATA_ROOT" \
+  --checkpoint "$CHECKPOINT" \
+  --checkpoint-sha256 b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6413581051a \
+  --bert-root "$BERT_ROOT" \
+  --work-root "$TARGET_ROOT" \
+  --gpus 1 \
+  --per-device-batch 8 \
+  --master-port 29627 \
+  --seed 2026 \
+  --resume
+```
+
+The migration refuses a dirty or different checkout, an existing target,
+unsafe permissions or symlinks, incomplete identity fields, a changed source
+commit, or a checkpoint that does not match its provenance. It creates an
+independent read-only checkpoint, changes only `project_commit` in the copied
+identity, writes normal checkpoint provenance, and adds
+`resume_migration.json` with the source and target hash chain. The source run
+is not overwritten. Launch through `run_migrated_resume.py`; it re-attests the
+same read-only runtime clone immediately before executing that clone's runner.
+All existing identity and checkpoint-freeze guards remain active.
+
 ## 10. RQGO Go/No-Go gate
 
 All conditions are required before later operators are considered:

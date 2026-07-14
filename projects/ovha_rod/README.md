@@ -163,5 +163,12 @@ accumulation, AMP dtype, seed, variant, source commit, or environment identity.
 Mid-epoch resume is intentionally rejected because the standard epoch loop
 does not persist the dataloader cursor or worker RNG state.
 
+If a reviewed validation fix changes the project commit after an epoch
+checkpoint is complete, do not rewrite the old run identity. The runbook's
+audited `migrate_epoch_resume.py` procedure copies the checkpoint into a new
+private work root, preserves a source-to-target hash chain, and keeps the
+normal exact-identity resume guard enabled. Its `run_migrated_resume.py`
+launcher re-attests the same read-only runtime clone before training.
+
 Do not proceed to TQ-CATO, Q-SRO, or MS-TLEO until the RQGO gate in the
 runbook passes.
