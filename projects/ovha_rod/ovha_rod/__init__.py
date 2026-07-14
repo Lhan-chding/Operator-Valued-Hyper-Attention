@@ -9,6 +9,7 @@ from .models import (GenericDenseSeedPredictor, LatentRoleEncoder, RQGO,
                      RQGOResult)
 
 try:  # pragma: no cover - exercised in the server MMDetection environment.
+    from . import optim as _optim
     from .models import dense_heads as _dense_heads
     from .models import detectors as _detectors
     from . import hooks as _hooks

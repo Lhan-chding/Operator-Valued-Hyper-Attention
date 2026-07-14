@@ -60,7 +60,7 @@ class FreezePhase2CheckpointTests(unittest.TestCase):
                 "initial_checkpoint_sha256": INITIAL_SHA256,
                 "project_commit": SOURCE_COMMIT,
                 "mmdetection_commit": MMDET_COMMIT,
-                "environment_profile": "cu121",
+                "environment_profile": "cu121-wheel",
             },
         )
         checkpoint = work_dir / "epoch_2.pth"

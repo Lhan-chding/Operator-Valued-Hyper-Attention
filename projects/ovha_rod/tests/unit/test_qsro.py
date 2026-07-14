@@ -319,6 +319,97 @@ class QuerySpatialRelationOperatorTests(unittest.TestCase):
         self.assertEqual(observed_target_widths, [3, 1])
         self.assertEqual(tuple(result.query_delta.shape), (2, 4, 16))
 
+    def test_training_backward_recomputes_each_pairwise_chunk(self):
+        operator = QuerySpatialRelationOperator(
+            d_model=self.d_model,
+            query_chunk_size=3,
+        )
+        query = self.query.clone().requires_grad_(True)
+        boxes = self.boxes.clone().requires_grad_(True)
+        relation_role = self.relation_role.clone().requires_grad_(True)
+        pairwise_chunk = qsro_module._pairwise_evidence_chunk
+
+        with mock.patch.object(
+            qsro_module,
+            "_pairwise_evidence_chunk",
+            wraps=pairwise_chunk,
+        ) as observed_chunk:
+            result = operator(query, boxes, relation_role, self.valid)
+            self.assertEqual(observed_chunk.call_count, 2)
+
+            loss = (
+                result.query_delta.sum()
+                + result.box_delta.sum()
+                + result.score_delta.sum()
+                + result.gate_logits.sum()
+                + result.diagnostics["qsro_attention_entropy"]
+                + result.diagnostics["qsro_contrast_abs_mean"]
+            )
+            loss.backward()
+
+        self.assertEqual(observed_chunk.call_count, 4)
+        boundaries = sorted(
+            (
+                call.kwargs["target_start"],
+                call.kwargs["target_end"],
+            )
+            for call in observed_chunk.call_args_list
+        )
+        self.assertEqual(boundaries, [(0, 3), (0, 3), (3, 4), (3, 4)])
+        for value in (query.grad, boxes.grad, relation_role.grad):
+            self.assertIsNotNone(value)
+            self.assertTrue(torch.isfinite(value).all())
+
+    def test_training_does_not_save_chunk_pair_matrices_for_backward(self):
+        batch_size, query_count, chunk_size = 2, 7, 3
+        operator = QuerySpatialRelationOperator(
+            d_model=self.d_model,
+            query_chunk_size=chunk_size,
+        )
+        query = torch.randn(
+            batch_size,
+            query_count,
+            self.d_model,
+            requires_grad=True,
+        )
+        boxes = torch.rand(
+            batch_size,
+            query_count,
+            4,
+            requires_grad=True,
+        )
+        relation_role = torch.randn(
+            batch_size,
+            self.d_model,
+            requires_grad=True,
+        )
+        valid = torch.ones(batch_size, query_count, dtype=torch.bool)
+        saved_shapes = []
+
+        def record_shape(tensor):
+            saved_shapes.append(tuple(tensor.shape))
+            return tensor
+
+        with torch.autograd.graph.saved_tensors_hooks(
+            record_shape,
+            lambda tensor: tensor,
+        ):
+            result = operator(query, boxes, relation_role, valid)
+
+        pairwise_shapes = {
+            (batch_size, width, query_count)
+            for width in (chunk_size, 1)
+        } | {
+            (batch_size, width, query_count, qsro_module._GEOMETRY_DIM)
+            for width in (chunk_size, 1)
+        }
+        self.assertTrue(pairwise_shapes.isdisjoint(saved_shapes))
+
+        result.query_delta.sum().backward()
+        for value in (query.grad, boxes.grad, relation_role.grad):
+            self.assertIsNotNone(value)
+            self.assertTrue(torch.isfinite(value).all())
+
     def test_chunked_outputs_and_gradients_match_dense_execution(self):
         dense = QuerySpatialRelationOperator(
             d_model=self.d_model,

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 import math
 from typing import Optional
 
 import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from .decoder_contracts import DecoderOperatorResidual
 from .tensor_validation import tensor_value_checks_enabled
@@ -158,8 +160,24 @@ class QuerySpatialRelationOperator(nn.Module):
             (start, min(start + chunk_size, query_count))
             for start in range(0, query_count, chunk_size)
         )
+        checkpoint_chunks = (
+            self.query_chunk_size is not None
+            and self.training
+            and torch.is_grad_enabled()
+            and any(value.requires_grad for value in (
+                relation_query,
+                key,
+                value,
+                boxes,
+                geometry_parameters,
+            ))
+        )
+        evaluate_chunk = (
+            _checkpointed_pairwise_evidence_chunk
+            if checkpoint_chunks else _pairwise_evidence_chunk
+        )
         chunks = tuple(
-            _pairwise_evidence_chunk(
+            evaluate_chunk(
                 relation_query=relation_query,
                 key=key,
                 value=value,
@@ -225,6 +243,67 @@ class QuerySpatialRelationOperator(nn.Module):
 
 
 QSRO = QuerySpatialRelationOperator
+
+
+def _checkpointed_pairwise_evidence_chunk(
+    *,
+    relation_query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    boxes: Tensor,
+    valid: Tensor,
+    geometry_parameters: Tensor,
+    target_start: int,
+    target_end: int,
+) -> _PairwiseEvidence:
+    chunk_values = checkpoint(
+        partial(
+            _pairwise_evidence_chunk_tensors,
+            target_start=target_start,
+            target_end=target_end,
+        ),
+        relation_query,
+        key,
+        value,
+        boxes,
+        valid,
+        geometry_parameters,
+        use_reentrant=False,
+        preserve_rng_state=False,
+    )
+    return _PairwiseEvidence(*chunk_values)
+
+
+def _pairwise_evidence_chunk_tensors(
+    relation_query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    boxes: Tensor,
+    valid: Tensor,
+    geometry_parameters: Tensor,
+    *,
+    target_start: int,
+    target_end: int,
+) -> tuple[Tensor, ...]:
+    evidence = _pairwise_evidence_chunk(
+        relation_query=relation_query,
+        key=key,
+        value=value,
+        boxes=boxes,
+        valid=valid,
+        geometry_parameters=geometry_parameters,
+        target_start=target_start,
+        target_end=target_end,
+    )
+    return (
+        evidence.relation_context,
+        evidence.distractor_context,
+        evidence.geometry_contrast,
+        evidence.contrast_score,
+        evidence.attention_entropy,
+        evidence.has_distractor,
+        evidence.pair_count,
+    )
 
 
 def _pairwise_evidence_chunk(

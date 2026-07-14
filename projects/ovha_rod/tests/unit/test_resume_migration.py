@@ -172,6 +172,32 @@ class ResumeMigrationTests(unittest.TestCase):
             self.assertIn("# guarded epoch-boundary resume", (
                 target / "command.txt").read_text(encoding="utf-8"))
 
+    def test_migration_can_require_exact_source_checkpoint_name(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            parent = Path(directory)
+            parent.chmod(0o700)
+            source = self._source_run(parent)
+
+            result = self.migration.migrate_epoch_resume(
+                source,
+                parent / "epoch-one-target",
+                runtime_project_dir=ROOT,
+                expected_source_project_commit=self.source_commit,
+                target_project_commit=self.target_commit,
+                expected_source_checkpoint="epoch_1.pth",
+            )
+            self.assertEqual(result.name, "epoch-one-target")
+
+            with self.assertRaisesRegex(ValueError, "expected source checkpoint"):
+                self.migration.migrate_epoch_resume(
+                    source,
+                    parent / "wrong-epoch-target",
+                    runtime_project_dir=ROOT,
+                    expected_source_project_commit=self.source_commit,
+                    target_project_commit=self.target_commit,
+                    expected_source_checkpoint="epoch_2.pth",
+                )
+
     def test_migration_rejects_unexpected_identity_or_existing_target(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             parent = Path(directory)
@@ -398,6 +424,7 @@ class ResumeMigrationTests(unittest.TestCase):
             project_dir=ROOT,
             expected_source_project_commit=self.source_commit,
             target_project_commit=self.target_commit,
+            expected_source_checkpoint=None,
         )
         with (
             mock.patch.object(self.migration, "parse_args", return_value=arguments),
@@ -416,6 +443,7 @@ class ResumeMigrationTests(unittest.TestCase):
             runtime_project_dir=ROOT,
             expected_source_project_commit=self.source_commit,
             target_project_commit=self.target_commit,
+            expected_source_checkpoint=None,
         )
 
     def test_migrated_resume_launcher_executes_only_attested_runtime(self):
@@ -437,12 +465,16 @@ class ResumeMigrationTests(unittest.TestCase):
                 ROOT,
                 self.target_commit,
                 Path(sys.executable),
-                ("--dataset", "refcoco", "--resume"),
+                (
+                    "--dataset", "refcoco", "--variant", "rqgo",
+                    "--resume", "--stop-after-epoch2",
+                ),
             ), 0)
         validate.assert_called_once_with(ROOT, self.target_commit)
         command = run.call_args.args[0]
         self.assertEqual(command[1], str(ROOT / "scripts/run_phase1_server.sh"))
         self.assertIn("--resume", command)
+        self.assertIn("--stop-after-epoch2", command)
         self.assertEqual(command[-2:], ("--python", str(Path(sys.executable))))
         environment = run.call_args.kwargs["env"]
         self.assertNotIn("PYTHONPATH", environment)

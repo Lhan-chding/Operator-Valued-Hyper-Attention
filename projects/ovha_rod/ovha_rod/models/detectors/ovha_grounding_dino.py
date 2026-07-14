@@ -25,6 +25,10 @@ from ..operators.decoder_integration import (
     stack_decoder_operator_outputs,
     summarize_decoder_bank_outputs,
 )
+from ..operators.decoder_training import (
+    configure_decoder_operator_only_training,
+    enforce_decoder_operator_only_training_mode,
+)
 from ..operators.rqgo import RQGO
 from ..role_encoder import LatentRoleEncoder
 from .deterministic_grounding_dino import DeterministicGroundingDINO
@@ -50,9 +54,12 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
         seed_operator_cfg: Optional[Dict] = None,
         role_encoder_cfg: Optional[Dict] = None,
         decoder_operator_cfg: Optional[Dict] = None,
+        train_decoder_operator_only: bool = False,
         ovha_cfg: Optional[Dict] = None,
         **kwargs,
     ) -> None:
+        if not isinstance(train_decoder_operator_only, bool):
+            raise ValueError("train_decoder_operator_only must be boolean")
         phase_cfg = dict(ovha_cfg or {})
         operator_name = str(
             seed_operator or phase_cfg.get("variant", "rqgo")
@@ -148,6 +155,19 @@ class OVHAGroundingDINO(DeterministicGroundingDINO):
             if decoder_cfg is None
             else DecoderOperatorBank(**decoder_cfg)
         )
+        self.train_decoder_operator_only = train_decoder_operator_only
+        self.decoder_operator_trainable_parameters: tuple[str, ...] = ()
+        if train_decoder_operator_only:
+            self.decoder_operator_trainable_parameters = (
+                configure_decoder_operator_only_training(self)
+            )
+
+    def train(self, mode: bool = True):
+        """Keep the frozen Phase-1 model stateless during Phase-2 training."""
+        trained = super().train(mode)
+        if mode and getattr(self, "train_decoder_operator_only", False):
+            enforce_decoder_operator_only_training_mode(self)
+        return trained
 
     def forward_transformer(
         self,

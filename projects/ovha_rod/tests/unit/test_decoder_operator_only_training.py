@@ -56,6 +56,12 @@ class DecoderOperatorOnlyTrainingTests(unittest.TestCase):
         self.assertTrue(model.decoder_operator.training)
         self.assertTrue(model.decoder_operator[0].training)
 
+        with self.assertRaisesRegex(TypeError, "torch module"):
+            enforce_decoder_operator_only_training_mode(object())
+        model.decoder_operator = None
+        with self.assertRaisesRegex(ValueError, "initialized module"):
+            enforce_decoder_operator_only_training_mode(model)
+
 
 if __name__ == "__main__":
     unittest.main()

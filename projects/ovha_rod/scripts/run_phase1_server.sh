@@ -28,6 +28,7 @@ LOCKED_CHECKPOINT_SHA256="b448804bb1af6fa688887f0f2454625edbeeae4e868bc95620e3e6
 LOCKED_CHECKPOINT_SIZE=1093815743
 DRY_RUN=false
 RESUME=false
+STOP_AFTER_EPOCH2=false
 ENVIRONMENT_PROFILE="cu121-wheel"
 MMDET_COMMIT="cfd5d3a985b0249de009b67d04f37263e11cdf3d"
 
@@ -53,6 +54,7 @@ usage() {
     "  --checkpoint-sha256 HEX Required trusted checkpoint digest" \
     "  --master-port N        Explicit free localhost torchrun port" \
     "  --resume               Resume the matching private epoch checkpoint" \
+    "  --stop-after-epoch2    With --resume, exit naturally after epoch 2" \
     "  --no-amp                Full FP32 is mandatory; compatibility no-op" \
     "  --dry-run               Validate arguments and print commands only" \
     "  -h, --help              Show this help" \
@@ -83,6 +85,7 @@ while [[ $# -gt 0 ]]; do
     --checkpoint-sha256) require_value "$1" "$#"; CHECKPOINT_SHA256="$2"; shift 2 ;;
     --master-port) require_value "$1" "$#"; MASTER_PORT="$2"; shift 2 ;;
     --resume) RESUME=true; shift ;;
+    --stop-after-epoch2) STOP_AFTER_EPOCH2=true; shift ;;
     --no-amp) shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -102,6 +105,16 @@ case "${VARIANT}" in
   all) VARIANTS=(phase0_parent parent_ref generic rqgo) ;;
   *) printf 'invalid --variant: %s\n' "${VARIANT}" >&2; exit 2 ;;
 esac
+
+if [[ "${STOP_AFTER_EPOCH2}" == true && "${RESUME}" != true ]]; then
+  printf '%s\n' '--stop-after-epoch2 requires --resume' >&2
+  exit 2
+fi
+if [[ "${STOP_AFTER_EPOCH2}" == true \
+    && ( "${DATASET}" != "refcoco" || "${VARIANT}" != "rqgo" ) ]]; then
+  printf '%s\n' '--stop-after-epoch2 only supports refcoco/rqgo' >&2
+  exit 2
+fi
 
 for required in MMDET_ROOT DATA_ROOT CHECKPOINT BERT_ROOT; do
   [[ -n "${!required}" ]] || { printf '%s is required\n' "${required}" >&2; exit 2; }
@@ -329,6 +342,9 @@ for run_variant in "${VARIANTS[@]}"; do
     "default_hooks.checkpoint.max_keep_ckpts=2"
     "default_hooks.checkpoint.save_last=True"
   )
+  if [[ "${STOP_AFTER_EPOCH2}" == true ]]; then
+    CFG_OPTIONS+=("train_cfg.max_epochs=2")
+  fi
   if [[ "${run_variant}" == "phase0_parent" ]]; then
     CFG_OPTIONS+=("custom_hooks.1.identity_path=${WORK_DIR}/run_identity.json")
   else
@@ -370,6 +386,8 @@ for run_variant in "${VARIANTS[@]}"; do
       "${PYTHON_BIN}" "${SCRIPT_DIR}/run_lock.py" \
       --work-dir "${WORK_DIR}" --mode "${LOCK_MODE}" \
       --freeze-dir "${HOME}/.local/share/ovha-rod/trusted_resume_inputs" \
-      --cwd "${MMDET_ROOT}" "${IDENTITY_OPTIONS[@]}" -- "${COMMAND[@]}"
+      --cwd "${MMDET_ROOT}" \
+      --guard-gpus "${GPUS}" --guard-port "${MASTER_PORT}" \
+      "${IDENTITY_OPTIONS[@]}" -- "${COMMAND[@]}"
   fi
 done

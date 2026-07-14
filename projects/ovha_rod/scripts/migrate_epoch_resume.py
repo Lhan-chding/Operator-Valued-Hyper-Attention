@@ -224,6 +224,7 @@ def migrate_epoch_resume(
     runtime_project_dir: Path,
     expected_source_project_commit: str,
     target_project_commit: str,
+    expected_source_checkpoint: str | None = None,
 ) -> Path:
     """Copy a guarded checkpoint while changing only its project commit."""
     runtime_project = validate_runtime_checkout(
@@ -237,6 +238,7 @@ def migrate_epoch_resume(
             runtime_project_dir=runtime_project,
             expected_source_project_commit=expected_source_project_commit,
             target_project_commit=target_project_commit,
+            expected_source_checkpoint=expected_source_checkpoint,
         )
     finally:
         os.close(source_lock)
@@ -249,6 +251,7 @@ def _migrate_epoch_resume_locked(
     runtime_project_dir: Path,
     expected_source_project_commit: str,
     target_project_commit: str,
+    expected_source_checkpoint: str | None = None,
 ) -> Path:
     expected_source = _require_commit(
         expected_source_project_commit, "expected source project commit")
@@ -264,6 +267,13 @@ def _migrate_epoch_resume_locked(
 
     source_root = source_identity_path.parent
     source_checkpoint = validate_private_epoch_checkpoint(source_root)
+    if (
+        expected_source_checkpoint is not None
+        and source_checkpoint.name != expected_source_checkpoint
+    ):
+        raise ValueError(
+            "expected source checkpoint "
+            f"{expected_source_checkpoint!r}, got {source_checkpoint.name!r}")
     source_digest, source_size = _validated_provenance(
         source_checkpoint, source_identity_path)
     source_provenance = source_checkpoint.with_name(
@@ -531,6 +541,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project-dir", type=Path, required=True)
     parser.add_argument("--expected-source-project-commit", required=True)
     parser.add_argument("--target-project-commit", required=True)
+    parser.add_argument("--expected-source-checkpoint")
     return parser.parse_args()
 
 
@@ -543,6 +554,7 @@ def main() -> int:
         runtime_project_dir=args.project_dir,
         expected_source_project_commit=args.expected_source_project_commit,
         target_project_commit=args.target_project_commit,
+        expected_source_checkpoint=args.expected_source_checkpoint,
     ))
     return 0
 

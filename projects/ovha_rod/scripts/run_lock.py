@@ -13,6 +13,11 @@ import subprocess
 import sys
 
 from ovha_rod.runtime_contracts import validate_existing_private_work_dir
+from ovha_rod.runtime_contracts import (
+    require_selected_gpus_idle,
+    require_visible_device_ids,
+)
+from port_guard import require_port_available
 from resume_guard import (
     _parse_identity,
     _validated_provenance,
@@ -23,13 +28,35 @@ from resume_guard import (
 from ovha_rod.runtime_contracts import validate_private_epoch_checkpoint
 
 
-def open_run_lock(work_dir: Path) -> int:
+def _remove_created_run_lock(lock_path: Path, descriptor: int) -> None:
+    """Remove only the lock path still naming the file created by this process."""
+    descriptor_info = os.fstat(descriptor)
+    try:
+        path_info = lock_path.lstat()
+    except FileNotFoundError:
+        return
+    if (
+        not stat.S_ISREG(path_info.st_mode)
+        or path_info.st_dev != descriptor_info.st_dev
+        or path_info.st_ino != descriptor_info.st_ino
+        or path_info.st_nlink != 1
+    ):
+        return
+    lock_path.unlink()
+
+
+def _open_run_lock_with_state(work_dir: Path) -> tuple[int, Path | None]:
     root = validate_existing_private_work_dir(work_dir)
     lock_path = root / ".run.lock"
-    flags = os.O_CREAT | os.O_RDWR
+    flags = os.O_RDWR
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
-    descriptor = os.open(lock_path, flags, 0o600)
+    created = False
+    try:
+        descriptor = os.open(lock_path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+        created = True
+    except FileExistsError:
+        descriptor = os.open(lock_path, flags)
     try:
         info = os.fstat(descriptor)
         if (
@@ -43,6 +70,11 @@ def open_run_lock(work_dir: Path) -> int:
     except BaseException:
         os.close(descriptor)
         raise
+    return descriptor, lock_path if created else None
+
+
+def open_run_lock(work_dir: Path) -> int:
+    descriptor, _ = _open_run_lock_with_state(work_dir)
     return descriptor
 
 
@@ -52,6 +84,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=("fresh", "resume"), required=True)
     parser.add_argument("--freeze-dir", type=Path, required=True)
     parser.add_argument("--cwd", type=Path, required=True)
+    parser.add_argument("--guard-gpus", type=int)
+    parser.add_argument("--guard-port", type=int)
     parser.add_argument(
         "--expected-identity", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -100,8 +134,19 @@ def main() -> int:
     if not command:
         raise ValueError("locked training command is required")
     expected = _parse_identity(args.expected_identity)
-    descriptor = open_run_lock(args.work_dir)
+    descriptor, created_lock = _open_run_lock_with_state(args.work_dir)
     try:
+        try:
+            if args.guard_gpus is not None:
+                device_ids = require_visible_device_ids(
+                    os.environ.get("CUDA_VISIBLE_DEVICES"), args.guard_gpus)
+                require_selected_gpus_idle(device_ids)
+            if args.guard_port is not None:
+                require_port_available(args.guard_port)
+        except BaseException:
+            if created_lock is not None:
+                _remove_created_run_lock(created_lock, descriptor)
+            raise
         if args.mode == "fresh":
             initialize_identity(args.work_dir, expected)
         else:

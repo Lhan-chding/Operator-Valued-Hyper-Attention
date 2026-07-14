@@ -147,6 +147,10 @@ class Phase2FullSurfaceTests(unittest.TestCase):
         )
         optim = _literal_assignment(CONFIG, "optim_wrapper")
         self.assertEqual(
+            optim["constructor"],
+            "TrainableOnlyOptimWrapperConstructor",
+        )
+        self.assertEqual(
             optim["paramwise_cfg"]["custom_keys"]["decoder_operator"],
             {"lr_mult": 1.0},
         )
@@ -195,6 +199,7 @@ class Phase2FullSurfaceTests(unittest.TestCase):
         self.assertIn("--target-project-commit", source)
         self.assertIn("phase2_preflight.py", source)
         self.assertIn("unset PYTHONPATH PYTHONHOME", source)
+        self.assertIn('export PATH="/usr/bin:/bin"', source)
         self.assertIn("validate_local_bert", PREFLIGHT.read_text(encoding="utf-8"))
         self.assertNotIn('WORK_ROOT="${PROJECT_DIR}', source)
 
