@@ -13,6 +13,7 @@ from mmdet.utils import InstanceList
 from mmdet.structures.bbox import bbox_cxcywh_to_xyxy, bbox_xyxy_to_cxcywh
 
 from ..losses import build_seed_quality_targets, quality_focal_seed_loss
+from ...prediction_metadata import with_encoder_query_boxes
 from ..role_encoder import role_diversity_loss
 from ..scoring import referent_focal_loss
 
@@ -171,7 +172,7 @@ class OVHAGroundingDINOHead(GroundingDINOHead):
             rescale=rescale,
         )
         if selected_encoder_coords is not None:
-            _attach_encoder_query_boxes(
+            predictions = _attach_encoder_query_boxes(
                 predictions, selected_encoder_coords, batch_img_metas, rescale)
         return predictions
 
@@ -298,7 +299,8 @@ def _zero_from_parameters(module: nn.Module) -> Tensor:
 def _attach_encoder_query_boxes(predictions: InstanceList,
                                 normalized_boxes: Tensor,
                                 batch_img_metas: List[dict],
-                                rescale: bool) -> None:
+                                rescale: bool) -> InstanceList:
+    updated_predictions = []
     for prediction, boxes, meta in zip(
             predictions, normalized_boxes, batch_img_metas):
         absolute = bbox_cxcywh_to_xyxy(boxes.clone())
@@ -310,4 +312,6 @@ def _attach_encoder_query_boxes(predictions: InstanceList,
         if rescale:
             scale_factor = absolute.new_tensor(meta["scale_factor"]).repeat((1, 2))
             absolute = absolute / scale_factor
-        prediction.encoder_query_boxes = absolute
+        updated_predictions.append(
+            with_encoder_query_boxes(prediction, absolute))
+    return updated_predictions

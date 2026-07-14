@@ -8,6 +8,8 @@ from mmdet.evaluation.functional import bbox_overlaps
 from mmdet.evaluation.metrics.refexp_metric import RefExpMetric
 from mmdet.registry import METRICS
 
+from ..prediction_metadata import get_encoder_query_boxes
+
 
 @METRICS.register_module()
 class OVHARefExpMetric(RefExpMetric):
@@ -27,9 +29,9 @@ class OVHARefExpMetric(RefExpMetric):
                 "bboxes": prediction["bboxes"].cpu().numpy(),
                 "scores": prediction["scores"].cpu().numpy(),
             }
-            if "encoder_query_boxes" in prediction:
-                result["encoder_query_boxes"] = (
-                    prediction["encoder_query_boxes"].cpu().numpy())
+            encoder_query_boxes = get_encoder_query_boxes(prediction)
+            if encoder_query_boxes is not None:
+                result["encoder_query_boxes"] = encoder_query_boxes.cpu().numpy()
             self.results.append(result)
 
     def compute_metrics(self, results: list) -> Dict[str, float]:
