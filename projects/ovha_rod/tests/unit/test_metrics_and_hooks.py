@@ -34,6 +34,11 @@ class _StrictPrediction:
     def set_metainfo(self, values: dict) -> None:
         self._metainfo = {**self._metainfo, **values}
 
+    def clone(self):
+        cloned = _StrictPrediction(self._length)
+        cloned._metainfo = dict(self._metainfo)
+        return cloned
+
 
 class Phase1MetricTests(unittest.TestCase):
     def test_refexp_metrics_match_hand_computation(self):
@@ -65,15 +70,17 @@ class ValidationPredictionMetadataTests(unittest.TestCase):
     def test_encoder_queries_can_outnumber_final_predictions(self):
         from ovha_rod.prediction_metadata import (
             get_encoder_query_boxes,
-            set_encoder_query_boxes,
+            with_encoder_query_boxes,
         )
 
         prediction = _StrictPrediction(length=300)
         encoder_boxes = torch.zeros(900, 4)
 
-        set_encoder_query_boxes(prediction, encoder_boxes)
+        updated = with_encoder_query_boxes(prediction, encoder_boxes)
 
-        self.assertIs(get_encoder_query_boxes(prediction), encoder_boxes)
+        self.assertIsNot(updated, prediction)
+        self.assertIsNone(get_encoder_query_boxes(prediction))
+        self.assertIs(get_encoder_query_boxes(updated), encoder_boxes)
         self.assertNotIn("encoder_query_boxes", prediction.__dict__)
 
     def test_missing_encoder_query_metadata_returns_none(self):
@@ -89,7 +96,7 @@ class ValidationPredictionMetadataTests(unittest.TestCase):
             ROOT / "ovha_rod/evaluation/ovha_refexp_metric.py"
         ).read_text()
 
-        self.assertIn("set_encoder_query_boxes(prediction, absolute)", head)
+        self.assertIn("with_encoder_query_boxes(prediction, absolute)", head)
         self.assertNotIn("prediction.encoder_query_boxes = absolute", head)
         self.assertIn("get_encoder_query_boxes(prediction)", metric)
 
