@@ -35,17 +35,25 @@ class OperatorDiagnosticsHook(Hook):
     def before_train(self, runner) -> None:
         model = runner.model.module if hasattr(runner.model, "module") else runner.model
         model._seed_grad_squared = None
+        model._decoder_operator_grad_squared = None
         if getattr(model, "seed_operator", None) is not None:
             for parameter in model.seed_operator.parameters():
                 if parameter.requires_grad:
                     parameter.register_hook(
                         lambda gradient, target=model: _record_gradient(target, gradient))
+        if getattr(model, "decoder_operator", None) is not None:
+            for parameter in model.decoder_operator.parameters():
+                if parameter.requires_grad:
+                    parameter.register_hook(
+                        lambda gradient, target=model: _record_decoder_gradient(
+                            target, gradient))
 
     def before_train_iter(self, runner, batch_idx: int,
                           data_batch=None) -> None:
         del batch_idx, data_batch
         model = runner.model.module if hasattr(runner.model, "module") else runner.model
         model._seed_grad_squared = None
+        model._decoder_operator_grad_squared = None
 
     def after_train_iter(self, runner, batch_idx: int,
                          data_batch=None, outputs=None) -> None:
@@ -53,10 +61,13 @@ class OperatorDiagnosticsHook(Hook):
         model = runner.model.module if hasattr(runner.model, "module") else runner.model
         gradient_norm = finalize_gradient_norm(
             getattr(model, "_seed_grad_squared", None))
+        decoder_gradient_norm = finalize_gradient_norm(
+            getattr(model, "_decoder_operator_grad_squared", None))
         finite_scalars = {}
         nonfinite_keys = []
         for values, prefix in (
             (getattr(model, "last_seed_diagnostics", {}), ""),
+            (getattr(model, "last_decoder_operator_diagnostics", {}), ""),
             (getattr(model.bbox_head, "last_seed_metrics", {}), ""),
             (outputs or {}, "loss/"),
         ):
@@ -65,9 +76,11 @@ class OperatorDiagnosticsHook(Hook):
             nonfinite_keys.extend(nonfinite)
         if not math.isfinite(gradient_norm):
             nonfinite_keys.append("seed_gradient_norm")
+        if not math.isfinite(decoder_gradient_norm):
+            nonfinite_keys.append("decoder_operator_gradient_norm")
         if nonfinite_keys:
             raise FloatingPointError(
-                "non-finite Phase 1 diagnostics: "
+                "non-finite operator diagnostics: "
                 + ", ".join(sorted(set(nonfinite_keys))))
         if not is_main_process() or (runner.iter + 1) % self.interval:
             return
@@ -76,6 +89,7 @@ class OperatorDiagnosticsHook(Hook):
             "seed_operator": getattr(model, "seed_operator_name", "unknown"),
             "loss_seed_weight": float(getattr(model.bbox_head, "loss_seed_weight", 0.0)),
             "seed_gradient_norm": gradient_norm,
+            "decoder_operator_gradient_norm": decoder_gradient_norm,
         }
         row.update(finite_scalars)
         row["nonfinite_scalar_count"] = len(nonfinite_keys)
@@ -90,3 +104,8 @@ class OperatorDiagnosticsHook(Hook):
 def _record_gradient(model, gradient: torch.Tensor) -> None:
     model._seed_grad_squared = accumulate_gradient_square(
         getattr(model, "_seed_grad_squared", None), gradient)
+
+
+def _record_decoder_gradient(model, gradient: torch.Tensor) -> None:
+    model._decoder_operator_grad_squared = accumulate_gradient_square(
+        getattr(model, "_decoder_operator_grad_squared", None), gradient)

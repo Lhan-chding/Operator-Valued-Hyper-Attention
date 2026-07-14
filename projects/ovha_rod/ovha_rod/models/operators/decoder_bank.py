@@ -247,6 +247,7 @@ class DecoderOperatorBank(nn.Module):
         num_layers: int,
         router_hidden_dim: int,
         adapter_rank: int,
+        qsro_query_chunk_size: Optional[int] = None,
         enabled_operators: Sequence[str] = OPERATOR_NAMES,
         use_router: bool = True,
         use_memory: bool = True,
@@ -277,7 +278,10 @@ class DecoderOperatorBank(nn.Module):
         self.use_memory = use_memory
         self.use_hyper_adapter = use_hyper_adapter
         self.use_rceo = use_rceo
-        self.qsro = QuerySpatialRelationOperator(d_model=d_model)
+        self.qsro = QuerySpatialRelationOperator(
+            d_model=d_model,
+            query_chunk_size=qsro_query_chunk_size,
+        )
         self.tq_cato = TQCATO(d_model=d_model)
         self.ms_tleo = MSTLEO(d_model=d_model)
         self.memory = OperatorMemory(d_model=d_model)
