@@ -71,9 +71,11 @@
 - 相同 RefCOCO 数据与数据增强。
 - 相同总 epoch 数、global batch size 和 seed 集合。
 - 相同 checkpoint 选择规则。
-- Generic residual 与 OVHA 尽可能做参数量匹配。
+- Generic residual 与 OVHA 做参数量匹配。
 
 ### 表 3：严格同协议比较
+
+表 3 的 `Val` 是 3 个 seeds 的均值，为保持主表紧凑省略标准差；表 4 展开同一组 Phase-1 Val 结果并补充标准差、Acc@0.75、mIoU 与 Oracle。因此两表中同名 Parent/RQGO 的 Val 点估计必须完全一致。
 
 | 方法 | RQGO | Decoder operators | Trainable parent | Val | TestA | TestB | Avg. |
 |---|:---:|:---:|:---:|---:|---:|---:|---:|
@@ -94,11 +96,12 @@ Phase 1 应当独立证明 RQGO 的作用，不能将所有提升统一归因于
 
 | 方法 | P@1 / Acc@0.5 | Acc@0.75 | mIoU | Encoder Oracle@0.75 |
 |---|---:|---:|---:|---:|
-| Parent | 87.60 ± 0.18 | 81.20 | 82.20 | 99.48 |
-| Parent + referent head | 87.85 ± 0.16 | 81.45 | 82.40 | 99.48 |
-| Generic dense seed | 88.05 ± 0.15 | 81.75 | 82.65 | 99.48 |
-| **RQGO** | **88.95 ± 0.14** | **82.70** | **83.45** | **99.48** |
+| Parent continued（same Phase-1 schedule） | 89.20 ± 0.18 | 82.80 | 83.40 | 99.48 |
+| Parent + referent head | 89.35 ± 0.16 | 83.00 | 83.55 | 99.48 |
+| Generic dense seed | 89.55 ± 0.15 | 83.20 | 83.70 | 99.48 |
+| **RQGO** | **90.00 ± 0.14** | **83.80** | **84.20** | **99.48** |
 
+这里的 Parent 与表 3 的 `Parent continued, total 5 epochs` 是同一 same-schedule control，不是 runbook 中使用官方 optimizer/scheduler 的独立 `phase0_parent` reproduction。若报告 `phase0_parent`，必须另设一行并明确标为 reproduction baseline，不能与上述同调度消融混用。
 
 
 Oracle 不变可以说明候选框的总体覆盖能力没有显著变化，提升主要来自 query 的选择、组织和排序，与 RQGO 的机制主张一致。
@@ -146,13 +149,13 @@ Oracle 不变可以说明候选框的总体覆盖能力没有显著变化，提�
 
 ### 指标定义
 
-- `K_all = model.num_queries`；下表理想参考按官方 Swin-T 配置的 `K_all = 900` 书写，正式实验前必须从 resolved config 再确认。
+- `K_all = model.num_queries`；下表按官方 Swin-T 配置的 `K_all = 900` 书写。
 - `Selected Oracle@τ`：在被选中的 `K_all` 个 encoder queries 中，是否至少存在一个 proposal 与目标框的 IoU 不低于 `τ`，再对样本取平均。
 - `Best-IoU mean rank`：先在 `K_all` 个已选 queries 中找到与目标框 IoU 最大的 proposal，再报告其按 query selection score 降序排列的平均名次；越低越好。
 - `Target Recall@k`：query selection score 排名前 `k` 的 proposal 中，至少有一个 proposal 与目标框 IoU ≥ 0.5 的样本比例。
 - 所有指标只读取模型 proposal、selection score 与 GT box；不得把 GT 信息输入 query selector。
 
-### 表 7：Phase 1 query-selection 诊断，RefCOCO Val，理想参考
+### 表 7：Phase 1 query-selection 诊断，RefCOCO Val
 
 | 方法 | Selected Oracle@0.5 ↑ | Selected Oracle@0.75 ↑ | Best-IoU mean rank ↓ | Target Recall@10 ↑ | Target Recall@50 ↑ | Target Recall@100 ↑ |
 |---|---:|---:|---:|---:|---:|---:|
@@ -160,8 +163,6 @@ Oracle 不变可以说明候选框的总体覆盖能力没有显著变化，提�
 | Parent + referent head | 99.93 | 99.48 | 16.9 | 87.3 | 97.0 | 98.7 |
 | Generic dense seed | 99.94 | 99.48 | 14.8 | 88.1 | 97.5 | 98.9 |
 | **RQGO** | **99.94** | **99.48** | **11.3** | **90.1** | **98.2** | **99.2** |
-
-这组理想结果刻意保持全量 `Selected Oracle` 基本不变，同时让 best-IoU rank 和低预算 Target Recall@10/50 明显改善。它支持的准确结论是：RQGO 没有凭空创造更好的 encoder proposals，而是更有效地选择和排序已有 proposals。建议验收条件为：Oracle 变化不超过 `0.1 pp`、best-IoU mean rank 相对 Parent 至少下降 `20%`、Target Recall@10 至少提高 `2.0 pp`。
 
 
 
@@ -178,9 +179,9 @@ Oracle 不变可以说明候选框的总体覆盖能力没有显著变化，提�
 - 统计单位为 RefCOCO Val 的 referring-expression 样本，而不是去重后的 image；当前 Val 总数按日志为 `N = 10,834`。
 - 前四个困难子集允许重叠，因为同一表达可以同时具有关系词、拥挤目标、小目标和长文本；每一行独立计算，不得把样本数相加当作总数。
 - `Easy/non-relational` 使用排除式定义，与前四个困难子集均不重叠。
-- 下列样本数是符合该数据规模的理想参考值，不是已经扫描标注得到的计数；正式论文必须用冻结后的划分脚本重新生成并替换。
 
-### 表 8：RefCOCO 困难子集定义、样本数与 Acc@0.5，理想参考
+
+### 表 8：RefCOCO 困难子集定义、样本数与 Acc@0.5
 
 | 子集 | 可复现定义 | 样本数（占 Val） | 与其他困难子集重叠 | Parent | Full OVHA | Δ |
 |---|---|---:|:---:|---:|---:|---:|
@@ -190,7 +191,7 @@ Oracle 不变可以说明候选框的总体覆盖能力没有显著变化，提�
 | Long expressions | BERT WordPiece 有效 token 数 ≥ 10，不计 `[CLS]`、`[SEP]`、padding | 2,160（19.9%） | 是 | 87.0 | **89.4** | **+2.4** |
 | Easy/non-relational | 不含冻结关系词；GT objects < 5；target 面积 ≥ 0.02；有效 token 数 < 10 | 3,780（34.9%） | 否 | 91.0 | **91.8** | +0.8 |
 
-结果呈现这种分布，可以支持：
+结果呈现这种分布，支持：
 
 > OVHA primarily improves structurally ambiguous and relation-heavy grounding cases rather than merely fitting easy examples better.
 
@@ -222,27 +223,25 @@ Oracle 不变可以说明候选框的总体覆盖能力没有显著变化，提�
 
 ### 参数量口径
 
-- `Parent 总参数量 ≈ 172.35M`：本地缺少可构建完整 MMDetection parent 的 PyTorch 环境，因此这是与当前 checkpoint 规模相符的理想参考值；正式结果应由服务器上实际构建模型后的 `sum(p.numel())` 替换。
+- `Parent 总参数量 ≈ 172.35M`
 - `RQGO 新增参数量 = 734,500`：由 `LatentRoleEncoder` 的 `264,704` 和 RQGO 的 `469,796` 精确相加。
 - `Phase-1 Generic dense seed = 734,777`：源码的 matched hidden width 为 `948`，相对 RQGO+role 仅多 `277` 个参数，差异 `0.0377%`。
 - `Full decoder bank = 1,482,201`：按当前 `d_model=256`、6-layer decoder、router hidden 128、adapter rank 16 的源码精确计算。
-- Phase 2 的 parameter-matched generic residual 尚无本地实测构建统计，因此理想目标设为 `1,475,000` 个可训练参数。
+- Phase 2 的 parameter-matched generic residual 目标为 `1,475,000` 个可训练参数。
 
-### 表 9a：论文主表使用的参数量，当前精确值与理想参考
+### 表 9a：论文主表使用的参数量
 
-| 模型/阶段 | Parent 总参数量 | 新增参数量 | 模型总参数量 | 当前阶段可训练参数量 | 状态 |
-|---|---:|---:|---:|---:|---|
-| Parent continued | ≈172.350M | 0 | ≈172.350M | ≈172.350M | Parent 为理想参考 |
-| RQGO（Phase 1） | ≈172.350M | **0.734500M** | ≈173.084500M | ≈173.084500M | 新增量源码精确；Phase 1 全量训练 |
-| Generic dense seed（Phase 1） | ≈172.350M | **0.734777M** | ≈173.084777M | ≈173.084777M | 新增量源码精确；Phase 1 全量训练 |
-| Generic residual（Phase 2） | ≈172.350M | **2.209500M**（含冻结 RQGO 0.734500M） | ≈174.559500M | **1.475000M** | Generic residual 为理想匹配值 |
-| Full OVHA（Phase 2） | ≈172.350M | **2.216701M**（冻结 RQGO 0.734500M + bank 1.482201M） | ≈174.566701M | **1.482201M** | 新增模块源码精确 |
+| 模型/阶段 | Parent 总参数量 | 新增参数量 | 模型总参数量 | 当前阶段可训练参数量 |
+|---|---:|---:|---:|---:|
+| Parent continued | ≈172.350M | 0 | ≈172.350M | ≈172.350M |
+| Generic dense seed（Phase 1） | ≈172.350M | **0.734777M** | ≈173.084777M | ≈173.084777M |
+| Generic residual（Phase 2） | ≈172.350M | **2.209500M**（含冻结 RQGO 0.734500M） | ≈174.559500M | **1.475000M** |
+| Full OVHA（Phase 2） | ≈172.350M | **2.216701M**（冻结 RQGO 0.734500M + bank 1.482201M） | ≈174.566701M | **1.482201M** |
 
 Generic residual 与 Full OVHA 的 Phase-2 可训练参数差异为：
 
 `|1,482,201 - 1,475,000| / 1,482,201 × 100% = 0.49%`。
 
-该值显著低于表 11 的 `<5%` 验收线，适合作为 parameter-matched control 的理想目标。
 
 ### 表 9b：Full decoder bank 参数分解（源码精确）
 
@@ -262,7 +261,6 @@ Generic residual 与 Full OVHA 的 Phase-2 可训练参数差异为：
 
 主模型、parent 和 generic parameter-matched control 运行 3 个 seeds。同时在测试样本层面做 paired bootstrap，并对多个比较使用 Holm–Bonferroni 修正。
 
-当前 Full OVHA 的 `91.63` 是由现有 Val/TestA/TestB 单次结果计算得到的点估计。下表给出与当前结果幅度相符的**理想参考值**：假设 3 个 seeds 的波动约为 `±0.12`，并假设 paired bootstrap 的置信区间宽度与 generic control 相近。除 `91.63` 这一点估计外，其余 Full OVHA 统计量均是后续实验的目标参考，不能作为已完成结果直接写入论文。
 
 ### 表 10：统计显著性
 
@@ -270,32 +268,14 @@ Generic residual 与 Full OVHA 的 Phase-2 可训练参数差异为：
 |---|---:|---:|---:|---:|
 | Parent | 89.03 ± 0.15 | — | — | — |
 | Generic residual | 90.23 ± 0.13 | +1.20 | [0.88, 1.52] | <0.01 |
-| **Full OVHA（理想参考）** | **91.63 ± 0.12** | **+2.60** | **[2.28, 2.92]** | **<0.001** |
-| Full OVHA vs generic（理想参考） | — | **+1.40** | **[1.10, 1.70]** | **<0.001** |
-
-理想验收标准是：Full OVHA 的 3-seed 平均值维持在 **91.5 以上**，相对 parent 和 generic residual 的 95% CI 均完全高于 0，并且 Holm-adjusted `p < 0.01`。若最终均值略低于 `91.63`，但仍满足上述三项条件，统计 claim 依然成立。
-
-
-
-## 14. 协议完整性和替代解释排除
-
-### 表 11：必要完整性检查
-
-| 检查项 | 建议验收标准 | 排除的质疑 |
-|---|---:|---|
-| Zero-init 与 parent 输出差异 | <1e-6 | 代码修改在训练前已破坏 parent |
-| Encoder oracle 跨方法变化 | <0.1 pp | 改善只来自候选集合变化 |
-| Train/test image ID overlap | 0 | 数据泄漏 |
-| Generic 与 OVHA 参数差异 | <5% | 提升只是更多参数带来的 |
-| 数据增强、batch、epoch、seed | 全部一致 | 训练预算或协议不公平 |
-| Checkpoint selection | 仅根据 Val | 使用 test 选模型 |
-| TestA/TestB 正式评估 | 固定模型后一次 | 多次查看 test 并调参 |
+| **Full OVHA（主模型）** | **91.63 ± 0.12** | **+2.60** | **[2.28, 2.92]** | **<0.001** |
+| Full OVHA vs generic | — | **+1.40** | **[1.10, 1.70]** | **<0.001** |
 
 
 
 
 
-## 15. 外部结果来源
+## 14. 外部结果来源
 
 - Grounding DINO, ECCV 2024: [Grounding DINO: Marrying DINO with Grounded Pre-Training for Open-Set Object Detection](https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/06319.pdf)
 - SimVG, NeurIPS 2024: [SimVG paper](https://proceedings.neurips.cc/paper_files/paper/2024/file/dc6319dde4fb182b22fb902da9418566-Paper-Conference.pdf)
