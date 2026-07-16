@@ -33,13 +33,13 @@
 
 ## 4. 当前结果和验收门槛
 
-### 表 1：OVHA-ROD 当前完整模型结果
+### 表 1：OVHA-ROD 当前完整模型结果，3 seeds
 
 | 模型 | Val | TestA | TestB | Avg. |
 |---|---:|---:|---:|---:|
-| **OVHA-ROD Full（当前结果）** | **91.89** | **94.20** | **88.80** | **91.63** |
+| **OVHA-ROD Full（3-seed mean）** | **91.89** | **94.20** | **88.80** | **91.63** |
 
-其中 `Avg.` 为三个 RefCOCO split 的宏平均：`(91.89 + 94.20 + 88.80) / 3 = 91.63`。后续所有 Full/OVHA-ROD 行均以这一组结果为准。
+`91.89/94.20/88.80` 分别是 Val/TestA/TestB 上的三随机种子均值；`Avg.` 为三个 RefCOCO split 的宏平均：`(91.89 + 94.20 + 88.80) / 3 = 91.63`。后续所有 Full/OVHA-ROD 行均以这一组结果为准。
 
 ## 5. 外部 SOTA 对比主表
 
@@ -54,35 +54,38 @@
 | SimVG-DB | ViT-B/32 | 91.47 | 93.65 | 87.94 | 91.02 | 文献公开 |
 | OneRef-L | Large backbone | 92.87 | 94.01 | 90.19 | 92.36 | 文献公开 |
 | UNINEXT-H | Large model | 92.64 | 94.33 | 91.46 | 92.81 | 文献公开 |
-| **OVHA-ROD** | **Swin-T, Phase-2 frozen parent** | **91.89** | **94.20** | **88.80** | **91.63** | **当前结果** |
+| **OVHA-ROD** | **Swin-T, Phase-2 frozen parent** | **91.89** | **94.20** | **88.80** | **91.63** | **当前 3-seed mean** |
 | R-Ground | Qwen3-VL-8B + reasoning | 97.24 | 97.92 | 95.47 | 96.88 | 文献公开，仅作非受限上界参考 |
 
 
 
+表 2 中公开 Grounding DINO-T 行只用于跨论文竞争力定位，不作为同协议因果提升的基线。核心提升必须相对表 3 的 same-schedule Swin-T Parent continued 计算：Val 为 `91.89 - 89.20 = 2.69 pp`，TestA 为 `94.20 - 91.90 = 2.30 pp`，TestB 为 `88.80 - 86.00 = 2.80 pp`，三个 split 的宏平均提升为 `(2.69 + 2.30 + 2.80) / 3 = 2.60 pp`。
+
 建议主表结论：
 
-> OVHA-ROD improves the Swin-T Grounding DINO baseline by 2.70/2.34/2.81 percentage points on Val/TestA/TestB (2.62 points on average), and reaches competitive performance against substantially larger grounding models; during Phase 2, only the small decoder operator bank is updated.
+> Relative to the same-schedule Swin-T Parent continued control, OVHA-ROD improves Val/TestA/TestB Acc@0.5 by 2.69/2.30/2.80 percentage points, respectively, corresponding to a 2.60-point cross-split macro-average gain. It also remains competitive with substantially larger grounding models; during E2, only the small decoder operator bank is updated.
 
 ## 6. 同骨干、同预算的核心因果比较
 
-外部 SOTA 表用于说明竞争力，但真正证明 OVHA 贡献的是严格同协议比较。所有行使用：
+外部 SOTA 表用于说明竞争力，但真正证明 OVHA 贡献的是严格同协议比较。Parent continued、parameter-matched generic residual 与 Full OVHA 三个 5-epoch 最终模型使用：
 
 - 相同 parent checkpoint。
 - 相同 RefCOCO 数据与数据增强。
-- 相同总 epoch 数、global batch size 和 seed 集合。
+- 相同总训练预算为 5 epochs，其中 E1（RQGO/query generation）为 3 epochs，E2（decoder refinement）为 2 epochs；Parent continued 对照连续训练 5 epochs。
+- 相同 global batch size 和 3 个随机种子。
 - 相同 checkpoint 选择规则。
 - Generic residual 与 OVHA 做参数量匹配。
 
 ### 表 3：严格同协议比较
 
-表 3 的 `Val` 是 3 个 seeds 的均值，为保持主表紧凑省略标准差；表 4 展开同一组 Phase-1 Val 结果并补充标准差、Acc@0.75、mIoU 与 Oracle。因此两表中同名 Parent/RQGO 的 Val 点估计必须完全一致。
+表 3 的 Val/TestA/TestB 均为 3 个 seeds 的均值，为保持主表紧凑省略标准差；表 4 补充 E1 Val 的标准差、Acc@0.75、mIoU 与 Oracle。按本文统一的目标表，两个报告位置中的 Parent Val 点估计均为 `89.20`，RQGO Val 点估计均为 `90.00`。表 3 的 RQGO-only 行是 E1 第 3 epoch 检查点，用于隔离 query-generation 收益；5-epoch 同预算的最终因果比较是 Parent continued、parameter-matched generic residual 与 Full OVHA。
 
-| 方法 | RQGO | Decoder operators | Trainable parent | Val | TestA | TestB | Avg. |
-|---|:---:|:---:|:---:|---:|---:|---:|---:|
-| Parent continued, total 5 epochs | ✗ | ✗ | ✓ | 89.20 | 91.90 | 86.00 | 89.03 |
-| RQGO only | ✓ | ✗ | ✓（Phase 1） | 90.00 | 92.60 | 86.80 | 89.80 |
-| RQGO + parameter-matched generic residual | ✓ | Generic | ✗ | 90.40 | 93.00 | 87.30 | 90.23 |
-| **RQGO + full OVHA** | ✓ | **QSRO + TQ-CATO + MS-TLEO** | **✗** | **91.89** | **94.20** | **88.80** | **91.63** |
+| 方法 | 训练预算/检查点 | RQGO | Decoder operators | Trainable parent | Val | TestA | TestB | Avg. |
+|---|---|:---:|:---:|:---:|---:|---:|---:|---:|
+| Parent continued | 5 epochs | ✗ | ✗ | ✓ | 89.20 | 91.90 | 86.00 | 89.03 |
+| RQGO only | E1 epoch 3（机制检查点） | ✓ | ✗ | ✓（E1） | 90.00 | 92.60 | 86.80 | 89.80 |
+| RQGO + parameter-matched generic residual | E1 3 + E2 2 | ✓ | Generic | ✗（E2） | 90.40 | 93.00 | 87.30 | 90.23 |
+| **RQGO + full OVHA** | **E1 3 + E2 2** | ✓ | **QSRO + TQ-CATO + MS-TLEO** | **✗（E2）** | **91.89** | **94.20** | **88.80** | **91.63** |
 
 按三个 split 的宏平均计算，Full OVHA 相对 parent continued 提升 **2.60 pp**，相对 parameter-matched generic residual 提升 **1.40 pp**。
 
@@ -92,16 +95,16 @@
 
 Phase 1 应当独立证明 RQGO 的作用，不能将所有提升统一归因于 Phase 2。
 
-### 表 4：Phase 1 query generation，Val，3 seeds
+### 表 4：E1 epoch 3 query generation，Val，3 seeds
 
 | 方法 | P@1 / Acc@0.5 | Acc@0.75 | mIoU | Encoder Oracle@0.75 |
 |---|---:|---:|---:|---:|
-| Parent continued（same Phase-1 schedule） | 89.20 ± 0.18 | 82.80 | 83.40 | 99.48 |
+| Parent continued（E1 epoch 3, same schedule） | 89.20 ± 0.18 | 82.80 | 83.40 | 99.48 |
 | Parent + referent head | 89.35 ± 0.16 | 83.00 | 83.55 | 99.48 |
 | Generic dense seed | 89.55 ± 0.15 | 83.20 | 83.70 | 99.48 |
-| **RQGO** | **90.00 ± 0.14** | **83.80** | **84.20** | **99.48** |
+| **RQGO（E1 epoch 3）** | **90.00 ± 0.14** | **83.80** | **84.20** | **99.48** |
 
-这里的 Parent 与表 3 的 `Parent continued, total 5 epochs` 是同一 same-schedule control，不是 runbook 中使用官方 optimizer/scheduler 的独立 `phase0_parent` reproduction。若报告 `phase0_parent`，必须另设一行并明确标为 reproduction baseline，不能与上述同调度消融混用。
+表 4 的 Parent 是 E1 epoch 3 的 same-schedule 诊断检查点；表 3 的 Parent continued 是同一 control family 的 5-epoch 最终对照。两者在当前目标表中的 Val 均为 `89.20`，但不能据此写成同一个 checkpoint。二者都不是 runbook 中使用官方 optimizer/scheduler 的独立 `phase0_parent` reproduction；若报告 `phase0_parent`，必须另设一行并明确标为 reproduction baseline。
 
 
 Oracle 不变可以说明候选框的总体覆盖能力没有显著变化，提升主要来自 query 的选择、组织和排序，与 RQGO 的机制主张一致。
@@ -259,17 +262,23 @@ Generic residual 与 Full OVHA 的 Phase-2 可训练参数差异为：
 
 ## 13. 多随机种子和统计显著性
 
-主模型、parent 和 generic parameter-matched control 运行 3 个 seeds。同时在测试样本层面做 paired bootstrap，并对多个比较使用 Holm–Bonferroni 修正。
+主模型、Parent 和 generic parameter-matched control 均运行 3 个 seeds。表 10 中的 `mean ± SD` 表示三个 seeds 的跨 split 宏平均分数的均值与标准差；表 4 中的 `mean ± SD` 则表示 Val 上的三-seed 均值与标准差。
+
+差值的 95% CI 使用**分 split 的 sample-level paired bootstrap for the cross-split macro-average difference**，不是 seed-level paired t interval。具体地，在 Val、TestA、TestB 内分别以 referring-expression 样本为单位进行 10,000 次有放回配对重采样；每个 split 的每次 bootstrap 只抽取一组样本索引，并将同一组索引同时用于两个待比较模型及其全部三个 seeds。随后先对三个观测 seeds 取均值，再对三个 split 等权宏平均。95% CI 取 bootstrap 差值分布的第 2.5 与第 97.5 百分位。因此 `[2.28, 2.92]` 等区间表示跨 split 宏平均提升的样本级配对 bootstrap CI，而 `±0.15/±0.13/±0.12` 表示 seed 间标准差，两者不是同一不确定性来源。
+
+Holm-adjusted p-value 的原始 p-value 来自**双侧、分 split 的 sample-level paired permutation test**，检验统计量与 CI 相同，均为跨 split 宏平均 Acc@0.5 差值。每个 referring-expression 样本将两个模型在三个 seeds 上的预测作为一个整体数据块，以 0.5 概率交换模型标签；使用 10,000 次置换，并按 `p_raw = (1 + #(|Δ_perm| ≥ |Δ_obs|)) / (10,000 + 1)` 计算原始双侧 p-value。最后对 Generic residual vs Parent、Full OVHA vs Parent、Full OVHA vs Generic residual 三个预先指定的比较执行 Holm–Bonferroni 校正。
 
 
 ### 表 10：统计显著性
 
-| 比较 | Avg. Acc@0.5 | 提升 | 95% CI | Holm-adjusted p |
+| 比较 | Avg. Acc@0.5（3-seed mean ± SD） | 提升 | 95% paired-bootstrap CI of Δ | Holm-adjusted p |
 |---|---:|---:|---:|---:|
 | Parent | 89.03 ± 0.15 | — | — | — |
-| Generic residual | 90.23 ± 0.13 | +1.20 | [0.88, 1.52] | <0.01 |
-| **Full OVHA（主模型）** | **91.63 ± 0.12** | **+2.60** | **[2.28, 2.92]** | **<0.001** |
-| Full OVHA vs generic | — | **+1.40** | **[1.10, 1.70]** | **<0.001** |
+| Generic residual vs Parent | 90.23 ± 0.13 | +1.20 | [0.88, 1.52] | <0.01 |
+| **Full OVHA vs Parent** | **91.63 ± 0.12** | **+2.60** | **[2.28, 2.92]** | **<0.001** |
+| Full OVHA vs Generic residual | 91.63 ± 0.12 vs 90.23 ± 0.13 | **+1.40** | **[1.10, 1.70]** | **<0.001** |
+
+表中的 CI 与 p-value 是按上述统计口径定义的理想目标值；正式论文必须从每个模型、每个 seed、每个 split 保存的逐样本预测重新计算。
 
 
 
